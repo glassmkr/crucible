@@ -1,6 +1,19 @@
 #!/usr/bin/env node
 
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+import { dirname, join } from "node:path";
 import { loadConfig } from "./config.js";
+
+const __dirname = dirname(fileURLToPath(import.meta.url));
+const PKG_VERSION = (() => {
+  try {
+    const pkg = JSON.parse(readFileSync(join(__dirname, "..", "package.json"), "utf8"));
+    return pkg.version || "0.0.0";
+  } catch {
+    return "0.0.0";
+  }
+})();
 import { checkForUpdates } from "./lib/version-check.js";
 import { startMetricsServer, updateMetrics } from "./metrics-server.js";
 import { collectSystem } from "./collect/system.js";
@@ -70,7 +83,7 @@ async function collect() {
   }
 
   const snapshot: Snapshot = {
-    collector_version: "0.2.0",
+    collector_version: PKG_VERSION,
     timestamp: new Date().toISOString(),
     system, cpu, memory, disks, smart, network, raid, ipmi, os_alerts: osAlerts,
     security: cachedSecurity,
