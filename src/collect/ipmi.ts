@@ -172,21 +172,30 @@ async function collectFanStatus(): Promise<FanStatus[]> {
     if (parts.length < 3) continue;
 
     const name = parts[0];
-    const reading = parts[1];
-    const statusCode = parts[2];
+    const fullLine = parts.join(" ");
 
     let rpm = 0;
     let status = "ok";
 
-    const rpmMatch = reading.match(/(\d+)\s*RPM/i);
+    // Search all fields for RPM value (format varies by BMC)
+    const rpmMatch = fullLine.match(/(\d+)\s*RPM/i);
     if (rpmMatch) {
       rpm = parseInt(rpmMatch[1]);
     }
 
-    if (statusCode === "cr" || statusCode === "nr") status = "critical";
-    else if (statusCode === "nc") status = "warning";
-    else if (statusCode === "ns" || reading.includes("no reading")) status = "absent";
-    else if (rpm === 0 && !reading.includes("no reading")) status = "critical";
+    // Check status codes across all fields
+    const hasNoReading = fullLine.toLowerCase().includes("no reading");
+    const statusCodes = parts.slice(1).map((p) => p.toLowerCase());
+    const hasCritical = statusCodes.some((s) => s === "cr" || s === "nr");
+    const hasWarning = statusCodes.some((s) => s === "nc");
+    const hasAbsent = statusCodes.some((s) => s === "ns") || hasNoReading;
+    const hasOk = statusCodes.some((s) => s === "ok");
+
+    if (hasCritical) status = "critical";
+    else if (hasWarning) status = "warning";
+    else if (hasAbsent) status = "absent";
+    else if (hasOk) status = "ok";
+    else if (rpm === 0 && !hasNoReading) status = "critical";
 
     fans.push({ name, rpm, status });
   }
