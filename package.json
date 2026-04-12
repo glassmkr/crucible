@@ -1,6 +1,6 @@
 {
   "name": "@glassmkr/crucible",
-  "version": "0.6.0",
+  "version": "0.6.1",
   "description": "Lightweight bare metal server monitoring. IPMI, SMART, OS, network. Opinionated alerts.",
   "type": "module",
   "main": "./dist/index.js",
@@ -12,7 +12,14 @@
     "start": "node dist/index.js",
     "clean": "rm -rf dist"
   },
-  "keywords": ["monitoring", "bare-metal", "ipmi", "smart", "server", "alerts"],
+  "keywords": [
+    "monitoring",
+    "bare-metal",
+    "ipmi",
+    "smart",
+    "server",
+    "alerts"
+  ],
   "license": "MIT",
   "repository": {
     "type": "git",
