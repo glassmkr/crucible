@@ -3,7 +3,7 @@
 [![MIT License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![npm version](https://img.shields.io/npm/v/@glassmkr/crucible.svg)](https://www.npmjs.com/package/@glassmkr/crucible)
 
-Lightweight bare metal server monitoring agent. Collects hardware and OS health data, pushes snapshots to [Forge](https://forge.glassmkr.com) every 5 minutes. Forge evaluates 30 alert rules and sends notifications.
+Lightweight bare metal server monitoring agent. Collects hardware and OS health data, pushes snapshots to [Forge](https://forge.glassmkr.com) every 5 minutes. Forge evaluates 36 alert rules and sends notifications.
 
 Open source. MIT licensed. Built by [Glassmkr](https://glassmkr.com).
 
@@ -34,9 +34,9 @@ npm install -g @glassmkr/crucible
 
 ## Alert Rules
 
-Crucible collects the data. Forge evaluates 30 alert rules server-side and sends notifications via Telegram and Slack.
+Crucible collects the data. Forge evaluates 36 alert rules server-side and sends notifications via Telegram and Slack.
 
-**Categories:** OS (5), Storage (8), Network (3), Hardware/IPMI (6), ZFS (2), Security (6).
+**Categories:** OS (9), Storage (8), Network (4), Hardware/IPMI (5), ZFS (2), Security (6), Service Health (2).
 
 **Priorities:** P1 Urgent, P2 High, P3 Medium, P4 Low.
 
@@ -79,7 +79,7 @@ Full configuration reference: [forge.glassmkr.com/docs/configuration](https://fo
 
 - [Getting Started](https://forge.glassmkr.com/docs/getting-started)
 - [Configuration Reference](https://forge.glassmkr.com/docs/configuration)
-- [Alert Rules (30)](https://forge.glassmkr.com/docs/alerts)
+- [Alert Rules (36)](https://forge.glassmkr.com/docs/alerts)
 - [Troubleshooting](https://forge.glassmkr.com/docs/troubleshooting)
 - [API Reference](https://forge.glassmkr.com/docs/api)
 

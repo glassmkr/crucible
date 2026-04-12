@@ -14,6 +14,36 @@ export interface Snapshot {
   zfs?: ZfsData;
   io_errors?: { count: number; devices: string[] };
   io_latency?: Array<{ device: string; avg_read_latency_ms: number | null; avg_write_latency_ms: number | null; read_iops: number; write_iops: number }>;
+  conntrack?: ConntrackData;
+  systemd?: SystemdData;
+  ntp?: NtpData;
+  file_descriptors?: FileDescriptorData;
+}
+
+export interface ConntrackData {
+  available: boolean;
+  count: number;
+  max: number;
+  percent: number;
+}
+
+export interface SystemdData {
+  failed_units: string[];
+  failed_count: number;
+}
+
+export interface NtpData {
+  synced: boolean;
+  offset_seconds: number;
+  source: string;
+  daemon_running: boolean;
+}
+
+export interface FileDescriptorData {
+  allocated: number;
+  free: number;
+  max: number;
+  percent: number;
 }
 
 export interface ZfsPool {

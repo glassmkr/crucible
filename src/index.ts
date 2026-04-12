@@ -35,6 +35,10 @@ import { collectSecurity, type SecurityData } from "./collect/security.js";
 import { collectZfs } from "./collect/zfs.js";
 import { collectIoErrors } from "./collect/io-errors.js";
 import { collectIoLatency } from "./collect/io-latency.js";
+import { collectConntrack } from "./collect/conntrack.js";
+import { collectSystemd } from "./collect/systemd.js";
+import { collectNtp } from "./collect/ntp.js";
+import { collectFileDescriptors } from "./collect/fd.js";
 import type { Snapshot, IpmiInfo } from "./lib/types.js";
 
 const configPath = process.argv[2] || "/etc/glassmkr/collector.yaml";
@@ -96,6 +100,10 @@ async function collect() {
   try { snapshot.zfs = await collectZfs() ?? undefined; } catch { /* skip if ZFS not available */ }
   try { snapshot.io_errors = await collectIoErrors() ?? undefined; } catch { /* skip on error */ }
   try { snapshot.io_latency = collectIoLatency(); } catch { /* skip on error */ }
+  try { snapshot.conntrack = collectConntrack(); } catch { /* skip on error */ }
+  try { snapshot.systemd = await collectSystemd(); } catch { /* skip on error */ }
+  try { snapshot.ntp = await collectNtp(); } catch { /* skip on error */ }
+  try { snapshot.file_descriptors = collectFileDescriptors(); } catch { /* skip on error */ }
 
   // Update Prometheus metrics
   updateMetrics(snapshot);
