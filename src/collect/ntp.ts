@@ -10,13 +10,12 @@ export interface NtpData {
 export async function collectNtp(): Promise<NtpData> {
   // Try timedatectl first (systemd-timesyncd)
   const tdctl = await run("timedatectl", ["show", "--property=NTPSynchronized", "--value"]);
-  if (tdctl !== null) {
+  // Only trust timedatectl if it returns a clear "yes" or "no"
+  if (tdctl !== null && (tdctl.trim() === "yes" || tdctl.trim() === "no")) {
     const synced = tdctl.trim() === "yes";
-    // Get the source daemon name
     const statusOut = await run("timedatectl", ["show", "--property=NTP", "--value"]);
     const ntpEnabled = statusOut?.trim() === "yes";
 
-    // Try to get offset from timedatectl timesync-status
     let offset = 0;
     try {
       const tsStatus = await run("timedatectl", ["timesync-status"]);
@@ -40,47 +39,55 @@ export async function collectNtp(): Promise<NtpData> {
     };
   }
 
-  // Try chrony
+  // Try chrony - validate output contains expected "Leap status" field
   const chronyOut = await run("chronyc", ["tracking"]);
   if (chronyOut) {
     const leapMatch = chronyOut.match(/Leap status\s*:\s*(.+)/);
-    const synced = leapMatch ? leapMatch[1].trim() === "Normal" : false;
-    let offset = 0;
-    const offsetMatch = chronyOut.match(/Last offset\s*:\s*([+-]?\d+\.?\d*)\s*seconds/);
-    if (offsetMatch) offset = parseFloat(offsetMatch[1]);
-    return {
-      synced,
-      offset_seconds: Math.abs(offset),
-      source: "chrony",
-      daemon_running: true,
-    };
+    if (leapMatch) {
+      // Output looks like real chrony tracking data
+      const synced = leapMatch[1].trim() === "Normal";
+      let offset = 0;
+      const offsetMatch = chronyOut.match(/Last offset\s*:\s*([+-]?\d+\.?\d*)\s*seconds/);
+      if (offsetMatch) offset = parseFloat(offsetMatch[1]);
+      return {
+        synced,
+        offset_seconds: Math.abs(offset),
+        source: "chrony",
+        daemon_running: true,
+      };
+    }
+    // chronyc returned output but not tracking data (error message, daemon not running)
+    // Fall through to ntpq
   }
 
-  // Try ntpq
+  // Try ntpq - validate output contains the header line with "remote"
   const ntpqOut = await run("ntpq", ["-pn"]);
   if (ntpqOut) {
-    // A line starting with * means a selected peer (synced)
-    const synced = ntpqOut.split("\n").some((line) => line.startsWith("*"));
-    let offset = 0;
-    // Parse offset from the selected peer line
-    const selectedLine = ntpqOut.split("\n").find((line) => line.startsWith("*"));
-    if (selectedLine) {
-      const fields = selectedLine.trim().split(/\s+/);
-      // offset is typically field 8 (in ms)
-      if (fields.length >= 9) {
-        const rawOffset = parseFloat(fields[8]);
-        if (!isNaN(rawOffset)) offset = Math.abs(rawOffset) / 1000;
+    const hasHeader = ntpqOut.split("\n").some((line) => line.includes("remote"));
+    if (hasHeader) {
+      // Output looks like real ntpq peer table
+      const synced = ntpqOut.split("\n").some((line) => line.startsWith("*"));
+      let offset = 0;
+      const selectedLine = ntpqOut.split("\n").find((line) => line.startsWith("*"));
+      if (selectedLine) {
+        const fields = selectedLine.trim().split(/\s+/);
+        if (fields.length >= 9) {
+          const rawOffset = parseFloat(fields[8]);
+          if (!isNaN(rawOffset)) offset = Math.abs(rawOffset) / 1000;
+        }
       }
+      return {
+        synced,
+        offset_seconds: offset,
+        source: "ntpd",
+        daemon_running: true,
+      };
     }
-    return {
-      synced,
-      offset_seconds: offset,
-      source: "ntpd",
-      daemon_running: true,
-    };
+    // ntpq returned output but not peer table (error message, daemon not running)
+    // Fall through to "none"
   }
 
-  // No time sync daemon found
+  // No time sync daemon found (or all probes returned invalid output)
   return {
     synced: false,
     offset_seconds: 0,
