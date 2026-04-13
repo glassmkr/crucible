@@ -104,7 +104,7 @@ async function collectSelEvents(): Promise<SelEvent[]> {
   return events.slice(-20).reverse();
 }
 
-function parseSelTimestamp(date: string, time: string): string {
+export function parseSelTimestamp(date: string, time: string): string {
   if (!date || !time) return new Date().toISOString();
   // Format: "04/05/2026" and "14:23:05"
   const parts = date.split("/");
@@ -113,7 +113,7 @@ function parseSelTimestamp(date: string, time: string): string {
   return `${year}-${month.padStart(2, "0")}-${day.padStart(2, "0")}T${time}Z`;
 }
 
-function classifySensor(sensor: string): string {
+export function classifySensor(sensor: string): string {
   const lower = sensor.toLowerCase();
   if (lower.includes("memory") || lower.includes("dimm")) return "memory";
   if (lower.includes("power supply") || lower.includes("psu")) return "power";
@@ -127,7 +127,7 @@ function classifySensor(sensor: string): string {
   return "other";
 }
 
-function deriveSelSeverity(event: string, sensorType: string): string {
+export function deriveSelSeverity(event: string, sensorType: string): string {
   const lower = event.toLowerCase();
 
   // Critical events
@@ -163,7 +163,10 @@ function deriveSelSeverity(event: string, sensorType: string): string {
 async function collectFanStatus(): Promise<FanStatus[]> {
   const output = await run("ipmitool", ["sdr", "type", "Fan"]);
   if (!output) return [];
+  return parseFanStatus(output);
+}
 
+export function parseFanStatus(output: string): FanStatus[] {
   const fans: FanStatus[] = [];
   const lines = output.trim().split("\n");
 

@@ -9,6 +9,12 @@ export async function collectZfs(): Promise<ZfsData | null> {
   const zpoolStatus = await run("zpool", ["status"], 10000);
   if (!zpoolStatus || !zpoolStatus.trim()) return null;
 
+  const pools = parseZpoolStatus(zpoolStatus);
+  if (pools.length === 0) return null;
+  return { pools };
+}
+
+export function parseZpoolStatus(zpoolStatus: string): ZfsPool[] {
   const pools: ZfsPool[] = [];
   let current: ZfsPool | null = null;
 
@@ -56,6 +62,5 @@ export async function collectZfs(): Promise<ZfsData | null> {
     }
   }
 
-  if (pools.length === 0) return null;
-  return { pools };
+  return pools;
 }
