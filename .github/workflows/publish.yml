@@ -16,10 +16,10 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: 22
+          # Node 24 ships with npm 11.x which has working npm Trusted Publishing.
+          node-version: 24
           registry-url: 'https://registry.npmjs.org'
-      # npm Trusted Publishing requires npm >= 11.5.1
-      - run: npm install -g npm@latest
+      - run: npm --version
       - run: npm install
       - run: npm run build
       - run: npm publish --access public --provenance
