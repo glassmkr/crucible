@@ -3,7 +3,7 @@
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
-import { loadConfig } from "./config.js";
+import { parseCliArgs } from "./cli.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const PKG_VERSION = (() => {
@@ -14,6 +14,17 @@ const PKG_VERSION = (() => {
     return "0.0.0";
   }
 })();
+
+// Handle --version and --help before importing collectors, loading config, or
+// starting the Prometheus server. This keeps the CLI responsive even on hosts
+// missing the config file or external tools.
+const { result: cliArgs, output: cliOutput } = parseCliArgs(process.argv.slice(2), PKG_VERSION);
+if (cliArgs.mode !== "run") {
+  console.log(cliOutput);
+  process.exit(0);
+}
+
+import { loadConfig } from "./config.js";
 import { checkForUpdates } from "./lib/version-check.js";
 import { startMetricsServer, updateMetrics } from "./metrics-server.js";
 import { collectSystem } from "./collect/system.js";
@@ -41,8 +52,7 @@ import { collectNtp } from "./collect/ntp.js";
 import { collectFileDescriptors } from "./collect/fd.js";
 import type { Snapshot, IpmiInfo } from "./lib/types.js";
 
-const configPath = process.argv[2] || "/etc/glassmkr/collector.yaml";
-const config = loadConfig(configPath);
+const config = loadConfig(cliArgs.configPath);
 
 console.log(`[collector] Starting. Server: ${config.server_name}. Interval: ${config.collection.interval_seconds}s`);
 console.log(`[collector] IPMI: ${config.collection.ipmi ? "enabled" : "disabled"}, SMART: ${config.collection.smart ? "enabled" : "disabled"}`);
