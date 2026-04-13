@@ -5,16 +5,37 @@ export interface NtpData {
   offset_seconds: number;
   source: string;
   daemon_running: boolean;
+  daemon_name: string;
+}
+
+// Check whether a systemd unit is active. Returns false for missing units, not-found, etc.
+async function isUnitActive(unit: string): Promise<boolean> {
+  const out = await run("systemctl", ["is-active", unit], 3000);
+  return out?.trim() === "active";
+}
+
+// Detect which time-sync daemon unit is currently active on the host, if any.
+// Returns "" when none are. We check the common names in order of preference.
+async function detectActiveDaemon(): Promise<string> {
+  const candidates = ["chrony", "chronyd", "systemd-timesyncd", "ntp", "ntpsec", "ntpd"];
+  for (const unit of candidates) {
+    if (await isUnitActive(unit)) return unit;
+  }
+  return "";
 }
 
 export async function collectNtp(): Promise<NtpData> {
-  // Try timedatectl first (systemd-timesyncd)
+  // The authoritative "is the daemon running" check is systemctl is-active,
+  // not any derived flag from timedatectl. This catches daemon crashes and
+  // manual stops where the kernel clock is still synced.
+  const daemonName = await detectActiveDaemon();
+  const daemonRunning = daemonName !== "";
+
+  // Try timedatectl first (works for systemd-timesyncd and records the kernel
+  // NTPSynchronized flag regardless of which daemon set it).
   const tdctl = await run("timedatectl", ["show", "--property=NTPSynchronized", "--value"]);
-  // Only trust timedatectl if it returns a clear "yes" or "no"
   if (tdctl !== null && (tdctl.trim() === "yes" || tdctl.trim() === "no")) {
     const synced = tdctl.trim() === "yes";
-    const statusOut = await run("timedatectl", ["show", "--property=NTP", "--value"]);
-    const ntpEnabled = statusOut?.trim() === "yes";
 
     let offset = 0;
     try {
@@ -31,20 +52,17 @@ export async function collectNtp(): Promise<NtpData> {
       }
     } catch { /* offset stays 0 */ }
 
-    return {
-      synced,
-      offset_seconds: offset,
-      source: "systemd-timesyncd",
-      daemon_running: ntpEnabled || synced,
-    };
+    // Prefer an explicitly detected daemon name; fall back to systemd-timesyncd
+    // since timedatectl is most commonly the timesyncd frontend.
+    const source = daemonName || "systemd-timesyncd";
+    return { synced, offset_seconds: offset, source, daemon_running: daemonRunning, daemon_name: daemonName };
   }
 
-  // Try chrony - validate output contains expected "Leap status" field
+  // Chrony tracking. Validate Leap status so we do not misread error text.
   const chronyOut = await run("chronyc", ["tracking"]);
   if (chronyOut) {
     const leapMatch = chronyOut.match(/Leap status\s*:\s*(.+)/);
     if (leapMatch) {
-      // Output looks like real chrony tracking data
       const synced = leapMatch[1].trim() === "Normal";
       let offset = 0;
       const offsetMatch = chronyOut.match(/Last offset\s*:\s*([+-]?\d+\.?\d*)\s*seconds/);
@@ -52,20 +70,18 @@ export async function collectNtp(): Promise<NtpData> {
       return {
         synced,
         offset_seconds: Math.abs(offset),
-        source: "chrony",
-        daemon_running: true,
+        source: daemonName || "chrony",
+        daemon_running: daemonRunning,
+        daemon_name: daemonName,
       };
     }
-    // chronyc returned output but not tracking data (error message, daemon not running)
-    // Fall through to ntpq
   }
 
-  // Try ntpq - validate output contains the header line with "remote"
+  // ntpq peer table. Header check avoids false positives on error messages.
   const ntpqOut = await run("ntpq", ["-pn"]);
   if (ntpqOut) {
     const hasHeader = ntpqOut.split("\n").some((line) => line.includes("remote"));
     if (hasHeader) {
-      // Output looks like real ntpq peer table
       const synced = ntpqOut.split("\n").some((line) => line.startsWith("*"));
       let offset = 0;
       const selectedLine = ntpqOut.split("\n").find((line) => line.startsWith("*"));
@@ -79,19 +95,20 @@ export async function collectNtp(): Promise<NtpData> {
       return {
         synced,
         offset_seconds: offset,
-        source: "ntpd",
-        daemon_running: true,
+        source: daemonName || "ntpd",
+        daemon_running: daemonRunning,
+        daemon_name: daemonName,
       };
     }
-    // ntpq returned output but not peer table (error message, daemon not running)
-    // Fall through to "none"
   }
 
-  // No time sync daemon found (or all probes returned invalid output)
+  // No usable probe output. If systemd still reports a daemon as active, trust that;
+  // otherwise report fully down.
   return {
     synced: false,
     offset_seconds: 0,
-    source: "none",
-    daemon_running: false,
+    source: daemonName || "none",
+    daemon_running: daemonRunning,
+    daemon_name: daemonName,
   };
 }
