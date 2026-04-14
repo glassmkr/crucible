@@ -59,7 +59,7 @@ Options:
 
 ## Systemd Service
 
-Create `/etc/systemd/system/glassmkr-collector.service`:
+Create `/etc/systemd/system/glassmkr-crucible.service`:
 
 ```ini
 [Unit]
@@ -81,8 +81,8 @@ Enable and start:
 
 ```bash
 sudo systemctl daemon-reload
-sudo systemctl enable --now glassmkr-collector
-sudo systemctl status glassmkr-collector
+sudo systemctl enable --now glassmkr-crucible
+sudo systemctl status glassmkr-crucible
 ```
 
 ## What It Collects

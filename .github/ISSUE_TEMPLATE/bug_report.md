@@ -15,10 +15,10 @@ about: Something is not working as expected
 
 **Service status:**
 ```
-systemctl status glassmkr-collector
+systemctl status glassmkr-crucible
 ```
 
 **Last 50 log lines:**
 ```
-journalctl -u glassmkr-collector -n 50 --no-pager
+journalctl -u glassmkr-crucible -n 50 --no-pager
 ```

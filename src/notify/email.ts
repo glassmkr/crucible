@@ -17,7 +17,7 @@ export async function sendEmail(
 
   const email = [
     `To: ${config.to}`,
-    `From: glassmkr-collector@${serverName}`,
+    `From: glassmkr-crucible@${serverName}`,
     `Subject: ${subject}`,
     `Content-Type: text/plain; charset=utf-8`,
     "",

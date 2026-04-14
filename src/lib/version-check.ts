@@ -23,7 +23,7 @@ export async function checkForUpdates(forgeUrl?: string): Promise<void> {
     if (latest !== CURRENT_VERSION) {
       console.log(`[update] New Crucible version available: ${latest} (current: ${CURRENT_VERSION})`);
       console.log(`[update] Changelog: ${data.crucible?.changelog_url || "https://github.com/glassmkr/crucible/releases"}`);
-      console.log(`[update] Run: npm update -g @glassmkr/crucible && sudo systemctl restart glassmkr-collector`);
+      console.log(`[update] Run: npm update -g @glassmkr/crucible && sudo systemctl restart glassmkr-crucible`);
       lastResult = { updateAvailable: true, latest, changelog: data.crucible?.changelog_url || "" };
     } else {
       lastResult = { updateAvailable: false, latest, changelog: "" };
