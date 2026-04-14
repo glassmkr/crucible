@@ -143,6 +143,8 @@ export interface NetworkInfo {
   tx_errors: number;
   rx_drops: number;
   tx_drops: number;
+  operstate?: string; // "up", "down", "unknown", etc. from /sys/class/net/{iface}/operstate
+  bond_master?: string; // if this interface is a bond slave, the bond name
 }
 
 export interface RaidInfo {

@@ -1,5 +1,5 @@
 import { readProcFile, sleep } from "../lib/parse.js";
-import { readFileSync } from "fs";
+import { readFileSync, readdirSync } from "fs";
 import type { NetworkInfo } from "../lib/types.js";
 
 interface IfaceStats {
@@ -45,6 +45,27 @@ function getSpeed(iface: string): number {
   }
 }
 
+function getOperstate(iface: string): string {
+  try {
+    return readFileSync(`/sys/class/net/${iface}/operstate`, "utf-8").trim();
+  } catch {
+    return "unknown";
+  }
+}
+
+function getBondMaster(iface: string): string | undefined {
+  try {
+    const bonds = readdirSync("/proc/net/bonding/");
+    for (const bond of bonds) {
+      const content = readFileSync(`/proc/net/bonding/${bond}`, "utf-8");
+      if (content.includes(`Slave Interface: ${iface}`)) return bond;
+    }
+  } catch {
+    // No bonds or /proc/net/bonding doesn't exist
+  }
+  return undefined;
+}
+
 // Compute delta, handling counter wraps (current < previous means reset, use current as delta)
 function delta(current: number, previous: number): number {
   if (current >= previous) return current - previous;
@@ -87,7 +108,7 @@ export async function collectNetwork(): Promise<NetworkInfo[]> {
       tx_drops: s2.tx_drops,
     });
 
-    results.push({
+    const entry: NetworkInfo = {
       interface: name,
       speed_mbps: getSpeed(name),
       rx_bytes_sec: s2.rx_bytes - s1.rx_bytes, // already a 1-second delta
@@ -96,7 +117,11 @@ export async function collectNetwork(): Promise<NetworkInfo[]> {
       tx_errors: txErrorsDelta,
       rx_drops: rxDropsDelta,
       tx_drops: txDropsDelta,
-    });
+      operstate: getOperstate(name),
+    };
+    const master = getBondMaster(name);
+    if (master) entry.bond_master = master;
+    results.push(entry);
   }
 
   // Remove stale interfaces that disappeared
