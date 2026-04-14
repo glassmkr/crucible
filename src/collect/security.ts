@@ -202,12 +202,15 @@ async function checkKernelReboot(): Promise<KernelRebootStatus | null> {
 
   // Method 1: reboot-required flag (Debian/Ubuntu)
   if (existsSync("/var/run/reboot-required")) {
-    const installed = (await run("bash", ["-c", 'dpkg -l "linux-image-*" 2>/dev/null | grep "^ii" | awk \'{print $2}\' | sort -V | tail -1 | sed "s/linux-image-//"']))?.trim() || "unknown";
+    // Filter to versioned images only (e.g. linux-image-6.8.0-107-generic),
+    // excluding metapackages like linux-image-generic, linux-image-virtual.
+    const installed = (await run("bash", ["-c", 'dpkg -l "linux-image-*" 2>/dev/null | grep "^ii" | awk \'{print $2}\' | grep "linux-image-[0-9]" | sed "s/linux-image-//" | sort -V | tail -1']))?.trim() || "unknown";
     return { running, installed, needsReboot: true };
   }
 
   // Method 2: Compare packages (Debian/Ubuntu)
-  const debPkg = (await run("bash", ["-c", 'dpkg -l "linux-image-*" 2>/dev/null | grep "^ii" | awk \'{print $2}\' | grep -v "linux-image-generic" | sed "s/linux-image-//" | sort -V | tail -1']))?.trim();
+  // Same filter: only versioned images, no metapackages.
+  const debPkg = (await run("bash", ["-c", 'dpkg -l "linux-image-*" 2>/dev/null | grep "^ii" | awk \'{print $2}\' | grep "linux-image-[0-9]" | sed "s/linux-image-//" | sort -V | tail -1']))?.trim();
   if (debPkg) {
     return { running, installed: debPkg, needsReboot: debPkg !== running };
   }
