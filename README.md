@@ -7,6 +7,10 @@ Lightweight bare metal server monitoring agent. Collects hardware and OS health 
 
 Open source. MIT licensed. Built by [Glassmkr](https://glassmkr.com). See also [Bench](https://github.com/glassmkr/bench), the MCP server collection.
 
+**Resource usage:** ~80MB RSS memory, <0.1% CPU at 5-minute collection interval. Collects IPMI, SMART, ZFS, network bonds, security posture, conntrack, systemd, NTP, and file descriptors.
+
+**Security:** See [glassmkr.com/security](https://glassmkr.com/security) for the full list of what Crucible does and does not collect.
+
 ## Install
 
 ```bash
@@ -18,6 +22,35 @@ Or use the bootstrap script:
 ```bash
 curl -sf https://forge.glassmkr.com/install | bash
 ```
+
+## Docker
+
+```bash
+# Create config directory
+sudo mkdir -p /etc/glassmkr
+
+# Create config (replace with your Forge credentials)
+sudo tee /etc/glassmkr/collector.yaml << 'EOF'
+server_name: "web-01"
+collection:
+  interval_seconds: 300
+  ipmi: true
+  smart: true
+forge:
+  enabled: true
+  url: "https://forge.glassmkr.com"
+  api_key: "col_YOUR_KEY_HERE"
+EOF
+
+# Run with docker compose
+curl -O https://raw.githubusercontent.com/glassmkr/crucible/main/docker-compose.yml
+docker compose up -d
+
+# Check logs
+docker compose logs -f crucible
+```
+
+Images are published to [ghcr.io/glassmkr/crucible](https://github.com/glassmkr/crucible/pkgs/container/crucible) on every tag release. The container needs `--privileged` and `network_mode: host` for IPMI, SMART, and accurate host network monitoring. Details in the [compose file](./docker-compose.yml).
 
 ## Quick Start
 

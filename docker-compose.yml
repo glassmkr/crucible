@@ -1,0 +1,26 @@
+# Glassmkr Crucible - docker compose deployment
+#
+# Before starting, create /etc/glassmkr/collector.yaml on the host with your
+# Forge collector key. See https://forge.glassmkr.com/docs/getting-started.
+#
+# Why privileged + host network:
+# - privileged: true gives access to /dev/ipmi0 (IPMI sensors) and raw disk devices (SMART)
+# - network_mode: host lets the agent read the real host network interfaces and bond state
+# - /proc and /sys are mounted so the agent monitors the host, not the container
+
+services:
+  crucible:
+    image: ghcr.io/glassmkr/crucible:latest
+    container_name: glassmkr-crucible
+    restart: unless-stopped
+    privileged: true
+    network_mode: host
+    volumes:
+      - /etc/glassmkr:/etc/glassmkr:ro
+      - /proc:/host/proc:ro
+      - /sys:/host/sys:ro
+      - /dev:/dev:ro
+      - /run/dbus:/run/dbus:ro
+    environment:
+      - HOST_PROC=/host/proc
+      - HOST_SYS=/host/sys
