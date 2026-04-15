@@ -11,6 +11,17 @@ Open source. MIT licensed. Built by [Glassmkr](https://glassmkr.com). See also [
 
 **Security:** See [glassmkr.com/security](https://glassmkr.com/security) for the full list of what Crucible does and does not collect.
 
+## Screenshots
+
+![Forge alerts with fix commands](https://glassmkr.com/screenshots/alerts.png)
+*Alerts grouped by server, with AI-generated fix commands for each rule.*
+
+![Storage, SMART health, and network bonds](https://glassmkr.com/screenshots/hardware.png)
+*Per-disk SMART status, storage capacity, and network interface bonding.*
+
+![Server overview with active alerts](https://glassmkr.com/screenshots/overview.png)
+*Server detail view: live metrics, hardware inventory, and active alerts.*
+
 ## Install
 
 ```bash
