@@ -7,7 +7,7 @@ Lightweight bare metal server monitoring agent. Collects hardware and OS health 
 
 Open source. MIT licensed. Built by [Glassmkr](https://glassmkr.com). See also [Bench](https://github.com/glassmkr/bench), the MCP server collection.
 
-**Resource usage:** ~80MB RSS memory, <0.1% CPU at 5-minute collection interval. Collects IPMI, SMART, ZFS, network bonds, security posture, conntrack, systemd, NTP, and file descriptors.
+**Resource usage:** ~90MB RSS memory (varies by hardware: servers with more IPMI sensors use more), <0.1% CPU at 5-minute collection interval. Collects IPMI, SMART, ZFS, network bonds, security posture, conntrack, systemd, NTP, and file descriptors.
 
 **Security:** See [glassmkr.com/security](https://glassmkr.com/security) for the full list of what Crucible does and does not collect.
 
