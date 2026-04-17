@@ -19,8 +19,8 @@ Open source. MIT licensed. Built by [Glassmkr](https://glassmkr.com). See also [
 ![Storage, SMART health, and network bonds](https://glassmkr.com/screenshots/hardware.png)
 *Per-disk SMART status, storage capacity, and network interface bonding.*
 
-![Server overview with active alerts](https://glassmkr.com/screenshots/overview.png)
-*Server detail view: live metrics, hardware inventory, and active alerts.*
+![Security posture and server overview](https://glassmkr.com/screenshots/overview.png)
+*Security posture, server overview, and active alerts.*
 
 ## Install
 
