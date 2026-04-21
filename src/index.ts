@@ -15,12 +15,42 @@ const PKG_VERSION = (() => {
   }
 })();
 
-// Handle --version and --help before importing collectors, loading config, or
-// starting the Prometheus server. This keeps the CLI responsive even on hosts
-// missing the config file or external tools.
+// Handle --version, --help, and planned-reboot subcommands before
+// importing collectors, loading config, or starting the Prometheus
+// server. Keeps the CLI responsive even on hosts missing the config
+// file or external tools.
 const { result: cliArgs, output: cliOutput } = parseCliArgs(process.argv.slice(2), PKG_VERSION);
-if (cliArgs.mode !== "run") {
+if (cliArgs.mode === "version" || cliArgs.mode === "help") {
   console.log(cliOutput);
+  process.exit(0);
+}
+if (cliArgs.mode === "mark-reboot" || cliArgs.mode === "reboot") {
+  const { writeRebootMarker, parseDuration, DEFAULT_TTL_MS } = await import("./lib/reboot-marker.js");
+  const ttlMs = cliArgs.ttl ? parseDuration(cliArgs.ttl) : DEFAULT_TTL_MS;
+  if (ttlMs === null) {
+    console.error(`[mark-reboot] invalid --ttl value: ${cliArgs.ttl}. Use e.g. 10m, 2h, 600s.`);
+    process.exit(2);
+  }
+  try {
+    const { path, expires_at } = writeRebootMarker({
+      reason: cliArgs.reason, ttlMs,
+    });
+    console.log(`[${cliArgs.mode}] marker written: ${path} (expires ${expires_at}${cliArgs.reason ? `, reason: ${cliArgs.reason}` : ""})`);
+  } catch (err: any) {
+    console.error(`[${cliArgs.mode}] failed to write marker: ${err?.message || err}`);
+    console.error(`  Most likely cause: need root privileges to write under /var/lib/crucible/.`);
+    process.exit(1);
+  }
+  if (cliArgs.mode === "reboot") {
+    const { execFileSync } = await import("node:child_process");
+    console.log("[reboot] invoking systemctl reboot");
+    try {
+      execFileSync("systemctl", ["reboot"], { stdio: "inherit" });
+    } catch (err: any) {
+      console.error(`[reboot] systemctl reboot failed: ${err?.message || err}`);
+      process.exit(1);
+    }
+  }
   process.exit(0);
 }
 
@@ -51,6 +81,17 @@ import { collectSystemd } from "./collect/systemd.js";
 import { collectNtp } from "./collect/ntp.js";
 import { collectFileDescriptors } from "./collect/fd.js";
 import type { Snapshot, IpmiInfo } from "./lib/types.js";
+import { consumeRebootMarker, type PlannedReboot } from "./lib/reboot-marker.js";
+
+// Consume the planned-reboot marker once at startup. If the operator ran
+// `crucible-agent mark-reboot` / `reboot` before this boot, the marker
+// exists, we flag it on the first snapshot, and we delete the file (so
+// subsequent snapshots don't keep claiming the reboot was planned).
+const plannedRebootFlag: PlannedReboot | null = consumeRebootMarker();
+if (plannedRebootFlag) {
+  console.log(`[collector] Planned reboot acknowledged${plannedRebootFlag.reason ? `: ${plannedRebootFlag.reason}` : ""}`);
+}
+let plannedRebootConsumed = false;
 
 const config = loadConfig(cliArgs.configPath);
 
@@ -105,6 +146,14 @@ async function collect() {
     system, cpu, memory, disks, smart, network, raid, ipmi, os_alerts: osAlerts,
     security: cachedSecurity,
   };
+
+  // Single-shot: the very first snapshot after a marked reboot carries
+  // the flag, subsequent snapshots do not.
+  if (plannedRebootFlag && !plannedRebootConsumed) {
+    (snapshot as any).expected_reboot = true;
+    if (plannedRebootFlag.reason) (snapshot as any).expected_reboot_reason = plannedRebootFlag.reason;
+    plannedRebootConsumed = true;
+  }
 
   // ZFS and I/O errors: collect every cycle (lightweight checks)
   try { snapshot.zfs = await collectZfs() ?? undefined; } catch { /* skip if ZFS not available */ }

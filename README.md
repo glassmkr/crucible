@@ -92,6 +92,8 @@ Images are published to [ghcr.io/glassmkr/crucible](https://github.com/glassmkr/
 
 ```
 glassmkr-crucible [options]
+glassmkr-crucible mark-reboot [--reason TEXT] [--ttl DURATION]
+glassmkr-crucible reboot      [--reason TEXT] [--ttl DURATION]
 
 Options:
   -v, --version    Print version and exit
@@ -100,6 +102,29 @@ Options:
 ```
 
 `--config=PATH` and the legacy positional form `glassmkr-crucible /path/to.yaml` both work. Without options, Crucible runs as a long-lived collector daemon.
+
+## Rebooting without noise
+
+Crucible distinguishes planned reboots from unplanned ones and gives each rule a short grace period after boot so that transient conditions (bond slave still negotiating, clock not synced yet) do not page you.
+
+Before a planned reboot:
+
+```
+sudo glassmkr-crucible reboot --reason "kernel update"
+```
+
+Or, if you prefer to trigger the reboot yourself:
+
+```
+sudo glassmkr-crucible mark-reboot --reason "kernel update"
+sudo reboot
+```
+
+Both write a short-lived marker to `/var/lib/crucible/reboot-expected`. The agent reads it once on startup, sets `expected_reboot: true` on the first post-boot snapshot, and deletes the file. Forge reads that flag and suppresses the `server_rebooted_unexpectedly` alert for that boot only.
+
+The marker is single-use and expires 10 minutes after it is written (override with `--ttl 5m` / `--ttl 1h`), so a forgotten marker cannot silence a genuine crash reboot next week. If systemd fails to reboot the host, the marker simply expires on its own.
+
+Per-rule grace windows are applied separately: bond-slave-down and CPU-temperature get 60 s, interface errors 120 s, clock-sync / NTP 300 s, others 0 s. Suppressed evaluations are recorded in alert history with status `suppressed_boot_grace` or `suppressed_planned_reboot` so you can audit exactly why a rule didn't fire during a given boot.
 
 ## Systemd Service
 

@@ -18,6 +18,12 @@ export interface Snapshot {
   systemd?: SystemdData;
   ntp?: NtpData;
   file_descriptors?: FileDescriptorData;
+  // Planned-reboot flag: set only on the first snapshot after a reboot
+  // that was marked with `crucible-agent mark-reboot` / `reboot`. Forge
+  // reads this to suppress the `unexpected_reboot` rule. Single-use:
+  // subsequent snapshots don't carry it.
+  expected_reboot?: boolean;
+  expected_reboot_reason?: string;
 }
 
 export interface ConntrackData {
