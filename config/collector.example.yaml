@@ -1,5 +1,5 @@
-# Glassmkr Collector Configuration
-# Copy to /etc/glassmkr/collector.yaml
+# Glassmkr Crucible Configuration
+# Copy to /etc/glassmkr/crucible.yaml
 
 # Server identity
 server_name: "my-server"

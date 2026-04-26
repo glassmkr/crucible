@@ -1,19 +1,7 @@
 #!/usr/bin/env node
 
-import { readFileSync } from "node:fs";
-import { fileURLToPath } from "node:url";
-import { dirname, join } from "node:path";
 import { parseCliArgs } from "./cli.js";
-
-const __dirname = dirname(fileURLToPath(import.meta.url));
-const PKG_VERSION = (() => {
-  try {
-    const pkg = JSON.parse(readFileSync(join(__dirname, "..", "package.json"), "utf8"));
-    return pkg.version || "0.0.0";
-  } catch {
-    return "0.0.0";
-  }
-})();
+import { CRUCIBLE_VERSION as PKG_VERSION } from "./lib/version.js";
 
 // Handle --version, --help, and planned-reboot subcommands before
 // importing collectors, loading config, or starting the Prometheus

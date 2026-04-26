@@ -1,6 +1,7 @@
 import { execFile } from "child_process";
 import { promisify } from "util";
 import type { AlertResult } from "../lib/types.js";
+import { CRUCIBLE_VERSION } from "../lib/version.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -63,6 +64,6 @@ function buildBody(newAlerts: AlertResult[], resolvedAlerts: AlertResult[], serv
   }
 
   lines.push("---");
-  lines.push("Glassmkr Collector v0.1.0");
+  lines.push(`Glassmkr Crucible v${CRUCIBLE_VERSION}`);
   return lines.join("\n");
 }

@@ -1,6 +1,6 @@
 {
   "name": "@glassmkr/crucible",
-  "version": "0.7.0",
+  "version": "0.7.1",
   "description": "Lightweight bare metal server monitoring. IPMI, SMART, OS, network. Opinionated alerts.",
   "type": "module",
   "main": "./dist/index.js",

@@ -1,4 +1,5 @@
-const CURRENT_VERSION = "0.1.0";
+import { CRUCIBLE_VERSION as CURRENT_VERSION } from "./version.js";
+
 let lastCheckTime = 0;
 let lastResult: { updateAvailable: boolean; latest: string; changelog: string } | null = null;
 const CHECK_INTERVAL = 6 * 60 * 60 * 1000; // check every 6 hours

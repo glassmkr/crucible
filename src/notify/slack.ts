@@ -1,4 +1,5 @@
 import type { AlertResult } from "../lib/types.js";
+import { CRUCIBLE_VERSION } from "../lib/version.js";
 
 export async function sendSlack(
   webhookUrl: string,
@@ -29,7 +30,7 @@ export async function sendSlack(
   if (blocks.length === 0) return true;
 
   blocks.push({ type: "divider" });
-  blocks.push({ type: "context", elements: [{ type: "mrkdwn", text: "Glassmkr Collector v0.1.0" }] });
+  blocks.push({ type: "context", elements: [{ type: "mrkdwn", text: `Glassmkr Crucible v${CRUCIBLE_VERSION}` }] });
 
   try {
     const res = await fetch(webhookUrl, {
