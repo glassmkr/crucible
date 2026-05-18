@@ -149,6 +149,30 @@ async function checkFirewall(): Promise<FirewallStatus> {
     }
   }
 
+  // pve-firewall (Proxmox VE): if installed, its status is authoritative.
+  // The service can be running while the firewall itself is disabled (the
+  // "disabled/running" status). Treat disabled-firewall as inactive, even
+  // when the systemd service is up; only "enabled/running" counts as
+  // active. Added 2026-05-18 after a validation Proxmox host was found
+  // with `no_firewall` muted as a workaround for missing detection.
+  const pve = await run("pve-firewall", ["status"], 5000);
+  if (pve) {
+    // Status line shape: "Status: <state>/<systemd>" e.g.
+    //   "Status: enabled/running"
+    //   "Status: disabled/running"
+    //   "Status: enabled/stopped"
+    const m = pve.match(/Status:\s*(\w+)\/(\w+)/);
+    if (m) {
+      const [, fwState, svcState] = m;
+      const active = fwState === "enabled" && svcState === "running";
+      return {
+        active,
+        source: "pve-firewall",
+        details: `pve-firewall is ${fwState}/${svcState}`,
+      };
+    }
+  }
+
   // nftables (only if no managed firewall found)
   const nft = await run("nft", ["list", "ruleset"], 5000);
   if (nft) {
