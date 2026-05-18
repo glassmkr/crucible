@@ -91,6 +91,11 @@ export interface SystemInfo {
    *  to pick distro-family-specific fix command variants. e.g. on Rocky this
    *  is "rhel centos fedora"; on Ubuntu it is "debian". */
   os_id_like?: string;
+  /** `VERSION_ID=` from /etc/os-release, lowercased. e.g. "13" on Debian
+   *  trixie, "24.04" on Ubuntu, "9.6" on Rocky. Combined with `os_id` by
+   *  Dashboard to form the distro token (`debian-13` etc.) that
+   *  FIX-workflow variant patterns key on. Added 2026-05-18. */
+  os_version_id?: string;
   kernel: string;
   uptime_seconds: number;
 }
