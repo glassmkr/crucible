@@ -26,6 +26,114 @@ export interface Snapshot {
   // subsequent snapshots don't carry it.
   expected_reboot?: boolean;
   expected_reboot_reason?: string;
+
+  // C1-C6 fields added 2026-05-19 (CC_SPEC_FORGE_FOLLOWUP_C1_C6_ACTIVATION).
+  // Each is optional + omitted when the collector returns null; the
+  // dashboard's activation PR carries capability gates that key off
+  // field presence.
+  /** EDAC memory-error counters per memory controller + DIMM. */
+  ecc_edac?: EdacSnapshot;
+  /** PSI pressure-stall counters per resource (cpu, memory, io). */
+  psi?: PsiSnapshot;
+  /** /proc/vmstat swap-in/out rates. */
+  vmstat?: VmstatSnapshot;
+  /** pstore / kdump / wtmp signals corroborating a reboot. */
+  reboot_evidence?: RebootEvidence;
+  /** Hardware RAID controllers scraped via vendor CLIs. */
+  hardware_raid?: HardwareRaidSnapshot;
+}
+
+// === C1 EDAC ===
+
+export interface EdacDimm {
+  /** dimm_label (vendor-defined string, e.g. "CPU1_DIMM_A1"). */
+  label: string;
+  /** dimm_location (slot number / chip-channel ordering). */
+  location: string;
+  /** DIMM size in MB; null if /sys did not report. */
+  size_mb: number | null;
+  ce_count: number;
+  ue_count: number;
+}
+
+export interface EdacSnapshot {
+  /** Sum of ce_count across all memory controllers. */
+  edac_corrected_total: number;
+  /** Sum of ue_count across all memory controllers. */
+  edac_uncorrected_total: number;
+  /** Per-DIMM detail. Empty array on hosts where dimm metadata
+   *  isn't exposed (older EDAC drivers). */
+  dimms: EdacDimm[];
+}
+
+// === C2 PSI ===
+
+export interface PsiResource {
+  /** Rolling average % over the last 10 / 60 / 300 seconds. */
+  avg10: number;
+  avg60: number;
+  avg300: number;
+  /** Cumulative microseconds stalled since boot. */
+  total: number;
+}
+
+export interface PsiSnapshot {
+  cpu?: { some: PsiResource; full?: PsiResource };
+  memory?: { some: PsiResource; full?: PsiResource };
+  io?: { some: PsiResource; full?: PsiResource };
+}
+
+// === C3 vmstat ===
+
+export interface VmstatSnapshot {
+  /** Cumulative pswpin since boot. */
+  pswpin_total: number;
+  pswpout_total: number;
+  /** Per-second swap-in rate over the most recent interval; null on
+   *  the first snapshot (no baseline) or after a counter reset (host
+   *  reboot mid-session). */
+  pswpin_rate: number | null;
+  pswpout_rate: number | null;
+}
+
+// === C4 reboot evidence ===
+
+export interface RebootEvidence {
+  /** True if /sys/fs/pstore/ contains any dmesg-* / console-* records
+   *  from the prior kernel. */
+  pstore_present: boolean;
+  /** Number of pstore records found (zero when pstore_present=false). */
+  pstore_record_count: number;
+  /** True if /var/crash/ contains a kdump vmcore. */
+  vmcore_present: boolean;
+  /** Most recent `last reboot -F` output line, verbatim. Null if
+   *  `last` is unavailable or wtmp is empty. */
+  wtmp_reboot_record: string | null;
+  /** Heuristic: true when wtmp shows a `shutdown` record before the
+   *  most recent reboot (suggests a clean shutdown). false when only
+   *  the boot record is present (suggests hard reset or power loss). */
+  prior_shutdown_clean: boolean;
+}
+
+// === C5 hardware RAID ===
+
+export interface HardwareRaidController {
+  vendor: "dell" | "hpe" | "lsi" | "adaptec";
+  controller_id: string;
+  /** Vendor-reported overall state, e.g. "Optimal", "Degraded",
+   *  "Critical", "Failed", or "Unknown". The dashboard's
+   *  raid_degraded evaluator pages on any state != "Optimal". */
+  state: string;
+  /** Count of physical disks the controller flagged as failed /
+   *  degraded; null when the parser couldn't extract this. */
+  degraded_disks: number | null;
+  /** Optional vendor-text excerpt the dashboard can surface in
+   *  evidence; null when not captured. */
+  raw_summary: string | null;
+}
+
+export interface HardwareRaidSnapshot {
+  controllers: HardwareRaidController[];
 }
 
 export interface ConntrackData {
@@ -58,6 +166,22 @@ export interface FileDescriptorData {
   percent: number;
 }
 
+export interface ZfsVdev {
+  /** Vdev name, e.g. "raidz2-0", "mirror-0", or a raw device for
+   *  single-device top-level stripes. */
+  name: string;
+  /** Vdev state from `zpool status` (ONLINE, DEGRADED, FAULTED,
+   *  REMOVED, SUSPENDED, UNAVAIL). */
+  state: string;
+  /** Redundancy class. C6 addition (2026-05-19): scaled vdev severity
+   *  matrix on the dashboard side depends on this so a DEGRADED
+   *  raidz1 (zero remaining tolerance) pages differently from a
+   *  DEGRADED raidz2 (one disk-fault budget left). */
+  redundancy_class: "mirror" | "raidz1" | "raidz2" | "raidz3" | "draid" | "stripe";
+  /** Number of child devices under this vdev in a non-ONLINE state. */
+  degraded_disks_count: number;
+}
+
 export interface ZfsPool {
   name: string;
   state: string;
@@ -66,6 +190,14 @@ export interface ZfsPool {
   scrub_repaired?: string;
   last_scrub_date?: string;
   scrub_never_run?: boolean;
+  /** Top-level data vdevs. Always present from collector v0.10.4+.
+   *  Dashboard tolerates absent (older agents) via capability gates. */
+  vdevs: ZfsVdev[];
+  /** Separate log (SLOG / ZIL) vdevs. Empty array on pools without
+   *  a SLOG configured. */
+  slog_vdevs: ZfsVdev[];
+  /** Cache (L2ARC) vdevs. Empty array on pools without L2ARC. */
+  l2arc_vdevs: ZfsVdev[];
 }
 
 export interface ZfsData {
