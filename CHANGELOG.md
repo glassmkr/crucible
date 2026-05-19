@@ -7,6 +7,92 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 Pre-1.0 convention: minor bumps may include breaking changes; we call them
 out under `### Breaking` so downstream consumers can audit.
 
+## [0.13.0] - 2026-05-20
+
+GPU/fabric telemetry collection ships as a new category. Three-tier
+capability-gated: nvidia-smi (Tier 1, full) + DCGM (Tier 2, basic) +
+Redfish OEM (Tier 3, stub). Per Simon's 2026-05-19 ship-ahead-of-
+fleet-validation decision, all three tiers ship with explicit
+provenance markers so the dashboard's GPU rules can surface honesty
+in evidence:
+
+  - Tier 1: validation-pending (lifts to fleet-tested in the follow-
+    up PR after Simon's 2-3 GPU hosts have run v0.13.0 for 3-5 days)
+  - Tier 2: desk-research-only (lifts to fleet-tested if a validation
+    host runs nv-hostengine)
+  - Tier 3: stub (Supermicro HGX + NVIDIA reference schemas pending
+    fleet validation; the detection probe + collector framework are
+    in place, the schema-specific queries are not)
+
+### Added
+
+- **GPU collection (C19).** New `snap.gpu` field. Detects NVIDIA
+  data-center GPUs (L4 / A100 / H100 / H200 / B200) via the
+  nvidia-smi binary; <10ms short-circuit on non-NVIDIA hosts so
+  existing customers see zero performance impact.
+
+  **Tier 1 (nvidia-smi):** GPU presence, model, UUID, driver version,
+  vbios, VRAM total/used, temperature, power draw/limit, utilisation,
+  clocks, pstate, PCIe link gen/width (current + max), ECC mode +
+  counters (corrected/uncorrected, volatile/aggregate), retired pages
+  (single-bit/double-bit/pending), fan speed, NVLink basic state +
+  per-link bandwidth, performance_state_reasons (throttle flags from
+  the XML output including hw_slowdown / hw_thermal_slowdown /
+  sw_power_cap), and parsed XID events from dmesg with severity per
+  NVIDIA's published XID table.
+
+  **Tier 2 (DCGM):** when `nv-hostengine` is running and `dcgmi` is
+  installed, runs `dcgmi health -g 0 -c` and surfaces the raw output
+  alongside reserved fields for future structured parsing
+  (nvswitch_status, nvlink_detailed, retired_pages_detail,
+  thermal/power violation time-series, topology_actual). Tagged
+  `parser_quality: "stub"`. Lifts to "fleet-tested" in a follow-up
+  release once Simon's validation hosts surface DCGM output.
+
+  **Tier 3 (Redfish OEM):** detection probe returns null endpoint /
+  null schema; collector returns `available: false` with reason
+  citing "stub in v0.13.0; Supermicro HGX + NVIDIA reference schemas
+  pending fleet validation". The framework is in place; the schema-
+  specific Redfish queries are not. Dashboard rules consuming Tier 3
+  fields (none in the first GPU rule release) capability-gate cleanly.
+
+### Capability gating
+
+Zero performance and zero error overhead on hosts without NVIDIA
+GPUs. The `which nvidia-smi` probe is the gate; if absent, all three
+tiers short-circuit immediately and `snap.gpu.available = false`. On
+NVIDIA hosts with broken driver state (nvidia-smi present but query
+times out), the probe returns nvidia_smi=false rather than treating
+the broken state as an alertable signal — that's `gpu_xid_critical`
+territory (XID 79 surfaces "GPU has fallen off the bus" via the
+dmesg path independently).
+
+### Unblocks
+
+Glassmkr Dashboard's first GPU rule release per `CC_SPEC_GPU_RULES_
+2026-05-19.md`: 8 rules consuming `snap.gpu.tier1.*` primarily;
+`nvlink_link_down` + `gpu_corrected_ecc_storm` consume Tier 2 when
+available; future tier-3-primary rules wait for fleet validation.
+
+### Scope deferred to follow-up releases
+
+- AMD Instinct / Intel Gaudi GPU collection.
+- MIG (Multi-Instance GPU) partition awareness.
+- vGPU virtualisation signals.
+- DCGM diagnostic invocation (operator-initiated; never run from
+  always-on agent telemetry).
+- NCCL collective failure detection (application-cooperative).
+- Tier 3 Supermicro HGX + NVIDIA reference Redfish schema queries
+  (waits for fleet validation; the framework ships in this release).
+- GPU topology drift detection (needs a baseline mechanism).
+
+### Validation status
+
+Simon brings 2-3 GPU servers into the validation fleet
+post-release. Provenance markers will be tightened from
+"validation-pending" to "fleet-tested" in a Dashboard follow-up PR
+after 3-5 days of clean fleet data.
+
 ## [0.12.0] - 2026-05-19
 
 Eight collectors land together. All shipped; none deferred from the

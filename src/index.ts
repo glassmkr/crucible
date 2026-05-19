@@ -103,6 +103,7 @@ import { collectEthtool } from "./collect/ethtool.js";
 import { collectSoftnet } from "./collect/softnet.js";
 import { collectCve } from "./collect/cve.js";
 import { collectDmesgEvents } from "./collect/dmesg-events.js";
+import { collectGpu } from "./collect/gpu.js";
 import { collectThermal } from "./collect/thermal.js";
 import { collectDmi, formatVendorLine } from "./collect/dmi.js";
 import { detectIpmiCapability, formatCapabilityLine } from "./lib/capability.js";
@@ -290,6 +291,12 @@ async function collect() {
   try { snapshot.softnet = collectSoftnet(); } catch { /* skip on error */ }
   try { snapshot.cve = await collectCve(); } catch { /* skip on error */ }
   try { snapshot.dmesg_events = await collectDmesgEvents(); } catch { /* skip on error */ }
+
+  // C19 GPU collection (v0.13.0, 2026-05-19). Three-tier capability-
+  // gated; non-NVIDIA hosts short-circuit in <10ms via the
+  // which-nvidia-smi probe. Per CC_SPEC_CRUCIBLE_GPU_COLLECTION_
+  // 2026-05-19.md.
+  try { snapshot.gpu = await collectGpu(); } catch { /* skip on error */ }
 
   // Update Prometheus metrics
   updateMetrics(snapshot);

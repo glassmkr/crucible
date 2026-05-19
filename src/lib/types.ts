@@ -66,6 +66,136 @@ export interface Snapshot {
   cve?: CveSnapshot;
   /** C18 dmesg structured event parser. */
   dmesg_events?: DmesgEventsSnapshot;
+
+  /** C19 GPU collection (NVIDIA L4/A100/H100/H200/B200). Three-tier
+   *  capability gated; Tier 1 = nvidia-smi, Tier 2 = DCGM, Tier 3 =
+   *  Redfish OEM (stub in v0.13.0). Per CC_SPEC_CRUCIBLE_GPU_
+   *  COLLECTION_2026-05-19.md. */
+  gpu?: GpuSnapshot;
+}
+
+// === C19 GPU ===
+
+export interface GpuCapabilities {
+  nvidia_smi: boolean;
+  nvidia_driver_version: string | null;
+  dcgm: boolean;
+  dcgmi_version: string | null;
+  redfish_endpoint: string | null;
+  redfish_oem_schema: "supermicro_hgx" | "dell_xe" | "hpe_apollo" | "nvidia_reference" | "unknown" | null;
+  probe_duration_ms: number;
+}
+
+export interface NvLinkBasic {
+  link_id: number;
+  state: "up" | "down" | "inactive";
+  speed_gbps: number;
+}
+
+export interface XidEvent {
+  timestamp_iso: string;
+  xid_code: number;
+  pci_bdf: string;
+  severity: "critical" | "warning" | "info";
+  raw_message: string;
+}
+
+export interface Gpu {
+  index: number;
+  uuid: string;
+  name: string;
+  pci_bdf: string;
+  vbios_version: string;
+  vram_total_mib: number;
+  vram_used_mib: number;
+  temp_c: number;
+  power_draw_w: number;
+  power_limit_w: number;
+  utilization_gpu_percent: number;
+  utilization_mem_percent: number;
+  clock_graphics_mhz: number;
+  clock_sm_mhz: number;
+  clock_mem_mhz: number;
+  pstate: string;
+  pcie_link_gen_current: number;
+  pcie_link_gen_max: number;
+  pcie_link_width_current: number;
+  pcie_link_width_max: number;
+  ecc_mode_current: boolean;
+  ecc_errors_corrected_volatile: number;
+  ecc_errors_corrected_aggregate: number;
+  ecc_errors_uncorrected_volatile: number;
+  ecc_errors_uncorrected_aggregate: number;
+  retired_pages_single_bit: number | null;
+  retired_pages_double_bit: number | null;
+  retired_pages_pending: number | null;
+  thermal_slowdown_active: boolean;
+  thermal_violation_total_ms: number | null;
+  power_violation_total_ms: number | null;
+  fan_speed_percent: number | null;
+  nvlink_links: NvLinkBasic[];
+  performance_state_reasons: string[];
+}
+
+export interface Tier1Snapshot {
+  available: true;
+  gpus: Gpu[];
+  xid_events: XidEvent[];
+  driver_version: string;
+}
+
+export interface Tier2Snapshot {
+  available: true;
+  /** "stub" in v0.13.0; lifts to "fleet-tested" post-validation. */
+  parser_quality: "stub" | "fleet-tested";
+  nvswitch_status: Array<{
+    uuid: string;
+    port_count_total: number;
+    port_count_active: number;
+    port_count_faulted: number;
+    faulted_ports: number[];
+  }>;
+  nvlink_detailed: Array<NvLinkBasic & {
+    remote_gpu_uuid: string | null;
+    remote_nvswitch_uuid: string | null;
+    replay_errors: number;
+    recovery_errors: number;
+    crc_errors: number;
+    flit_crc_errors: number;
+  }>;
+  retired_pages_detail: Array<{
+    gpu_uuid: string;
+    address: string;
+    cause: "single_bit_ecc" | "double_bit_ecc";
+    retired_at_iso: string;
+  }>;
+  thermal_violation_time_series_ms: number;
+  power_violation_time_series_ms: number;
+  topology_actual: { nodes: string[]; edges: Array<{ from: string; to: string; link_count: number }> };
+  topology_expected: { nodes: string[]; edges: Array<{ from: string; to: string; link_count: number }> } | null;
+  /** Raw `dcgmi health` output (capped at 4KB) for v0.13.0; future
+   *  releases structure this. */
+  health_summary_raw: string;
+}
+
+export interface Tier3Snapshot {
+  available: true;
+  /** "stub" in v0.13.0 per Simon's 2026-05-19 ship-ahead decision. */
+  parser_quality: "stub" | "fleet-tested";
+  oem_schema: string;
+  baseboard_thermal_c: number | null;
+  baseboard_power_input_w: number | null;
+  hgx_baseboard_status?: "ok" | "warning" | "critical" | null;
+  gpu_module_status: Array<{ uuid: string; status: "ok" | "warning" | "critical" }>;
+}
+
+export interface GpuSnapshot {
+  available: boolean;
+  reason?: string;
+  capabilities: GpuCapabilities;
+  tier1?: Tier1Snapshot | { available: false; reason: string };
+  tier2?: Tier2Snapshot | { available: false; reason: string };
+  tier3?: Tier3Snapshot | { available: false; reason: string };
 }
 
 // === C14 LVM thin ===
