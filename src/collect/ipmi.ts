@@ -1,5 +1,35 @@
 import { run } from "../lib/exec.js";
-import type { IpmiInfo, SelEvent, FanStatus, Vendor, PsuRedundancyState, IpmiCapability } from "../lib/types.js";
+import type { BmcVendor, IpmiInfo, SelEvent, FanStatus, Vendor, PsuRedundancyState, IpmiCapability } from "../lib/types.js";
+
+/**
+ * C11 (2026-05-19): map DMI vendor to BMC vendor + parser quality tier.
+ *
+ * Fleet-tested: dell, hpe, supermicro (years of fleet validation; SEL
+ *   classifier confirmed against real-host event streams).
+ * Stub: lenovo, cisco, openbmc (parser ships but unvalidated against
+ *   real fleet data; first real customer per vendor surfaces gaps).
+ * Unknown: everything else (asrockrack, inspur, generic, virtual, ...);
+ *   classifier still runs (it's keyword-driven, vendor-agnostic) but
+ *   we tag the events honestly.
+ */
+function mapVendorToBmcVendor(vendor: Vendor): BmcVendor {
+  if (vendor === "dell" || vendor === "hpe" || vendor === "supermicro") return vendor;
+  if (vendor === "lenovo" || vendor === "cisco") return vendor;
+  // OpenBMC isn't a DMI vendor; it would surface as "generic" with a
+  // BMC manufacturer of "OpenBMC Project" in ipmitool mc info. We'd
+  // need to probe that to identify; deferred to a follow-up.
+  return "unknown";
+}
+
+function parserQualityFor(bmcVendor: BmcVendor): "fleet-tested" | "stub" | "unknown" {
+  if (bmcVendor === "dell" || bmcVendor === "hpe" || bmcVendor === "supermicro") {
+    return "fleet-tested";
+  }
+  if (bmcVendor === "lenovo" || bmcVendor === "cisco" || bmcVendor === "openbmc") {
+    return "stub";
+  }
+  return "unknown";
+}
 import { isPsuRedundancySensor, classifyPsuRedundancyState } from "../lib/vendor-sensors.js";
 import { filterRedundantCpuDtsSensors } from "../lib/ipmi-sensor-filter.js";
 
@@ -91,8 +121,13 @@ export async function collectIpmi(vendor: Vendor = "generic", capability?: IpmiC
     if (match) selCount = parseInt(match[1], 10);
   }
 
-  // SEL recent events
-  const selEvents = await collectSelEvents();
+  // SEL recent events. C11 (2026-05-19): tag each event with the BMC
+  // vendor's parser_quality so Dashboard can render an honesty surface
+  // for stub-parser BMCs (Lenovo, Cisco, OpenBMC).
+  const bmcVendor = mapVendorToBmcVendor(vendor);
+  const selParserQuality = parserQualityFor(bmcVendor);
+  const selEventsRaw = await collectSelEvents();
+  const selEvents = selEventsRaw.map((e) => ({ ...e, parser_quality: selParserQuality }));
 
   // ECC errors from SEL events (Dell iDRAC reports memory ECC only via SEL).
   // Counts ALL events since last SEL clear, not just the recent window —
@@ -116,6 +151,7 @@ export async function collectIpmi(vendor: Vendor = "generic", capability?: IpmiC
 
   return {
     available: true,
+    bmc_vendor: bmcVendor,
     sensors,
     ecc_errors: { correctable, uncorrectable },
     ecc_errors_from_sel: selEccCounts,
@@ -126,6 +162,8 @@ export async function collectIpmi(vendor: Vendor = "generic", capability?: IpmiC
     detection: capability,
   };
 }
+
+export const __test_only_c11 = { mapVendorToBmcVendor, parserQualityFor };
 
 /**
  * Re-parse the full SEL elist counting ECC events on the Memory entity.

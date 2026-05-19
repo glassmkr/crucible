@@ -98,6 +98,11 @@ import { collectNtp } from "./collect/ntp.js";
 import { collectFileDescriptors, collectProcessFd } from "./collect/fd.js";
 import { collectBonding } from "./collect/bonding.js";
 import { collectTcpStats } from "./collect/tcp-stats.js";
+import { collectLvm } from "./collect/lvm.js";
+import { collectEthtool } from "./collect/ethtool.js";
+import { collectSoftnet } from "./collect/softnet.js";
+import { collectCve } from "./collect/cve.js";
+import { collectDmesgEvents } from "./collect/dmesg-events.js";
 import { collectThermal } from "./collect/thermal.js";
 import { collectDmi, formatVendorLine } from "./collect/dmi.js";
 import { detectIpmiCapability, formatCapabilityLine } from "./lib/capability.js";
@@ -276,6 +281,15 @@ async function collect() {
   try { snapshot.process_fd = collectProcessFd(); } catch { /* skip on error */ }
   try { snapshot.bonding = collectBonding(); } catch { /* skip on error */ }
   try { snapshot.tcp_stats = collectTcpStats(); } catch { /* skip on error */ }
+
+  // C11-C18 collectors (v0.12.0, 2026-05-19). Five small + three big.
+  // Same capability-gating discipline: each collector reports
+  // available: false when its source is missing.
+  try { snapshot.lvm = await collectLvm(); } catch { /* skip on error */ }
+  try { snapshot.ethtool = await collectEthtool(); } catch { /* skip on error */ }
+  try { snapshot.softnet = collectSoftnet(); } catch { /* skip on error */ }
+  try { snapshot.cve = await collectCve(); } catch { /* skip on error */ }
+  try { snapshot.dmesg_events = await collectDmesgEvents(); } catch { /* skip on error */ }
 
   // Update Prometheus metrics
   updateMetrics(snapshot);

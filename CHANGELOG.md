@@ -7,6 +7,112 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 Pre-1.0 convention: minor bumps may include breaking changes; we call them
 out under `### Breaking` so downstream consumers can audit.
 
+## [0.12.0] - 2026-05-19
+
+Eight collectors land together. All shipped; none deferred from the
+Phase 0 escape valve (complexity assessments held).
+
+### Added
+
+- **C12 systemd Result field.** `snap.systemd.failed_unit_details[unit]`
+  exposes `Result` (systemd's failure classifier: oom-kill / watchdog /
+  exit-code / timeout / start-limit-hit / ...) plus `ActiveState`,
+  `SubState`, `NRestarts`. Unblocks Dashboard's
+  `systemd_service_failed` TUNE + `service_flapping` +
+  `systemd_service_oom_killed` rules.
+
+- **C14 LVM thin pool metadata.** New `snap.lvm.thin_pools[]` with
+  per-pool `metadata_percent` and `data_percent`. Metadata exhaustion
+  is silent and catastrophic; Dashboard's `lvm_thinpool_metadata_high`
+  rule pages on >=80% / >=95% metadata utilisation.
+
+- **C15 ethtool advertised link modes.** New `snap.ethtool.interfaces[]`
+  with `advertised_link_modes[]` and `advertised_auto_negotiation`.
+  Unblocks Dashboard's `link_speed_mismatch` TUNE (current vs highest
+  advertised speed).
+
+- **C16 softnet drops.** New `snap.softnet` with per-CPU dropped column
+  from `/proc/net/softnet_stat` plus agent-computed total drop rate
+  per second (vmstat (C3) rate-calc pattern). Unblocks Dashboard's
+  `softnet_drops` new rule.
+
+- **C17 NVMe Critical Warning decode.** `snap.smart` NVMe devices gain
+  `critical_warning_raw` plus six decoded boolean flags
+  (available_spare_low / temperature_threshold / reliability_degraded /
+  read_only / volatile_memory_backup_failed /
+  persistent_memory_readonly) per NVM Express spec §5.21. Unblocks
+  Dashboard's `nvme_critical_warning` P0 rule.
+
+- **C11 vendor SEL parser quality tagging.** `snap.ipmi.bmc_vendor`
+  identifies the BMC vendor (from DMI); each `sel_events_recent[]`
+  entry now carries `parser_quality`: "fleet-tested" for dell / hpe /
+  supermicro, "stub" for lenovo / cisco / openbmc, "unknown"
+  otherwise. The existing keyword-based severity classifier (which
+  has run vendor-agnostic since launch and produces canonical
+  critical/warning/info values) is unchanged; this release adds the
+  honesty surface Dashboard's `ipmi_sel_critical` TUNE consumes to
+  flag stub-parser emissions in evidence. ipmitool mc info-based
+  Manufacturer detection is a follow-up; DMI vendor is the single
+  signal in this release.
+
+- **C13 distro CVE collection.** New `snap.cve` with per-distro paths:
+  Ubuntu Pro via `pro security-status --format=json` (requires
+  `GLASSMKR_UBUNTU_PRO_TOKEN` env var; absence yields silent
+  `available: false`); RHEL family via `dnf updateinfo list
+  --security` text scrape; SUSE family via `zypper list-patches`
+  table. `parser_quality` flags Ubuntu Pro path as fleet-tested
+  (JSON-driven) and the text-scrape paths as stub. Unblocks
+  Dashboard's `kernel_vulnerabilities` REDESIGN from a
+  /sys/devices/system/cpu/vulnerabilities mitigation-status check
+  into an upstream-CVE-driven rule.
+
+- **C18 dmesg structured events.** New `snap.dmesg_events.events[]`
+  parses the last hour of dmesg for three high-signal classes: SCSI
+  sense codes (sense key + device), NVMe controller resets
+  (controller + action), ext4 remount-readonly (device). PCIe AER and
+  XFS classes from the original spec are deferred because format
+  varies materially across kernel 5.x and 6.x — included classes
+  cover the highest-frequency operational signals. Unblocks
+  Dashboard's `disk_io_errors` TUNE, `filesystem_readonly`
+  corroboration, and event-stream enrichment for `lacp_partner_lost`.
+
+### Capability gating
+
+All eight collectors degrade gracefully on hosts where the underlying
+source is absent. Specifically:
+
+- C12: `systemctl show` failure on a unit -> `result: "unknown"` for
+  that unit; other units still ship details.
+- C14: `lvs` binary absent -> `available: false, reason: "lvs not
+  available"`.
+- C15: `ethtool --version` fails -> `available: false`. Per-interface
+  read failures are tolerated; the snapshot ships data for whichever
+  interfaces returned.
+- C16: `/proc/net/softnet_stat` not readable -> `available: false`.
+- C17: NVMe device without `critical_warning` field -> decoded field
+  absent (SATA devices unaffected).
+- C11: BMC vendor unidentifiable from DMI -> `bmc_vendor: "unknown"`
+  and `parser_quality: "unknown"` on each event; the existing
+  vendor-agnostic classifier still runs.
+- C13: missing `pro` / `dnf` / `zypper` CLI -> `available: false`.
+  Ubuntu Pro token unset -> `available: false` with explicit reason
+  (legitimate state on non-Pro hosts).
+- C18: `dmesg` unreadable (CAP_SYSLOG missing or
+  `kernel.dmesg_restrict=1` with non-root) -> `available: false`.
+
+### Deferred from this release
+
+- **C18 PCIe AER + XFS error event parsing.** Original spec listed
+  five event classes; this release ships three. PCIe AER message
+  shape varies across kernel 5.x and 6.x; XFS error patterns vary by
+  mount option. Including them would double the regex test surface
+  without proportional operational value. Future Crucible release
+  picks them up if customer signal warrants.
+- **C11 OpenBMC identification via `ipmitool mc info` Manufacturer
+  Name.** DMI vendor is the single detection signal in this release;
+  OpenBMC ships as DMI vendor "generic" which collapses to
+  `bmc_vendor: "unknown"`. Follow-up adds the mc info probe.
+
 ## [0.11.0] - 2026-05-19
 
 ### Added
