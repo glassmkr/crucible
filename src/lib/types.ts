@@ -52,6 +52,118 @@ export interface Snapshot {
   /** TCP segment / retransmit / listen-queue counters from
    *  /proc/net/snmp + /proc/net/netstat. */
   tcp_stats?: TcpStatsSnapshot;
+
+  // C11-C18 fields (Crucible v0.12.0+, 2026-05-19). All optional;
+  // capability gates in the dashboard's activation PR key off field
+  // presence.
+  /** C14 LVM thin pool metadata. */
+  lvm?: LvmSnapshot;
+  /** C15 ethtool advertised link-mode capture. */
+  ethtool?: EthtoolSnapshot;
+  /** C16 /proc/net/softnet_stat per-CPU drop counters + rate. */
+  softnet?: SoftnetSnapshot;
+  /** C13 distro-CVE collection (Ubuntu Pro / dnf / zypper). */
+  cve?: CveSnapshot;
+  /** C18 dmesg structured event parser. */
+  dmesg_events?: DmesgEventsSnapshot;
+}
+
+// === C14 LVM thin ===
+
+export interface LvmThinPool {
+  lv_name: string;
+  vg_name: string;
+  data_percent: number;
+  metadata_percent: number;
+}
+
+export interface LvmSnapshot {
+  available: boolean;
+  reason?: string;
+  thin_pools: LvmThinPool[];
+}
+
+// === C15 ethtool ===
+
+export interface EthtoolInterface {
+  iface: string;
+  advertised_auto_negotiation: boolean | null;
+  advertised_link_modes: string[];
+}
+
+export interface EthtoolSnapshot {
+  available: boolean;
+  reason?: string;
+  interfaces: EthtoolInterface[];
+}
+
+// === C16 softnet ===
+
+export interface SoftnetSnapshot {
+  available: boolean;
+  reason?: string;
+  total_dropped_cumulative: number;
+  per_cpu_dropped: number[];
+  total_dropped_rate_per_sec: number | null;
+}
+
+// === C13 CVE collection ===
+
+export type CveSeverity = "critical" | "important" | "moderate" | "low" | "unknown";
+export type CveDistro =
+  | "ubuntu"
+  | "rhel"
+  | "fedora"
+  | "rocky"
+  | "alma"
+  | "centos"
+  | "sles"
+  | "opensuse"
+  | "debian"
+  | "unknown";
+
+export interface KernelCve {
+  cve_id: string;
+  severity: CveSeverity;
+  package_name: string;
+  fixed_version?: string;
+}
+
+export interface CveSnapshot {
+  available: boolean;
+  reason?: string;
+  distro: CveDistro;
+  kernel_cves_pending: KernelCve[];
+  total_critical_pending: number;
+  total_important_pending: number;
+  /** "fleet-tested" for Ubuntu Pro JSON / dnf JSON paths; "stub" for
+   *  text-only fallbacks where parsing is best-effort. */
+  parser_quality: "fleet-tested" | "stub";
+}
+
+// === C18 dmesg structured events ===
+
+export type DmesgEventType =
+  | "scsi_sense"
+  | "nvme_reset"
+  | "ext4_remount_readonly";
+
+export interface DmesgStructuredEvent {
+  /** ISO-8601 timestamp (best-effort; dmesg --time-format=iso). */
+  timestamp_iso: string;
+  event_type: DmesgEventType;
+  severity: "critical" | "warning" | "informational";
+  details: Record<string, string | number | boolean>;
+  raw_line: string;
+}
+
+export interface DmesgEventsSnapshot {
+  available: boolean;
+  reason?: string;
+  events: DmesgStructuredEvent[];
+  events_by_type: Record<DmesgEventType, number>;
+  /** Window of dmesg we consume per snapshot (seconds). */
+  window_seconds: number;
 }
 
 // === C1 EDAC ===
@@ -398,6 +510,19 @@ export interface SmartInfo {
   reallocated_sectors?: number;
   pending_sectors?: number;
   power_on_hours?: number;
+  // C17 (2026-05-19) NVMe Critical Warning. Present only on NVMe
+  // devices whose smartctl output included the field.
+  critical_warning_raw?: number;
+  critical_warning_decoded?: {
+    available_spare_low: boolean;
+    temperature_threshold: boolean;
+    reliability_degraded: boolean;
+    read_only: boolean;
+    volatile_memory_backup_failed: boolean;
+    persistent_memory_readonly: boolean;
+  };
+  nvme_available_spare?: number;
+  nvme_available_spare_threshold?: number;
 }
 
 export interface NetworkInfo {
@@ -440,8 +565,27 @@ export interface SelEvent {
   sensor_type: string;
   event: string;
   direction: string;
+  /** Canonical severity assigned by the unified SEL classifier:
+   *  "critical" | "warning" | "info". Pre-C11 only this field existed;
+   *  post-C11 this is the same value but explicitly canonical. */
   severity: string;
+  /** C11 (2026-05-19): vendor-aware parser quality. "fleet-tested"
+   *  for Dell, HPE, Supermicro (we have validated their SEL output
+   *  against real fleet hosts). "stub" for Lenovo, Cisco, OpenBMC
+   *  (first real customer per vendor surfaces parser bugs). "unknown"
+   *  when the BMC vendor couldn't be identified from DMI. */
+  parser_quality?: "fleet-tested" | "stub" | "unknown";
 }
+
+/** Per-vendor SEL parser quality tag from C11 (2026-05-19). */
+export type BmcVendor =
+  | "dell"
+  | "hpe"
+  | "supermicro"
+  | "lenovo"
+  | "cisco"
+  | "openbmc"
+  | "unknown";
 
 export interface FanStatus {
   name: string;
@@ -479,6 +623,12 @@ export type IpmiCapability =
 
 export interface IpmiInfo {
   available: boolean;
+  /** C11 (2026-05-19): which BMC vendor the SEL events came from.
+   *  Derived from DMI vendor + ipmitool mc info; "unknown" when
+   *  identification failed. Dashboard's ipmi_sel_critical TUNE keys
+   *  parser_quality off this. Optional so pre-0.12.0 snapshots
+   *  remain wire-compatible. */
+  bmc_vendor?: BmcVendor;
   /** One-shot startup detection result; helps Dashboard surface "IPMI not
    *  available on this host" with a precise reason. Not present on
    *  pre-detection snapshots (older agent versions). */

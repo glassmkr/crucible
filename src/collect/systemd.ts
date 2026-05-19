@@ -1,14 +1,59 @@
+// systemd state collection.
+//
+// Pre-C12: failed_units + per-unit journal_excerpts.
+// C12 (2026-05-19): per-failed-unit Result + ActiveState + SubState
+// from `systemctl show`. Result is systemd's classifier for *why* a
+// unit failed (oom-kill, watchdog, exit-code, timeout, ...). Dashboard
+// uses it to set per-unit severity and to wire the
+// systemd_service_oom_killed rule + service_flapping rule.
+//
+// Per CC_SPEC_CRUCIBLE_C11_C18_FULL_BUNDLE_2026-05-19.md §1.1.
+
 import { run } from "../lib/exec.js";
+
+export type SystemdUnitResult =
+  | "success"
+  | "protocol"
+  | "timeout"
+  | "exit-code"
+  | "signal"
+  | "core-dump"
+  | "watchdog"
+  | "start-limit-hit"
+  | "resources"
+  | "oom-kill"
+  | "unknown";
+
+export interface SystemdFailedUnit {
+  name: string;
+  /** systemd's failure-cause classifier from `systemctl show -p Result`.
+   *  Unknown when the property is empty or the show command fails. */
+  result: SystemdUnitResult;
+  /** ActiveState from systemctl show. Typically "failed" when this unit
+   *  is in this list, but kept for cross-checks. */
+  active_state: string;
+  /** SubState (more granular than ActiveState; e.g. "auto-restart"). */
+  sub_state: string;
+  /** NRestarts from systemctl show; cumulative since last successful
+   *  start. Crude flapping signal — service_flapping rule's primary
+   *  history source remains cross-snapshot, but this is the per-snap
+   *  number a single emission carries. */
+  n_restarts: number;
+}
 
 export interface SystemdData {
   failed_units: string[];
   failed_count: number;
   /** Last 5 journal lines per failed unit. Populated only when units
    *  are present so the happy path stays cheap. Keys match
-   *  `failed_units`. Codex experiment 2026-05-12 P2 — closes the
-   *  "service failed → what went wrong" seam without forcing the
+   *  `failed_units`. Codex experiment 2026-05-12 P2; closes the
+   *  "service failed -> what went wrong" seam without forcing the
    *  customer to SSH to the box. */
   journal_excerpts?: Record<string, string[]>;
+  /** C12 structured per-unit failure metadata. Keys match
+   *  `failed_units`; absent on pre-0.12.0 agents. Dashboard's TUNE
+   *  + new rules consume `failed_unit_details[unit].result` etc. */
+  failed_unit_details?: Record<string, SystemdFailedUnit>;
 }
 
 // Units commonly in failed state by design or misconfiguration
@@ -17,6 +62,20 @@ const DEFAULT_EXCLUDES = [
 ];
 
 const JOURNAL_LINES_PER_UNIT = 5;
+
+const RESULT_VALUES: ReadonlySet<SystemdUnitResult> = new Set([
+  "success",
+  "protocol",
+  "timeout",
+  "exit-code",
+  "signal",
+  "core-dump",
+  "watchdog",
+  "start-limit-hit",
+  "resources",
+  "oom-kill",
+  "unknown",
+]);
 
 export async function collectSystemd(extraExcludes: string[] = []): Promise<SystemdData> {
   const output = await run("systemctl", [
@@ -37,20 +96,23 @@ export async function collectSystemd(extraExcludes: string[] = []): Promise<Syst
     }
   }
 
-  // For each failed unit, collect the last N journal lines. Skipped
-  // when there are no failed units (no journal calls on the happy
-  // path). Per-unit failure is tolerated (an unreadable journal on
-  // one unit doesn't drop the whole excerpt block) — we surface an
-  // empty array for that unit so the receiver knows it tried.
+  // For each failed unit, collect the last N journal lines + structured
+  // properties (C12). Per-unit failure is tolerated (an unreadable
+  // journal or a missing property doesn't drop the entire snapshot)
+  // — we surface an empty journal array or `unknown` result for the
+  // affected unit so the receiver knows we tried.
   const journal_excerpts: Record<string, string[]> = {};
+  const failed_unit_details: Record<string, SystemdFailedUnit> = {};
   for (const unit of units) {
     journal_excerpts[unit] = await readJournalExcerpt(unit);
+    failed_unit_details[unit] = await readUnitDetails(unit);
   }
 
   return {
     failed_units: units,
     failed_count: units.length,
     ...(units.length > 0 ? { journal_excerpts } : {}),
+    ...(units.length > 0 ? { failed_unit_details } : {}),
   };
 }
 
@@ -72,3 +134,73 @@ async function readJournalExcerpt(unit: string): Promise<string[]> {
     .filter((l) => l.length > 0)
     .slice(-JOURNAL_LINES_PER_UNIT);
 }
+
+/**
+ * `systemctl show -p Property,Property,...` emits `Key=Value` lines.
+ * One call per unit; lightweight. Best-effort; on parse failure
+ * returns a record with unknown/empty fields so downstream code can
+ * still rely on key presence.
+ */
+async function readUnitDetails(unit: string): Promise<SystemdFailedUnit> {
+  const fallback: SystemdFailedUnit = {
+    name: unit,
+    result: "unknown",
+    active_state: "",
+    sub_state: "",
+    n_restarts: 0,
+  };
+  const out = await run("systemctl", [
+    "show", unit,
+    "--no-pager",
+    "--property=Result,ActiveState,SubState,NRestarts",
+  ]);
+  if (!out) return fallback;
+
+  const props: Record<string, string> = {};
+  for (const line of out.split("\n")) {
+    const eq = line.indexOf("=");
+    if (eq === -1) continue;
+    props[line.slice(0, eq).trim()] = line.slice(eq + 1).trim();
+  }
+
+  const rawResult = props.Result ?? "";
+  const result: SystemdUnitResult = (RESULT_VALUES as Set<string>).has(rawResult)
+    ? (rawResult as SystemdUnitResult)
+    : rawResult.length > 0
+      ? "unknown"
+      : "unknown";
+
+  const nRestarts = Number.parseInt(props.NRestarts ?? "0", 10);
+
+  return {
+    name: unit,
+    result,
+    active_state: props.ActiveState ?? "",
+    sub_state: props.SubState ?? "",
+    n_restarts: Number.isFinite(nRestarts) ? nRestarts : 0,
+  };
+}
+
+export const __test_only = {
+  RESULT_VALUES,
+  parseUnitDetailsOutput: (unit: string, out: string): SystemdFailedUnit => {
+    const props: Record<string, string> = {};
+    for (const line of out.split("\n")) {
+      const eq = line.indexOf("=");
+      if (eq === -1) continue;
+      props[line.slice(0, eq).trim()] = line.slice(eq + 1).trim();
+    }
+    const rawResult = props.Result ?? "";
+    const result: SystemdUnitResult = (RESULT_VALUES as Set<string>).has(rawResult)
+      ? (rawResult as SystemdUnitResult)
+      : "unknown";
+    const nRestarts = Number.parseInt(props.NRestarts ?? "0", 10);
+    return {
+      name: unit,
+      result,
+      active_state: props.ActiveState ?? "",
+      sub_state: props.SubState ?? "",
+      n_restarts: Number.isFinite(nRestarts) ? nRestarts : 0,
+    };
+  },
+};

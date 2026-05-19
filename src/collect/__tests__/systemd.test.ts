@@ -37,15 +37,22 @@ describe("collectSystemd", () => {
       "fail2ban.service          loaded failed failed Fail2Ban Service\n" +
       "nginx.service             loaded failed failed nginx web server\n"
     );
-    // journalctl output per unit (order matches `failed_units` iteration)
+    // Per-unit iteration: journalctl then systemctl-show, twice.
+    // C12 (2026-05-19) added the systemctl-show calls.
     runMock.mockResolvedValueOnce(
       "Have not found any log file for sshd jail\n" +
       "Async configuration of server failed\n" +
       "fail2ban.service: Main process exited"
     );
     runMock.mockResolvedValueOnce(
+      "Result=exit-code\nActiveState=failed\nSubState=failed\nNRestarts=2"
+    );
+    runMock.mockResolvedValueOnce(
       "nginx: [emerg] bind() to 0.0.0.0:80 failed\n" +
       "nginx.service: Failed with result 'exit-code'"
+    );
+    runMock.mockResolvedValueOnce(
+      "Result=exit-code\nActiveState=failed\nSubState=failed\nNRestarts=1"
     );
 
     const out = await collectSystemd();
@@ -54,6 +61,10 @@ describe("collectSystemd", () => {
     expect(out.journal_excerpts).toBeDefined();
     expect(out.journal_excerpts!["fail2ban.service"][0]).toMatch(/sshd jail/);
     expect(out.journal_excerpts!["nginx.service"][0]).toMatch(/bind/);
+    // C12 details present.
+    expect(out.failed_unit_details).toBeDefined();
+    expect(out.failed_unit_details!["fail2ban.service"].result).toBe("exit-code");
+    expect(out.failed_unit_details!["fail2ban.service"].n_restarts).toBe(2);
   });
 
   it("empty journal output yields empty array, not missing field, for that unit", async () => {
@@ -61,6 +72,7 @@ describe("collectSystemd", () => {
       "some-unit.service           loaded failed failed example\n"
     );
     runMock.mockResolvedValueOnce(""); // journalctl returned nothing
+    runMock.mockResolvedValueOnce("Result=unknown\nActiveState=failed\nSubState=failed\nNRestarts=0");
     const out = await collectSystemd();
     expect(out.journal_excerpts!["some-unit.service"]).toEqual([]);
   });
@@ -71,6 +83,7 @@ describe("collectSystemd", () => {
       "real.service                          loaded failed failed real\n"
     );
     runMock.mockResolvedValueOnce("real journal line");
+    runMock.mockResolvedValueOnce("Result=exit-code\nActiveState=failed\nSubState=failed\nNRestarts=0");
     const out = await collectSystemd();
     expect(out.failed_units).toEqual(["real.service"]);
   });
