@@ -7,6 +7,53 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 Pre-1.0 convention: minor bumps may include breaking changes; we call them
 out under `### Breaking` so downstream consumers can audit.
 
+## [0.11.0] - 2026-05-19
+
+### Added
+
+- **C7 per-process file descriptor scan.** New `snap.process_fd` field
+  reports the top 50 processes by open-FD count alongside each
+  process's `RLIMIT_NOFILE` soft and hard limits and a percent-of-soft
+  ratio. Unblocks Dashboard's per-process `fd_exhaustion` path
+  (system-wide path stays). Two-pass strategy keeps overhead bounded
+  on busy hosts: cheap `readdir` over `/proc/<pid>/fd/` to find the
+  top consumers, then `/proc/<pid>/limits` read for each.
+
+- **C8 LACP partner state.** New `snap.bonding` field with per-bond
+  mode, LACP rate, slave list with MII status + link-failure counts,
+  partner LACP port-state bitfield, derived `partner_lacp_synchronized`
+  flag (synchronization bit set in the port state), and
+  `active_aggregator` with `number_of_ports` vs configured. Unblocks
+  Dashboard's `lacp_partner_lost` rule (an MII-up bond with a dead
+  partner is a silent failure that `bond_slave_down`'s MII check
+  misses).
+
+- **C9 conntrack insert_failed rate.** `snap.conntrack` gains four
+  optional fields: `insert_failed_total`, `drop_total`,
+  `insert_failed_rate_per_sec`, `drop_rate_per_sec`. Cumulative
+  counters come from `/proc/net/stat/nf_conntrack` (summed across
+  CPUs); rates computed agent-side using the vmstat (C3) module-level
+  previous-counter pattern. First snapshot ships rates as `null`.
+  Counter wraparound / host reboot resets the baseline.
+
+- **C10 TCP retransmit + listen-queue stats.** New `snap.tcp_stats`
+  field. From `/proc/net/snmp` Tcp: `out_segs_total`, `retrans_segs_total`,
+  `in_segs_total` plus agent-computed `retrans_ratio` (retransmits per
+  segment sent) and `retrans_rate_per_sec`. From `/proc/net/netstat`
+  TcpExt: `listen_overflows_total`, `listen_drops_total` and their
+  rates. Unblocks Dashboard's `tcp_retrans_high` and `listen_overflow`
+  rules (the latter rounding out the `accept_backlog_or_syn_flood`
+  classifier's subordinate set). Same first-snapshot-null pattern as
+  C3 / C9.
+
+### Capability gating
+
+All four collectors degrade gracefully on hosts where the underlying
+`/proc` surface is absent or the relevant kernel module is not
+loaded. Each collector reports either an `available: false` payload
+or an absent snapshot field; no errors, no log noise. Dashboard's
+activation PR carries matching capability gates.
+
 ## [0.10.0] - 2026-05-14
 
 ### Breaking
