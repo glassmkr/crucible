@@ -85,6 +85,11 @@ import { sendEmail } from "./notify/email.js";
 import { pushToDashboard, initDashboardAgent } from "./push/dashboard.js";
 import { collectSecurity, type SecurityData } from "./collect/security.js";
 import { collectZfs } from "./collect/zfs.js";
+import { collectEdac } from "./collect/edac.js";
+import { collectPsi } from "./collect/psi.js";
+import { collectVmstat } from "./collect/vmstat.js";
+import { collectRebootEvidence } from "./collect/reboot-evidence.js";
+import { collectHardwareRaid } from "./collect/hardware-raid.js";
 import { collectIoErrors } from "./collect/io-errors.js";
 import { collectIoLatency } from "./collect/io-latency.js";
 import { collectConntrack } from "./collect/conntrack.js";
@@ -250,6 +255,16 @@ async function collect() {
   try { snapshot.systemd = await collectSystemd(); } catch { /* skip on error */ }
   try { snapshot.ntp = await collectNtp(); } catch { /* skip on error */ }
   try { snapshot.file_descriptors = collectFileDescriptors(); } catch { /* skip on error */ }
+
+  // C1-C6 collectors (v0.10.4, 2026-05-19). Each capability-gates by
+  // detecting whether the underlying kernel/CLI surface exists; absent
+  // → field omitted → dashboard rules degrade gracefully per the
+  // activation PR's capability gates.
+  try { snapshot.ecc_edac = collectEdac() ?? undefined; } catch { /* skip on error */ }
+  try { snapshot.psi = collectPsi() ?? undefined; } catch { /* skip on error */ }
+  try { snapshot.vmstat = collectVmstat() ?? undefined; } catch { /* skip on error */ }
+  try { snapshot.reboot_evidence = await collectRebootEvidence(); } catch { /* skip on error */ }
+  try { snapshot.hardware_raid = await collectHardwareRaid() ?? undefined; } catch { /* skip on error */ }
 
   // Update Prometheus metrics
   updateMetrics(snapshot);
