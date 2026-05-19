@@ -41,6 +41,17 @@ export interface Snapshot {
   reboot_evidence?: RebootEvidence;
   /** Hardware RAID controllers scraped via vendor CLIs. */
   hardware_raid?: HardwareRaidSnapshot;
+
+  // C7-C10 fields added 2026-05-19 (CC_SPEC_CRUCIBLE_C7_C10_NETWORK_
+  // PROCESS_COLLECTION). Each is optional; the dashboard's activation
+  // PR carries capability gates that key off field presence.
+  /** Per-process FD scan (top-50 consumers + RLIMIT_NOFILE). */
+  process_fd?: ProcessFdSnapshot;
+  /** LACP / bonding driver state from /proc/net/bonding. */
+  bonding?: BondingSnapshot;
+  /** TCP segment / retransmit / listen-queue counters from
+   *  /proc/net/snmp + /proc/net/netstat. */
+  tcp_stats?: TcpStatsSnapshot;
 }
 
 // === C1 EDAC ===
@@ -141,6 +152,106 @@ export interface ConntrackData {
   count: number;
   max: number;
   percent: number;
+  /** C9 (2026-05-19): cumulative insert_failed counter (sum across CPUs)
+   *  from /proc/net/stat/nf_conntrack. Optional because pre-0.11.0
+   *  agents omit it. */
+  insert_failed_total?: number;
+  /** C9: cumulative drop counter from /proc/net/stat/nf_conntrack. */
+  drop_total?: number;
+  /** Per-second insert_failed rate over the most recent snapshot
+   *  interval. Null on first snapshot, on counter reset, or when the
+   *  stat file is unavailable. */
+  insert_failed_rate_per_sec?: number | null;
+  drop_rate_per_sec?: number | null;
+}
+
+// === C7 process FD ===
+
+export interface ProcessFdEntry {
+  pid: number;
+  comm: string;
+  fd_count: number;
+  rlimit_nofile_soft: number;
+  rlimit_nofile_hard: number;
+  /** fd_count / rlimit_nofile_soft * 100, rounded to one decimal. Zero
+   *  when soft limit is unlimited (no useful proximity signal). */
+  percent_of_soft_limit: number;
+}
+
+export interface ProcessFdSnapshot {
+  available: boolean;
+  reason?: string;
+  /** Top 50 processes by fd_count. */
+  top_consumers: ProcessFdEntry[];
+  /** Number of numeric /proc/<pid> entries we considered. */
+  total_processes_scanned: number;
+  /** Aggregate signal: max percent_of_soft_limit across top_consumers.
+   *  Null when top_consumers is empty. */
+  highest_percent_of_limit: number | null;
+}
+
+// === C8 bonding / LACP ===
+
+export interface BondSlave {
+  name: string;
+  mii_status: string;
+  link_failure_count: number;
+  permanent_hw_addr: string;
+  aggregator_id: number | null;
+  partner_churn_state: string | null;
+  partner_lacp_port_state: number | null;
+  /** Convenience flag derived from the LACP port-state bitfield's
+   *  synchronization bit (bit 3, 0x08). Null when the bond is not
+   *  LACP or partner state was not captured. */
+  partner_lacp_synchronized: boolean | null;
+}
+
+export interface BondAggregator {
+  id: number;
+  number_of_ports: number;
+  actor_key: number | null;
+  partner_key: number | null;
+  partner_mac_address: string | null;
+}
+
+export interface Bond {
+  name: string;
+  mode: string;
+  is_lacp: boolean;
+  lacp_rate: string | null;
+  slaves: BondSlave[];
+  /** Equal to slaves.length; surfaces the "configured" port count
+   *  alongside active_aggregator.number_of_ports so the dashboard can
+   *  compute a shortfall. */
+  configured_port_count: number;
+  active_aggregator: BondAggregator | null;
+}
+
+export interface BondingSnapshot {
+  available: boolean;
+  reason?: string;
+  bonds: Bond[];
+}
+
+// === C10 TCP stats ===
+
+export interface TcpStatsSnapshot {
+  available: boolean;
+  reason?: string;
+  out_segs_total?: number;
+  retrans_segs_total?: number;
+  in_segs_total?: number;
+  /** Retransmits divided by segments sent over the most recent
+   *  interval. Range 0.0 - 1.0. Null on first snapshot or counter
+   *  reset. Zero when no outbound traffic in the interval. */
+  retrans_ratio?: number | null;
+  retrans_rate_per_sec?: number | null;
+  /** Optional listen-queue counters from /proc/net/netstat TcpExt.
+   *  Absent when /proc/net/netstat is not readable. */
+  listen_overflows_total?: number;
+  listen_drops_total?: number;
+  listen_overflows_rate_per_sec?: number | null;
+  listen_drops_rate_per_sec?: number | null;
 }
 
 export interface SystemdData {

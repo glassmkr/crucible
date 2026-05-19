@@ -1,3 +1,12 @@
+// Conntrack collection.
+//
+// Pre-C9: count + max + percent from /proc/sys/net/netfilter/nf_conntrack_*.
+// C9 (2026-05-19): adds insert_failed_total + drop_total cumulative counters
+// from /proc/net/stat/nf_conntrack plus agent-computed per-second rates,
+// following the vmstat (C3) rate-calculation pattern.
+//
+// Per CC_SPEC_CRUCIBLE_C7_C10_NETWORK_PROCESS_COLLECTION_2026-05-19.md §3.
+
 import { readProcFile } from "../lib/parse.js";
 
 export interface ConntrackData {
@@ -5,7 +14,23 @@ export interface ConntrackData {
   count: number;
   max: number;
   percent: number;
+  // C9 additions. Optional so older agents (and tests that don't care)
+  // stay compatible. All cumulative-since-boot unless noted.
+  insert_failed_total?: number;
+  drop_total?: number;
+  // Per-second rates over the most recent interval. Null on first
+  // snapshot (no baseline) and after counter reset / wraparound.
+  insert_failed_rate_per_sec?: number | null;
+  drop_rate_per_sec?: number | null;
 }
+
+interface CounterSnapshot {
+  insert_failed: number;
+  drop: number;
+  capturedAtMs: number;
+}
+
+let previous: CounterSnapshot | null = null;
 
 export function collectConntrack(): ConntrackData {
   const countRaw = readProcFile("/proc/sys/net/netfilter/nf_conntrack_count");
@@ -23,5 +48,76 @@ export function collectConntrack(): ConntrackData {
   }
 
   const percent = Math.round(((count / max) * 100) * 10) / 10;
-  return { available: true, count, max, percent };
+
+  // Try the C9 enrichment. If /proc/net/stat/nf_conntrack isn't readable
+  // we still return the original ConntrackData shape (older kernels
+  // expose count/max without per-CPU stats).
+  const stat = parseConntrackStat();
+  if (!stat) {
+    return { available: true, count, max, percent };
+  }
+
+  const nowMs = Date.now();
+  let insertRate: number | null = null;
+  let dropRate: number | null = null;
+  if (previous) {
+    const elapsedSec = (nowMs - previous.capturedAtMs) / 1000;
+    if (elapsedSec > 0) {
+      const insertDelta = stat.insert_failed - previous.insert_failed;
+      const dropDelta = stat.drop - previous.drop;
+      // Negative delta = counter reset (host reboot, container restart,
+      // or rollover). Treat as a fresh baseline; rates null this tick.
+      if (insertDelta >= 0) insertRate = insertDelta / elapsedSec;
+      if (dropDelta >= 0) dropRate = dropDelta / elapsedSec;
+    }
+  }
+  previous = { ...stat, capturedAtMs: nowMs };
+
+  return {
+    available: true,
+    count,
+    max,
+    percent,
+    insert_failed_total: stat.insert_failed,
+    drop_total: stat.drop,
+    insert_failed_rate_per_sec: insertRate,
+    drop_rate_per_sec: dropRate,
+  };
 }
+
+/**
+ * Parse /proc/net/stat/nf_conntrack. Format: tab/space-separated header
+ * + one row per CPU with hex values. Returns sums across all CPUs for
+ * insert_failed and drop columns. Null on read failure or unexpected
+ * format.
+ */
+function parseConntrackStat(): { insert_failed: number; drop: number } | null {
+  const raw = readProcFile("/proc/net/stat/nf_conntrack");
+  if (!raw) return null;
+  const lines = raw.split("\n").filter((l) => l.trim().length > 0);
+  if (lines.length < 2) return null;
+
+  const header = lines[0].trim().split(/\s+/);
+  const insertFailedIdx = header.indexOf("insert_failed");
+  const dropIdx = header.indexOf("drop");
+  if (insertFailedIdx === -1 || dropIdx === -1) return null;
+
+  let insertFailedTotal = 0;
+  let dropTotal = 0;
+  for (let i = 1; i < lines.length; i++) {
+    const parts = lines[i].trim().split(/\s+/);
+    if (parts.length <= Math.max(insertFailedIdx, dropIdx)) continue;
+    const insertFailed = parseInt(parts[insertFailedIdx], 16);
+    const drop = parseInt(parts[dropIdx], 16);
+    if (Number.isFinite(insertFailed)) insertFailedTotal += insertFailed;
+    if (Number.isFinite(drop)) dropTotal += drop;
+  }
+  return { insert_failed: insertFailedTotal, drop: dropTotal };
+}
+
+export const __test_only = {
+  parseConntrackStat,
+  resetForTests: () => {
+    previous = null;
+  },
+};

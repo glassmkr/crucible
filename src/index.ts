@@ -95,7 +95,9 @@ import { collectIoLatency } from "./collect/io-latency.js";
 import { collectConntrack } from "./collect/conntrack.js";
 import { collectSystemd } from "./collect/systemd.js";
 import { collectNtp } from "./collect/ntp.js";
-import { collectFileDescriptors } from "./collect/fd.js";
+import { collectFileDescriptors, collectProcessFd } from "./collect/fd.js";
+import { collectBonding } from "./collect/bonding.js";
+import { collectTcpStats } from "./collect/tcp-stats.js";
 import { collectThermal } from "./collect/thermal.js";
 import { collectDmi, formatVendorLine } from "./collect/dmi.js";
 import { detectIpmiCapability, formatCapabilityLine } from "./lib/capability.js";
@@ -265,6 +267,15 @@ async function collect() {
   try { snapshot.vmstat = collectVmstat() ?? undefined; } catch { /* skip on error */ }
   try { snapshot.reboot_evidence = await collectRebootEvidence(); } catch { /* skip on error */ }
   try { snapshot.hardware_raid = await collectHardwareRaid() ?? undefined; } catch { /* skip on error */ }
+
+  // C7-C10 collectors (v0.11.0, 2026-05-19). Capability gating mirrors
+  // C1-C6: each emits an `available: false` payload (or absent field)
+  // when its underlying /proc surface is missing. Dashboard rules
+  // degrade gracefully on older agents and hosts that lack the
+  // relevant kernel modules.
+  try { snapshot.process_fd = collectProcessFd(); } catch { /* skip on error */ }
+  try { snapshot.bonding = collectBonding(); } catch { /* skip on error */ }
+  try { snapshot.tcp_stats = collectTcpStats(); } catch { /* skip on error */ }
 
   // Update Prometheus metrics
   updateMetrics(snapshot);
