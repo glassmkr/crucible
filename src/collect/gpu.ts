@@ -172,7 +172,17 @@ const NVIDIA_SMI_CSV_FIELDS = [
   "ecc.mode.current",
   "ecc.errors.corrected.volatile.total", "ecc.errors.corrected.aggregate.total",
   "ecc.errors.uncorrected.volatile.total", "ecc.errors.uncorrected.aggregate.total",
-  "retired_pages.single_bit_ecc.count", "retired_pages.double_bit_ecc.count",
+  // NVIDIA naming asymmetry: the single-bit field is
+  // `retired_pages.single_bit_ecc.count` (with _ecc) but the double-bit
+  // is `retired_pages.double_bit.count` (no _ecc). Confirmed against
+  // `nvidia-smi --help-query-gpu` on driver 550.163.01. v0.13.0 shipped
+  // with `retired_pages.double_bit_ecc.count` (extrapolated from the
+  // single-bit name); nvidia-smi rejects the unknown field, prints the
+  // error to stderr, and exits 0 with empty stdout — Crucible then
+  // reports "no GPU rows" and marks tier1 unavailable even though the
+  // host has working nvidia-smi. Discovered 2026-05-20 on the val-L4
+  // validation host.
+  "retired_pages.single_bit_ecc.count", "retired_pages.double_bit.count",
   "retired_pages.pending",
   "fan.speed",
 ] as const;

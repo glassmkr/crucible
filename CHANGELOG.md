@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 Pre-1.0 convention: minor bumps may include breaking changes; we call them
 out under `### Breaking` so downstream consumers can audit.
 
+## [0.13.1] - 2026-05-20
+
+### Fixed
+
+- **GPU Tier 1 collector field-name typo.** v0.13.0 queried nvidia-smi
+  with `--query-gpu=...,retired_pages.double_bit_ecc.count,...`; the
+  correct field name is `retired_pages.double_bit.count` (no `_ecc`
+  suffix). NVIDIA's naming is asymmetric: single-bit is
+  `single_bit_ecc.count`, double-bit drops the `_ecc`. On driver 550+,
+  nvidia-smi prints the error to stderr and exits 0 with empty stdout;
+  Crucible then reported `tier1.available=false, reason="nvidia-smi
+  returned no GPU rows"` even on hosts with working drivers. Confirmed
+  on the val-L4 / val-RTXA4000 / val-A16 validation hosts; live patch
+  was applied via sed in-place, this release replaces the patch with
+  the proper fix in source.
+
 ## [0.13.0] - 2026-05-20
 
 GPU/fabric telemetry collection ships as a new category. Three-tier
