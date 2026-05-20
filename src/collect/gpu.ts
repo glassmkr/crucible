@@ -300,24 +300,35 @@ async function enrichThrottleReasons(gpus: Gpu[]): Promise<void> {
   const gpuBlocks = xmlOut.split(/<gpu /).slice(1); // skip the header
   for (let i = 0; i < gpuBlocks.length && i < gpus.length; i++) {
     const block = gpuBlocks[i];
-    const reasonsBlock = block.match(/<clocks_throttle_reasons>([\s\S]*?)<\/clocks_throttle_reasons>/);
+    // Driver 535-: <clocks_throttle_reasons>; driver 550+: <clocks_event_reasons>.
+    // Per-element tags follow the same rename. Match either, then probe each
+    // reason key with both naming prefixes so we work across the rename
+    // boundary. Discovered 2026-05-20 on val-L4 (driver 550.163.01): power-cap
+    // throttling didn't trigger gpu_power_cap_throttling because the
+    // performance_state_reasons array stayed empty.
+    const reasonsBlock =
+      block.match(/<clocks_event_reasons>([\s\S]*?)<\/clocks_event_reasons>/) ||
+      block.match(/<clocks_throttle_reasons>([\s\S]*?)<\/clocks_throttle_reasons>/);
     if (!reasonsBlock) continue;
     const reasons: string[] = [];
-    for (const [key, label] of [
-      ["clocks_throttle_reason_gpu_idle", "gpu_idle"],
-      ["clocks_throttle_reason_applications_clocks_setting", "applications_clocks_setting"],
-      ["clocks_throttle_reason_sw_power_cap", "sw_power_cap"],
-      ["clocks_throttle_reason_hw_slowdown", "hw_slowdown"],
-      ["clocks_throttle_reason_hw_thermal_slowdown", "hw_thermal_slowdown"],
-      ["clocks_throttle_reason_hw_power_brake_slowdown", "hw_power_brake"],
-      ["clocks_throttle_reason_sw_thermal_slowdown", "sw_thermal_slowdown"],
-      ["clocks_throttle_reason_sync_boost", "sync_boost"],
-      ["clocks_throttle_reason_display_clock_setting", "display_clock_setting"],
+    for (const [suffix, label] of [
+      ["gpu_idle", "gpu_idle"],
+      ["applications_clocks_setting", "applications_clocks_setting"],
+      ["sw_power_cap", "sw_power_cap"],
+      ["hw_slowdown", "hw_slowdown"],
+      ["hw_thermal_slowdown", "hw_thermal_slowdown"],
+      ["hw_power_brake_slowdown", "hw_power_brake"],
+      ["sw_thermal_slowdown", "sw_thermal_slowdown"],
+      ["sync_boost", "sync_boost"],
+      ["display_clock_setting", "display_clock_setting"],
+      ["display_clocks_setting", "display_clock_setting"], // driver-550 plural
     ] as const) {
-      const re = new RegExp(`<${key}>([^<]+)</${key}>`);
+      const re = new RegExp(
+        `<clocks_(?:event|throttle)_reason_${suffix}>([^<]+)</clocks_(?:event|throttle)_reason_${suffix}>`,
+      );
       const m = reasonsBlock[1].match(re);
       if (m && /^(active|true)/i.test(m[1].trim())) {
-        reasons.push(label);
+        if (!reasons.includes(label)) reasons.push(label);
       }
     }
     gpus[i].performance_state_reasons = reasons;

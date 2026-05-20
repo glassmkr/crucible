@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 Pre-1.0 convention: minor bumps may include breaking changes; we call them
 out under `### Breaking` so downstream consumers can audit.
 
+## [0.13.2] - 2026-05-21
+
+### Fixed
+
+- **GPU throttle-reasons collector silently no-ops on driver 550+.**
+  `enrichThrottleReasons()` matched the old `<clocks_throttle_reasons>`
+  XML block emitted by driver 535 and earlier. Driver 550 renamed the
+  block to `<clocks_event_reasons>` and the per-element tags from
+  `clocks_throttle_reason_*` to `clocks_event_reason_*`. On driver
+  550-equipped hosts, Crucible's `performance_state_reasons` array
+  stayed empty even with sw_power_cap active, which meant the
+  dashboard's `gpu_power_cap_throttling` and `gpu_thermal_critical`
+  rules could never fire. The matcher now accepts either prefix and
+  also handles the driver-550 plural `display_clocks_setting` tag.
+  Discovered 2026-05-20 on glassmkr-gpu-1 (NVIDIA L4, driver 550.163.01)
+  when a power-cap test failed to surface the alert.
+
 ## [0.13.1] - 2026-05-20
 
 ### Fixed
