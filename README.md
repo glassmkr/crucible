@@ -153,7 +153,7 @@ dashboard:
   api_key: "gmk_cru_live_..."
 ```
 
-The `api_key` value itself is unchanged — only the parent key
+The `api_key` value itself is unchanged; only the parent key
 (`forge:` → `dashboard:`) and the endpoint hostname need updating.
 After the edit, restart the service:
 
@@ -265,7 +265,7 @@ this detection automatically; the manual flow above is just the equivalent.
 | Reboot evidence | pstore / kdump / wtmp; expected-vs-unexpected reboot classification |
 
 <!-- Canonical rule count: 61 across 9 categories. -->
-Dashboard evaluates 61 alert rules server-side across 9 categories (storage, zfs, filesystem, memory & CPU, network, hardware/BMC, time & services, security & patching, GPU), with priorities P1 Urgent through P4 Low. 20 rules ship with deep FIX content (copy-pasteable remediation + verdict prior + rollback notes); 30+ are verified end-to-end on real hardware. Full list: [app.glassmkr.com/docs/alerts](https://app.glassmkr.com/docs/alerts).
+Dashboard evaluates 61 alert rules server-side across 9 categories (storage, zfs, filesystem, memory & CPU, network, hardware/BMC, time & services, security & patching, GPU), with priorities P1 Urgent through P4 Low. 20 rules ship with deep FIX content (copy-pasteable remediation + verdict prior + rollback notes); 30+ are verified end-to-end on real hardware. Full list: [glassmkr.com/docs/rules](https://glassmkr.com/docs/rules).
 
 ## Requirements
 
@@ -276,11 +276,11 @@ Dashboard evaluates 61 alert rules server-side across 9 categories (storage, zfs
 
 ## Documentation
 
-- [Getting Started](https://app.glassmkr.com/docs/getting-started)
-- [Configuration Reference](https://app.glassmkr.com/docs/configuration)
-- [Alert Rules (61)](https://app.glassmkr.com/docs/rules)
-- [Troubleshooting](https://app.glassmkr.com/docs/troubleshooting)
-- [API Reference](https://app.glassmkr.com/docs/api)
+- [Getting Started](https://glassmkr.com/docs/getting-started)
+- [Configuration Reference](https://glassmkr.com/docs/configuration)
+- [Alert Rules (61)](https://glassmkr.com/docs/rules)
+- [Troubleshooting](https://glassmkr.com/docs/troubleshooting)
+- [API Reference](https://glassmkr.com/docs/api)
 
 ## License
 
