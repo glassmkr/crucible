@@ -7,6 +7,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 Pre-1.0 convention: minor bumps may include breaking changes; we call them
 out under `### Breaking` so downstream consumers can audit.
 
+## [0.13.3] - 2026-05-21
+
+### Fixed
+
+- **ZFS parser missed SLOG vdevs on ZFS 2.2+ output.** `parseZpoolStatus()`
+  matched section headers via `/^logs\s*$/` which expected `logs` at the
+  start of a line. ZFS 2.2 emits the section header tab-prefixed with a
+  trailing tab (`"\tlogs\t\n"`). The mismatch routed every SLOG vdev
+  into `pool.vdevs[]` with class `stripe` instead of `pool.slog_vdevs[]`.
+  Dashboard rule `zfs_slog_faulted` could therefore never fire on
+  modern hosts. Matcher now accepts either form; same fix applied to
+  `cache` and `spares` section headers. Verified on val-mz62hd
+  (AlmaLinux 9.6, ZFS 2.2.9).
+
+- **ZFS parser missed never-scrubbed state on fresh pools.** ZFS 2.2+
+  omits the `scan:` line entirely on a freshly-created pool that has
+  never been scrubbed (older versions emitted `scan: none requested`).
+  The old parser only matched the explicit phrase and left
+  `scrub_never_run` unset, so the dashboard's `zfs_scrub_errors` rule
+  could never fire the "you should schedule a scrub" branch on fresh
+  pools. The parser now also flags `scrub_never_run` when it reaches
+  the `errors:` end-of-pool marker without having seen any `scan:`
+  line.
+
+- Both issues filed in `CC_OPERATIONAL_BACKLOG_2026-05-21.md` and
+  surfaced during the chapter closure plan's Session A.1.
+
 ## [0.13.2] - 2026-05-21
 
 ### Fixed
