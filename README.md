@@ -14,14 +14,18 @@ Open source. MIT licensed. Built by [Glassmkr](https://glassmkr.com). See also t
 
 ## Screenshots
 
-![Dashboard alerts with fix commands](https://glassmkr.com/screenshots/alerts.png)
-*Alerts grouped by server, with AI-generated fix commands for each rule.*
+![Dashboard alert with copy-pasteable fix commands](https://glassmkr.com/screenshots/alerts.png)
+*A P1 alert showing the rule trigger, evidence, and the exact remediation
+commands. Each rule ships pre-written fix content; the agent does not write
+to your server.*
 
-![Storage, SMART health, and network bonds](https://glassmkr.com/screenshots/hardware.png)
-*Per-disk SMART status, storage capacity, and network interface bonding.*
+![Storage and SMART drive health](https://glassmkr.com/screenshots/hardware.png)
+*Per-mount capacity and per-disk SMART status. Drives are checked against
+SMART attributes, NVMe Critical Warning bits, and ZFS pool state.*
 
-![Security posture and server overview](https://glassmkr.com/screenshots/overview.png)
-*Security posture, server overview, and active alerts.*
+![Server fleet overview](https://glassmkr.com/screenshots/overview.png)
+*Fleet view with per-server status, distro, IP, and last-seen timestamp.
+Alerted servers surface a counter at a glance.*
 
 ## Install
 
