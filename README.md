@@ -3,14 +3,14 @@
 [![MIT License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![npm version](https://img.shields.io/npm/v/@glassmkr/crucible.svg)](https://www.npmjs.com/package/@glassmkr/crucible)
 
-<!-- Canonical rule count: see RULES_COUNT.md in the Glassmkr monorepo. -->
-Lightweight bare metal server monitoring agent. Collects hardware and OS health every 5 minutes and pushes snapshots to the [Glassmkr Dashboard](https://app.glassmkr.com), which evaluates 38 alert rules and sends notifications.
+<!-- Canonical rule count: 61 across 9 categories. -->
+Lightweight bare-metal server monitoring agent. Collects hardware and OS health every 60 seconds at the default interval and pushes snapshots to the [Glassmkr Dashboard](https://app.glassmkr.com), which evaluates 61 alert rules across 9 categories and sends notifications.
 
 Open source. MIT licensed. Built by [Glassmkr](https://glassmkr.com). See also the [Bench MCP packages](https://glassmkr.com/docs/mcp) (`@glassmkr/bench-*` on npm) for AI-tool access to your Glassmkr fleet.
 
-**Resource usage:** ~90MB RSS memory (varies by hardware: servers with more IPMI sensors use more), <0.1% CPU at 5-minute collection interval. Collects IPMI, SMART, ZFS, network bonds, security posture, conntrack, systemd, NTP, and file descriptors.
+**Resource usage:** median ~91 MB RSS at idle (validation-fleet measurement 2026-05-21 across 7 hosts, 3 vendors, 4 OS families; range 65 to 103 MB peak; varies primarily with disk count and IPMI sensor count). Effectively 0% CPU at the default 60-second snapshot interval. Random-read I/O throughput delta under 1.5% under fio saturation (no measurable impact on customer workloads). The full measurement campaign lives at [`docs/measurements/2026-05-19/`](docs/measurements/2026-05-19/).
 
-**Security:** See [glassmkr.com/security](https://glassmkr.com/security) for the full list of what Crucible does and does not collect.
+**Security:** See [glassmkr.com/trust](https://glassmkr.com/trust) for the full list of what Crucible does and does not collect.
 
 ## Screenshots
 
@@ -56,7 +56,7 @@ sudo mkdir -p /etc/glassmkr
 sudo tee /etc/glassmkr/collector.yaml << 'EOF'
 server_name: "web-01"
 collection:
-  interval_seconds: 300
+  interval_seconds: 60
   ipmi: true
   smart: true
 dashboard:
@@ -73,7 +73,7 @@ docker compose up -d
 docker compose logs -f crucible
 ```
 
-Images are published to [ghcr.io/glassmkr/crucible](https://github.com/glassmkr/crucible/pkgs/container/crucible) on every tag release. The container needs `--privileged` and `network_mode: host` for IPMI, SMART, and accurate host network monitoring. Details in the [compose file](./docker-compose.yml).
+Images are published to both [`ghcr.io/glassmkr/crucible`](https://github.com/glassmkr/crucible/pkgs/container/crucible) and [`docker.io/glassmkr/crucible`](https://hub.docker.com/r/glassmkr/crucible) on every tag release; either works. The container needs `--privileged` and `network_mode: host` for IPMI, SMART, and accurate host network monitoring. Details in the [compose file](./docker-compose.yml).
 
 ## Quick Start
 
@@ -120,7 +120,7 @@ Options:
 ```yaml
 server_name: "web-01"
 collection:
-  interval_seconds: 300
+  interval_seconds: 60
   ipmi: true
   smart: true
 dashboard:
@@ -246,22 +246,26 @@ this detection automatically; the manual flow above is just the equivalent.
 | Module | Data |
 |--------|------|
 | CPU | Aggregate and per-core utilization (user, system, iowait, idle) |
-| Memory | RAM usage, swap usage |
-| Disks | Space per mount point, inode counts, mount options, filesystem type |
-| SMART | Drive health, model, temperature, power-on hours, reallocated sectors, NVMe wear |
-| Network | Interface traffic, delta error/drop counters, link speed |
-| RAID | mdadm array status, degraded detection |
-| IPMI | Sensor readings, ECC errors, SEL events, fan RPM |
-| Security | SSH config, firewall status, pending updates, kernel vulnerabilities, kernel-needs-reboot |
-| ZFS | Pool state, scrub age, scrub errors |
-| I/O | Per-device latency, IOPS, dmesg I/O errors |
-| Conntrack | nf_conntrack table usage |
-| Systemd | Failed unit count |
+| Memory | RAM usage, swap usage, EDAC counters, vmstat pswpin/pswpout |
+| Pressure (PSI) | cpu / io / memory `some` and `full` stall avg + total (kernel >= 4.20) |
+| Disks | Space per mount point, inode counts, mount options, filesystem type, LVM thin metadata |
+| SMART | Drive health, model, temperature, power-on hours, reallocated sectors, NVMe wear, NVMe Critical Warning decode |
+| Network | Interface traffic, delta error/drop counters, link speed, ethtool advertised modes, softnet per-CPU drops |
+| RAID | mdadm array status, degraded detection; hardware RAID via storcli/perccli (fleet-tested), ssacli/arcconf (stub) |
+| IPMI | Sensor readings, ECC errors, SEL events, fan RPM, PSU redundancy state; vendor SEL parsers (Dell/Supermicro/HPE fleet-tested, Lenovo/Cisco/OpenBMC stub) |
+| Security | SSH config, firewall status, pending updates, kernel vulnerabilities, kernel-needs-reboot, CVE collection |
+| ZFS | Pool state, vdev redundancy class, SLOG/L2ARC split, scrub age, scrub errors |
+| GPU (NVIDIA) | nvidia-smi tier 1 (default), DCGM tier 2 (enrichment), Redfish OEM tier 3 (stub); per-GPU XID events, temperature, ECC, power draw, PCIe link state |
+| I/O | Per-device latency, IOPS, dmesg I/O errors, structured dmesg events |
+| Conntrack | nf_conntrack table usage, insert_failed rate |
+| Network process | Per-process FD scan, LACP partner state, TCP retrans rate |
+| Systemd | Failed unit count, Result codes (oom-kill, watchdog, signal) |
 | NTP | Sync state and source |
 | File descriptors | System-wide allocation |
+| Reboot evidence | pstore / kdump / wtmp; expected-vs-unexpected reboot classification |
 
-<!-- Canonical rule count: see RULES_COUNT.md in the Glassmkr monorepo. -->
-Dashboard evaluates 38 alert rules server-side across OS, Storage, Network, Hardware, ZFS, Security, and Service Health, with priorities P1 Urgent through P4 Low. Full list: [app.glassmkr.com/docs/alerts](https://app.glassmkr.com/docs/alerts).
+<!-- Canonical rule count: 61 across 9 categories. -->
+Dashboard evaluates 61 alert rules server-side across 9 categories (storage, zfs, filesystem, memory & CPU, network, hardware/BMC, time & services, security & patching, GPU), with priorities P1 Urgent through P4 Low. 20 rules ship with deep FIX content (copy-pasteable remediation + verdict prior + rollback notes); 30+ are verified end-to-end on real hardware. Full list: [app.glassmkr.com/docs/alerts](https://app.glassmkr.com/docs/alerts).
 
 ## Requirements
 
@@ -274,7 +278,7 @@ Dashboard evaluates 38 alert rules server-side across OS, Storage, Network, Hard
 
 - [Getting Started](https://app.glassmkr.com/docs/getting-started)
 - [Configuration Reference](https://app.glassmkr.com/docs/configuration)
-- [Alert Rules (38)](https://app.glassmkr.com/docs/alerts)
+- [Alert Rules (61)](https://app.glassmkr.com/docs/rules)
 - [Troubleshooting](https://app.glassmkr.com/docs/troubleshooting)
 - [API Reference](https://app.glassmkr.com/docs/api)
 
