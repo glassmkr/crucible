@@ -37,6 +37,10 @@ export function parseZpoolStatus(zpoolStatus: string): ZfsPool[] {
   const pools: ZfsPool[] = [];
   let current: ZfsPool | null = null;
   let section: ZfsSection = "none";
+  // Per-pool bookkeeping: did we see a `scan:` line for the current
+  // pool? Kept out of the serialized ZfsPool object so it doesn't
+  // leak into the snapshot.
+  let sawScanLine = false;
 
   for (const line of zpoolStatus.split("\n")) {
     const poolMatch = line.match(/^\s*pool:\s*(.+)/);
@@ -51,6 +55,7 @@ export function parseZpoolStatus(zpoolStatus: string): ZfsPool[] {
       };
       pools.push(current);
       section = "none";
+      sawScanLine = false;
       continue;
     }
 
@@ -65,11 +70,26 @@ export function parseZpoolStatus(zpoolStatus: string): ZfsPool[] {
     const errorsMatch = line.match(/^\s*errors:\s*(.+)/);
     if (errorsMatch) {
       current.errors_text = errorsMatch[1].trim();
+      // Fresh-pool case: ZFS 2.2+ omits the `scan:` line entirely
+      // until the first scrub is initiated. Reaching `errors:` without
+      // ever seeing `scan:` means this pool has never been scrubbed.
+      // The `errors:` line is the canonical end-of-pool marker, so
+      // this is a stable place to assert.
+      if (!sawScanLine && current.scrub_never_run === undefined) {
+        current.scrub_never_run = true;
+      }
       continue;
     }
 
-    // Parse scrub info
+    // Parse scrub info. A `scan:` line may say "none requested" (the
+    // explicit never-run signal) OR may be absent entirely on a
+    // freshly-created pool (ZFS 2.2+ omits the line until a scrub
+    // is initiated). Fresh-pool case is handled at the end of the
+    // pool block: if we reach `errors:` without having seen `scan:`,
+    // we mark scrub_never_run. The handler below covers the
+    // explicit-string case.
     if (line.includes("scan:")) {
+      sawScanLine = true;
       if (line.includes("none requested")) {
         current.scrub_never_run = true;
       } else {
@@ -85,24 +105,27 @@ export function parseZpoolStatus(zpoolStatus: string): ZfsPool[] {
       }
     }
 
-    // Section switching. `config:` opens the vdev tree; `logs`,
-    // `cache`, `spares` appear as bare lines (no colon, no leading
-    // tab) within the config block as section markers per zpool(8).
+    // Section switching. `config:` opens the vdev tree. Section
+    // markers `logs`, `cache`, `spares` appear inside the config
+    // block. The exact whitespace varies by ZFS version: pre-2.0
+    // emitted them unindented; ZFS 2.2 emits a leading TAB and a
+    // trailing TAB (verified live on val-mz62hd 2026-05-21:
+    // "\tlogs\t\n"). The older parser only matched the unindented
+    // form, which routed every SLOG vdev into the wrong field on
+    // modern hosts. Match either form.
     if (line.startsWith("config:")) {
       section = "config";
       continue;
     }
-    // Section headers in the config block ('logs', 'cache', 'spares')
-    // appear unindented (no tab prefix) per the `zpool status` format.
-    if (/^logs\s*$/.test(line)) {
+    if (/^\s*logs\s*$/.test(line)) {
       section = "logs";
       continue;
     }
-    if (/^cache\s*$/.test(line)) {
+    if (/^\s*cache\s*$/.test(line)) {
       section = "cache";
       continue;
     }
-    if (/^spares\s*$/.test(line)) {
+    if (/^\s*spares\s*$/.test(line)) {
       section = "spares";
       continue;
     }
