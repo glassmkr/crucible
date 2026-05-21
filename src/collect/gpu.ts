@@ -22,7 +22,7 @@
 
 import { existsSync } from "fs";
 
-import { run } from "../lib/exec.js";
+import { run, runDetailed, looksLikeFieldRenameError } from "../lib/exec.js";
 import type {
   Gpu,
   GpuSnapshot,
@@ -188,13 +188,39 @@ const NVIDIA_SMI_CSV_FIELDS = [
 ] as const;
 
 async function collectTier1(): Promise<Tier1Snapshot | { available: false; reason: string }> {
-  const csvOut = await run(
+  // Use runDetailed so we can distinguish "tool not installed" from
+  // "tool exited 0 with empty stdout but errored to stderr". The
+  // latter is the silent-no-op class that hid the v0.13.0
+  // retired_pages.double_bit_ecc typo for ~24h until a real GPU host
+  // triggered the trigger campaign.
+  const res = await runDetailed(
     "nvidia-smi",
     [`--query-gpu=${NVIDIA_SMI_CSV_FIELDS.join(",")}`, "--format=csv,noheader,nounits"],
     NVIDIA_SMI_TIMEOUT_MS,
   );
+  if (!res.installed) {
+    return { available: false, reason: "nvidia-smi not present (non-NVIDIA host or driver not installed)" };
+  }
+  if (res.timedOut) {
+    return { available: false, reason: "nvidia-smi query timed out" };
+  }
+  // exit 0 + empty stdout + stderr complains about a field rename is
+  // exactly the v0.13.0 / v0.13.2 bug shape. Surface this loudly with
+  // a reason that points an operator at the cause.
+  if (
+    res.exitCode === 0 &&
+    (!res.stdout || res.stdout.trim().length === 0) &&
+    looksLikeFieldRenameError(res.stderr)
+  ) {
+    console.warn(`[gpu] nvidia-smi exited 0 with empty stdout but stderr looks like a field-name rename: ${res.stderr.trim().slice(0, 240)}`);
+    return {
+      available: false,
+      reason: `nvidia-smi exited 0 with empty stdout; stderr suggests a queried field has been renamed by the driver version. stderr=${res.stderr.trim().slice(0, 200)}`,
+    };
+  }
+  const csvOut = res.stdout;
   if (!csvOut) {
-    return { available: false, reason: "nvidia-smi query timeout or returned no output" };
+    return { available: false, reason: "nvidia-smi query returned no output" };
   }
   const gpus: Gpu[] = [];
   for (const line of csvOut.split("\n").map((l) => l.trim()).filter(Boolean)) {
@@ -298,6 +324,12 @@ async function enrichThrottleReasons(gpus: Gpu[]): Promise<void> {
   const xmlOut = await run("nvidia-smi", ["-q", "-x"], NVIDIA_SMI_TIMEOUT_MS);
   if (!xmlOut) return;
   const gpuBlocks = xmlOut.split(/<gpu /).slice(1); // skip the header
+  // Positive-affirmation: count GPUs for which we found a recognisable
+  // throttle/event-reasons block. If we found NONE on a host that has
+  // active GPUs, the most likely cause is another driver-version XML
+  // tag rename (same shape as the v0.13.2 fix), and we want a loud
+  // warning so the next person sees it without re-running a campaign.
+  let matchedGpus = 0;
   for (let i = 0; i < gpuBlocks.length && i < gpus.length; i++) {
     const block = gpuBlocks[i];
     // Driver 535-: <clocks_throttle_reasons>; driver 550+: <clocks_event_reasons>.
@@ -310,6 +342,7 @@ async function enrichThrottleReasons(gpus: Gpu[]): Promise<void> {
       block.match(/<clocks_event_reasons>([\s\S]*?)<\/clocks_event_reasons>/) ||
       block.match(/<clocks_throttle_reasons>([\s\S]*?)<\/clocks_throttle_reasons>/);
     if (!reasonsBlock) continue;
+    matchedGpus++;
     const reasons: string[] = [];
     for (const [suffix, label] of [
       ["gpu_idle", "gpu_idle"],
@@ -336,6 +369,20 @@ async function enrichThrottleReasons(gpus: Gpu[]): Promise<void> {
       reasons.includes("hw_slowdown") ||
       reasons.includes("hw_thermal_slowdown") ||
       reasons.includes("sw_thermal_slowdown");
+  }
+  // Silent-regression-class defense: nvidia-smi returned XML with at
+  // least one <gpu> block but none had a recognisable throttle/event
+  // reasons sub-block. Most likely cause is a third XML rename the
+  // matcher doesn't cover; warn so the next investigator sees this
+  // without re-running a trigger campaign on a real GPU host.
+  if (gpus.length > 0 && matchedGpus === 0 && gpuBlocks.length > 0) {
+    console.warn(
+      "[gpu] enrichThrottleReasons: nvidia-smi -q -x emitted GPU blocks but none contained " +
+        "<clocks_event_reasons> or <clocks_throttle_reasons>. " +
+        "Likely a new driver-version XML rename; performance_state_reasons will be empty " +
+        "and the dashboard's gpu_power_cap_throttling + gpu_thermal_critical rules cannot fire. " +
+        "Inspect the output of `nvidia-smi -q -x | head -40` and extend the matcher in collect/gpu.ts.",
+    );
   }
 }
 
