@@ -1,4 +1,6 @@
-# Crucible v0.13.0 resource measurement campaign — 2026-05-19
+# Crucible v0.13.3 resource measurement campaign — 2026-05-19
+
+> Campaign re-run on 2026-05-21 against Crucible v0.13.3 (the v0.13.0 scaffolding still applies; the scripts measure the agent process irrespective of version, and v0.13.3 = v0.13.0 + 3 fix releases on the same collector surface).
 
 Runbook for the measurement campaign per `CC_SPEC_CRUCIBLE_RESOURCE_MEASUREMENT_2026-05-19.md`. Validation fleet only; production backend (services-1) and the GPU host (gpu-1) are excluded.
 
@@ -27,22 +29,22 @@ docs/measurements/2026-05-19/
 
 ## Prerequisites per host
 
-- `glassmkr-crucible.service` running on Crucible v0.13.0 (verify with `systemctl status glassmkr-crucible && glassmkr-crucible --version`).
+- `glassmkr-crucible.service` running on Crucible v0.13.3 (verify with `systemctl status glassmkr-crucible && glassmkr-crucible --version`).
+- Passwordless sudo for the executing user (the runner scripts self-elevate so /proc/&lt;pid&gt;/io and /proc/&lt;pid&gt;/fd are readable; the agent runs as root).
 - `python3` (stdlib only; no pip installs needed).
 - For Profile A + C: `stress-ng` (`apt install stress-ng` / `dnf install stress-ng`).
 - For Profile B: `fio` (`apt install fio` / `dnf install fio`).
 - ~2 GB free on `/var/tmp/` for the Profile B fio file.
 
-## Phase 1: Update fleet to v0.13.0
+## Phase 1: Update fleet to v0.13.3
 
-Update each host sequentially in the order documented in the spec §1.1. Per-host:
+Update each host. The fleet installs via `npm install -g @glassmkr/crucible`:
 
 ```bash
-# (use whatever upgrade path each host was installed through)
-sudo glassmkr-crucible upgrade   # or apt upgrade / docker pull + restart
+sudo npm install -g @glassmkr/crucible@0.13.3
 sudo systemctl restart glassmkr-crucible
 systemctl status glassmkr-crucible
-glassmkr-crucible --version      # confirm 0.13.0
+glassmkr-crucible --version      # confirm 0.13.3
 ```
 
 Verify before moving to the next host:

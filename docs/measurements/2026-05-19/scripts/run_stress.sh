@@ -29,6 +29,15 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 OUTPUT_DIR="${OUTPUT_DIR:-stress}"
 HOST="$(hostname)"
 
+# glassmkr-crucible runs as root + Profile B needs systemctl stop/start;
+# self-elevate so /proc/<pid>/io reads succeed and systemctl works without
+# a per-call sudo prompt.
+if [ "$(id -u)" -ne 0 ] && [ -n "${PROFILE:-}" ]; then
+  exec sudo -n -E env PROFILE="$PROFILE" STRESS_SECONDS="$STRESS_SECONDS" \
+    INTERVAL_S="$INTERVAL_S" OUTPUT_DIR="$OUTPUT_DIR" \
+    bash "$0" "$PROFILE"
+fi
+
 usage() {
   cat >&2 <<'EOF'
 usage: bash run_stress.sh {a|b|c} > <output-csv>

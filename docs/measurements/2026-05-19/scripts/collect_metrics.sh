@@ -75,14 +75,14 @@ while [ "$(date +%s)" -lt "$end_s" ]; do
   # CPU jiffies from /proc/<pid>/stat (fields 14 = utime, 15 = stime).
   # Process name in field 2 may contain spaces wrapped in parens; we
   # use awk to skip the (comm) section reliably.
+  # Everything after the first "(" through the matching ")" is the comm
+  # field, which may contain spaces. We slice after the close-paren and
+  # take fields 12 and 13 (utime, stime) from the remainder.
   read -r utime stime < <(awk '{
-    # everything after the first '(' through the matching ')' is comm;
-    # the next field after that close-paren is field 3 (state).
     line=$0
-    close = index(line, ")")
-    rest = substr(line, close + 2)
+    cp = index(line, ")")
+    rest = substr(line, cp + 2)
     n = split(rest, f, " ")
-    # In `rest`, f[1] = state, f[2] = ppid, ..., f[12] = utime, f[13] = stime.
     print f[12], f[13]
   }' /proc/"$pid"/stat 2>/dev/null)
   utime="${utime:-}"; stime="${stime:-}"
