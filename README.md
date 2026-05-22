@@ -6,7 +6,7 @@
 <!-- Canonical rule count: 61 across 9 categories. -->
 Lightweight bare-metal server monitoring agent. Collects hardware and OS health every 60 seconds at the default interval and pushes snapshots to the [Glassmkr Dashboard](https://app.glassmkr.com), which evaluates 61 alert rules across 9 categories and sends notifications.
 
-Open source. MIT licensed. Built by [Glassmkr](https://glassmkr.com). See also the [Bench MCP packages](https://glassmkr.com/docs/mcp) (`@glassmkr/bench-*` on npm) for AI-tool access to your Glassmkr fleet.
+Open source. MIT licensed. Built by [Glassmkr](https://glassmkr.com). Crucible is the open-source product; the optional [Glassmkr Dashboard](https://app.glassmkr.com) is a hosted SaaS that consumes Crucible's snapshots.
 
 **Resource usage:** median ~91 MB RSS at idle (validation-fleet measurement 2026-05-21 across 7 hosts, 3 vendors, 4 OS families; range 65 to 103 MB peak; varies primarily with disk count and IPMI sensor count). Effectively 0% CPU at the default 60-second snapshot interval. Random-read I/O throughput delta under 1.5% under fio saturation (no measurable impact on customer workloads). The full measurement campaign lives at [`docs/measurements/2026-05-19/`](docs/measurements/2026-05-19/).
 
