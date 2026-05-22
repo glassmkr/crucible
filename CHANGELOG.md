@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 Pre-1.0 convention: minor bumps may include breaking changes; we call them
 out under `### Breaking` so downstream consumers can audit.
 
+## [0.13.4] - 2026-05-22
+
+### Changed
+
+- **README sweep for the Bench retirement.** Removed the
+  "See also the Bench MCP packages (`@glassmkr/bench-*` on npm)
+  for AI-tool access to your Glassmkr fleet" line at the top of
+  the README. The `@glassmkr/bench-*` packages were deprecated on
+  npm and the bench.glassmkr.com surface was retired
+  (2026-05-22). Crucible is now the single open-source product;
+  the optional Dashboard SaaS sits next to it. No code changes
+  in this release. Required because the npm-published README is
+  frozen at publish time; a patch bump is the cheapest way to
+  refresh the package page + the Docker Hub Overview.
+
 ## [0.13.3] - 2026-05-21
 
 ### Fixed
