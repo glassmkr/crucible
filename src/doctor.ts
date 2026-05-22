@@ -56,7 +56,7 @@ export function formatIpmiDoctor(cap: Awaited<ReturnType<typeof detectIpmiCapabi
       out.push("If `/dev/ipmi0` never appears, the host may not have a BMC");
       out.push("(common on consumer hardware, Pi, laptops, and VMs without IPMI");
       out.push("passthrough). In that case set `collection.ipmi: false` in");
-      out.push("/etc/glassmkr/collector.yaml to silence the snapshot field.");
+      out.push("/etc/glassmkr/crucible.yaml (legacy installs: /etc/glassmkr/collector.yaml) to silence the snapshot field.");
       break;
     case "permission_denied":
       out.push("Fix: Crucible needs root to access /dev/ipmi0.");

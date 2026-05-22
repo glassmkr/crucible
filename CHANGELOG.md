@@ -7,6 +7,47 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 Pre-1.0 convention: minor bumps may include breaking changes; we call them
 out under `### Breaking` so downstream consumers can audit.
 
+## [0.13.5] - 2026-05-22
+
+### Changed
+
+- **Config file renamed from `/etc/glassmkr/collector.yaml` to
+  `/etc/glassmkr/crucible.yaml`.** The agent has been named "Crucible"
+  since v0.10; the config-file rename was the last piece of the
+  half-finished rename. The on-disk YAML format is unchanged; only
+  the file name and the default-path constant move.
+
+### Added
+
+- **Backwards-compat read-path fallback.** When the agent starts
+  without an explicit `--config` flag and the new
+  `/etc/glassmkr/crucible.yaml` does not exist but the legacy
+  `/etc/glassmkr/collector.yaml` does, the agent transparently uses
+  the legacy file and emits a one-line warn to stderr:
+  `"[crucible] Using legacy config path /etc/glassmkr/collector.yaml; run 'glassmkr-crucible init' to migrate to /etc/glassmkr/crucible.yaml"`.
+  Existing installs continue to work unmodified.
+
+- **Lossless migration in `init`.** When `glassmkr-crucible init`
+  runs into the canonical path and a legacy
+  `/etc/glassmkr/collector.yaml` exists, the file is renamed (atomic
+  on the same filesystem; `/etc` is always one mount) before any
+  write. Operator-edited content (telegram tokens, custom thresholds,
+  tls_pin) is preserved verbatim — the file is not re-generated.
+  The systemd unit is regenerated to point at the new path and
+  daemon-reload picks up the change. If both files happen to exist,
+  init warns and leaves the legacy file alone; pass `--force` to
+  regenerate the canonical file from scratch.
+
+### Notes
+
+- Customers running v0.13.4 or earlier do not need to do anything.
+  The legacy file path is the read-path default if the new file is
+  absent. Run `sudo glassmkr-crucible init --api-key <K>` on next
+  upgrade to migrate (the agent preserves all edits).
+- Explicit `--config /some/path.yaml` continues to honour the
+  caller-supplied path with no fallback or migration; only the
+  default-path bare-invocation gets the new behaviour.
+
 ## [0.13.4] - 2026-05-22
 
 ### Changed

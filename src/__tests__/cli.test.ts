@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { parseCliArgs, helpText, DEFAULT_CONFIG_PATH } from "../cli.js";
+import { parseCliArgs, helpText, DEFAULT_CONFIG_PATH, LEGACY_CONFIG_PATH, resolveConfigPathWithLegacyFallback } from "../cli.js";
 
 describe("parseCliArgs", () => {
   it("--version returns version string and mode=version", () => {
@@ -74,6 +74,58 @@ describe("helpText", () => {
   it("lists init in the subcommands section", () => {
     const txt = helpText("0.9.1");
     expect(txt).toContain("init");
+  });
+});
+
+describe("resolveConfigPathWithLegacyFallback", () => {
+  function mkDeps(present: string[]) {
+    const warns: string[] = [];
+    return {
+      deps: {
+        existsSync: (p: string) => present.includes(p),
+        warn: (m: string) => { warns.push(m); },
+      },
+      warns,
+    };
+  }
+
+  it("returns the new default path when it exists (no warn)", () => {
+    const { deps, warns } = mkDeps([DEFAULT_CONFIG_PATH]);
+    const resolved = resolveConfigPathWithLegacyFallback(DEFAULT_CONFIG_PATH, deps);
+    expect(resolved).toBe(DEFAULT_CONFIG_PATH);
+    expect(warns).toHaveLength(0);
+  });
+
+  it("falls back to legacy path with warn when only the legacy file exists", () => {
+    const { deps, warns } = mkDeps([LEGACY_CONFIG_PATH]);
+    const resolved = resolveConfigPathWithLegacyFallback(DEFAULT_CONFIG_PATH, deps);
+    expect(resolved).toBe(LEGACY_CONFIG_PATH);
+    expect(warns).toHaveLength(1);
+    expect(warns[0]).toContain("legacy config path");
+    expect(warns[0]).toContain(LEGACY_CONFIG_PATH);
+    expect(warns[0]).toContain("glassmkr-crucible init");
+  });
+
+  it("prefers the new path when both exist (no warn)", () => {
+    const { deps, warns } = mkDeps([DEFAULT_CONFIG_PATH, LEGACY_CONFIG_PATH]);
+    const resolved = resolveConfigPathWithLegacyFallback(DEFAULT_CONFIG_PATH, deps);
+    expect(resolved).toBe(DEFAULT_CONFIG_PATH);
+    expect(warns).toHaveLength(0);
+  });
+
+  it("returns input unchanged when neither file exists (config-missing error surfaces downstream from loadConfig)", () => {
+    const { deps, warns } = mkDeps([]);
+    const resolved = resolveConfigPathWithLegacyFallback(DEFAULT_CONFIG_PATH, deps);
+    expect(resolved).toBe(DEFAULT_CONFIG_PATH);
+    expect(warns).toHaveLength(0);
+  });
+
+  it("never falls back when an explicit --config path was passed (even to a non-existent custom file)", () => {
+    const { deps, warns } = mkDeps([LEGACY_CONFIG_PATH]);
+    const customPath = "/tmp/somewhere-explicit.yaml";
+    const resolved = resolveConfigPathWithLegacyFallback(customPath, deps);
+    expect(resolved).toBe(customPath);
+    expect(warns).toHaveLength(0);
   });
 });
 

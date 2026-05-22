@@ -41,8 +41,9 @@ COPY --from=builder /build/dist ./dist
 # Keeping the user available lets operators drop privileges when hardware access is not needed.
 RUN useradd --system --no-create-home --shell /usr/sbin/nologin glassmkr
 
-# Crucible reads /etc/glassmkr/collector.yaml by default.
-# Mount the host config directory at this path.
+# Crucible reads /etc/glassmkr/crucible.yaml by default.
+# Legacy installs with /etc/glassmkr/collector.yaml continue to work
+# (transparent runtime fallback). Mount the host config directory.
 RUN mkdir -p /etc/glassmkr
 
 # Container health: verify the Node process is actually running and hasn't crashed.

@@ -2,6 +2,8 @@
 // or collector initialization so --version and --help exit cleanly even when
 // the config file is missing or the host lacks the tools the collectors need.
 
+import * as fs from "node:fs";
+
 export type CliMode = "version" | "help" | "run" | "mark-reboot" | "reboot" | "init" | "doctor-ipmi";
 
 export interface CliArgs {
@@ -22,7 +24,14 @@ export interface InitFlags {
   noVerify: boolean;
 }
 
-export const DEFAULT_CONFIG_PATH = "/etc/glassmkr/collector.yaml";
+// Canonical config path as of v0.13.5. Renamed from collector.yaml to
+// crucible.yaml to match the product naming (the agent has been named
+// "Crucible" since v0.10; the config-file rename was the last piece of
+// the half-finished rename). Existing installs with collector.yaml on
+// disk continue to work via LEGACY_CONFIG_PATH fallback in the run-mode
+// path below, and `init` auto-migrates the file when invoked.
+export const DEFAULT_CONFIG_PATH = "/etc/glassmkr/crucible.yaml";
+export const LEGACY_CONFIG_PATH = "/etc/glassmkr/collector.yaml";
 
 export function parseCliArgs(argv: string[], version: string): { result: CliArgs; output: string | null } {
   // argv is typically process.argv.slice(2)
@@ -117,6 +126,32 @@ export function parseCliArgs(argv: string[], version: string): { result: CliArgs
   return { result: { mode: "run", configPath }, output: null };
 }
 
+/**
+ * If the caller did not pass an explicit --config and the default config
+ * path does not exist but the legacy /etc/glassmkr/collector.yaml does,
+ * transparently fall back to the legacy path and emit a one-line warn.
+ *
+ * Pure with respect to its IO injection (so tests can drive it without
+ * touching the real filesystem). index.ts wires the default fs + console.
+ */
+export interface ConfigFallbackDeps {
+  existsSync: (p: string) => boolean;
+  warn: (msg: string) => void;
+}
+
+export function resolveConfigPathWithLegacyFallback(
+  configPath: string,
+  deps: ConfigFallbackDeps = { existsSync: fs.existsSync, warn: (m) => console.warn(m) },
+): string {
+  if (configPath !== DEFAULT_CONFIG_PATH) return configPath;
+  if (deps.existsSync(DEFAULT_CONFIG_PATH)) return configPath;
+  if (!deps.existsSync(LEGACY_CONFIG_PATH)) return configPath;
+  deps.warn(
+    `[crucible] Using legacy config path ${LEGACY_CONFIG_PATH}; run 'glassmkr-crucible init' to migrate to ${DEFAULT_CONFIG_PATH}`,
+  );
+  return LEGACY_CONFIG_PATH;
+}
+
 export function helpText(version: string): string {
   return [
     `glassmkr-crucible v${version} - Bare metal server monitoring agent`,
@@ -135,7 +170,7 @@ export function helpText(version: string): string {
     "",
     "Subcommands:",
     "  init             First-run setup: validate API key, write",
-    "                   collector.yaml + systemd unit, enable service.",
+    "                   crucible.yaml + systemd unit, enable service.",
     "                   See 'glassmkr-crucible init --help'.",
     "  mark-reboot      Write a planned-reboot marker so the next boot",
     "                   does not fire `server_rebooted_unexpectedly`.",
@@ -164,7 +199,7 @@ export function initHelp(version: string): string {
     "Options:",
     "  --name <NAME>       Server name in the Glassmkr dashboard. Defaults to the host's hostname.",
     "  --ingest-url <URL>  Ingest endpoint (default: https://app.glassmkr.com/api/v1/ingest).",
-    "  --config-path <P>   Where to write collector.yaml (default: /etc/glassmkr/collector.yaml).",
+    "  --config-path <P>   Where to write crucible.yaml (default: /etc/glassmkr/crucible.yaml).",
     "  --no-start          Write config + unit, daemon-reload, but do not enable/start the service.",
     "  --force             Overwrite an existing config file.",
     "  --no-verify         Skip the connectivity probe against the ingest endpoint.",
@@ -172,7 +207,9 @@ export function initHelp(version: string): string {
     "",
     "What this does:",
     "  1. Validates the api key format and (unless --no-verify) checks it against the ingest endpoint.",
-    "  2. Writes /etc/glassmkr/collector.yaml (mode 0600).",
+    "  2. Writes /etc/glassmkr/crucible.yaml (mode 0600). If a legacy",
+    "     /etc/glassmkr/collector.yaml exists, it is renamed to the new",
+    "     path before write (lossless migration).",
     "  3. Writes /etc/systemd/system/glassmkr-crucible.service (mode 0644) with",
     "     ExecStart pointing at the dynamically-detected binary path.",
     "  4. Runs systemctl daemon-reload.",
