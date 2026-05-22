@@ -25,7 +25,7 @@ export function initDashboardAgent(tlsPin?: string): void {
         return new Error(
           `TLS pin mismatch for ${hostname}. ` +
           `Expected: ${tlsPin}, Got: ${hash}. ` +
-          `If the server certificate was rotated with a new key, update tls_pin in collector.yaml.`
+          `If the server certificate was rotated with a new key, update tls_pin in crucible.yaml.`
         );
       }
 

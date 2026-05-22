@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-import { parseCliArgs } from "./cli.js";
+import { parseCliArgs, resolveConfigPathWithLegacyFallback } from "./cli.js";
 import { CRUCIBLE_VERSION as PKG_VERSION } from "./lib/version.js";
 
 // Handle --version, --help, and planned-reboot subcommands before
@@ -120,7 +120,12 @@ if (plannedRebootFlag) {
 }
 let plannedRebootConsumed = false;
 
-const config = loadConfig(cliArgs.configPath);
+// Resolve the legacy config path fallback at startup: when no --config
+// was passed and the canonical /etc/glassmkr/crucible.yaml does not
+// exist but /etc/glassmkr/collector.yaml does, transparently use the
+// legacy path and warn once. v0.13.5 rename, preserves existing installs.
+const resolvedConfigPath = resolveConfigPathWithLegacyFallback(cliArgs.configPath);
+const config = loadConfig(resolvedConfigPath);
 
 console.log(`[collector] Starting. Server: ${config.server_name}. Interval: ${config.collection.interval_seconds}s`);
 console.log(`[collector] IPMI: ${config.collection.ipmi ? "enabled" : "disabled"}, SMART: ${config.collection.smart ? "enabled" : "disabled"}`);

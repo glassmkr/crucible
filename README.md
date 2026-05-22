@@ -31,7 +31,7 @@ Alerted servers surface a counter at a glance.*
 
 The fastest path: bootstrap script. Detects Node and npm, installs the
 agent, and runs `glassmkr-crucible init` to validate your key, write
-`/etc/glassmkr/collector.yaml`, write the systemd unit, and start the
+`/etc/glassmkr/crucible.yaml`, write the systemd unit, and start the
 service.
 
 ```bash
@@ -57,7 +57,7 @@ Run `glassmkr-crucible init --help` for the full flag list.
 sudo mkdir -p /etc/glassmkr
 
 # Create config (replace with your Dashboard credentials)
-sudo tee /etc/glassmkr/collector.yaml << 'EOF'
+sudo tee /etc/glassmkr/crucible.yaml << 'EOF'
 server_name: "web-01"
 collection:
   interval_seconds: 60
@@ -88,7 +88,7 @@ Images are published to both [`ghcr.io/glassmkr/crucible`](https://github.com/gl
    sudo glassmkr-crucible init --api-key gmk_cru_live_<your-key>
    ```
 
-   This writes `/etc/glassmkr/collector.yaml`, writes the systemd unit,
+   This writes `/etc/glassmkr/crucible.yaml`, writes the systemd unit,
    and starts the service. Pass `--name` to override the dashboard
    server name (defaults to the host's hostname). Pass `--no-start` if
    you want to inspect the unit before enabling it. Pass `--api-key -`
@@ -112,14 +112,14 @@ glassmkr-crucible reboot      [--reason TEXT] [--ttl DURATION]
 Options:
   -v, --version    Print version and exit
   -h, --help       Print this help and exit
-  -c, --config     Path to config file (default: /etc/glassmkr/collector.yaml)
+  -c, --config     Path to config file (default: /etc/glassmkr/crucible.yaml)
 ```
 
 `--config=PATH` and the legacy positional form `glassmkr-crucible /path/to.yaml` both work. Without options, Crucible runs as a long-lived collector daemon.
 
 ## Configuration
 
-`init` writes `/etc/glassmkr/collector.yaml`. The schema:
+`init` writes `/etc/glassmkr/crucible.yaml`. (Installs predating v0.13.5 have the file at `/etc/glassmkr/collector.yaml`; the agent reads either path, preferring the new name. Run `glassmkr-crucible init` to migrate the legacy file lossless.) The schema:
 
 ```yaml
 server_name: "web-01"
@@ -141,7 +141,7 @@ Hand-edit any time. The agent re-reads on restart. Run
 **Breaking change in 0.10.0**: the top-level config block was renamed
 from `forge:` to `dashboard:`, and the default endpoint changed from
 `forge.glassmkr.com` to `app.glassmkr.com`. Edit your existing
-`/etc/glassmkr/collector.yaml`:
+`/etc/glassmkr/crucible.yaml` (or the legacy `/etc/glassmkr/collector.yaml` on pre-0.13.5 installs):
 
 ```yaml
 # OLD (0.9.x):
@@ -223,7 +223,7 @@ After=network.target
 [Service]
 Type=simple
 User=root
-ExecStart=$BIN_PATH /etc/glassmkr/collector.yaml
+ExecStart=$BIN_PATH /etc/glassmkr/crucible.yaml
 Restart=on-failure
 RestartSec=10
 

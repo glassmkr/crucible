@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach } from "vitest";
-import { runInit, isValidApiKey, buildCollectorYaml, buildSystemdUnit, type InitDeps, SYSTEMD_UNIT_PATH } from "../init.js";
+import { runInit, isValidApiKey, buildCollectorYaml, buildSystemdUnit, type InitDeps, SYSTEMD_UNIT_PATH, DEFAULT_CONFIG_PATH, LEGACY_CONFIG_PATH } from "../init.js";
 
 const VALID_NEW_KEY = "gmk_cru_live_abcdefghijklmnopqrstuvwx_a1b2";
 const VALID_LEGACY_KEY = "col_abcdef0123456789abcdef0123456789ab";
@@ -11,6 +11,7 @@ interface FakeFs {
 
 function makeDeps(opts?: {
   preExistingFiles?: string[];
+  preExistingFileData?: Record<string, string>;
   binPath?: string | null;
   systemctlExitCode?: number | null;
   fetchStatus?: number;
@@ -18,7 +19,7 @@ function makeDeps(opts?: {
   stdin?: string;
 }): { deps: InitDeps; fs: FakeFs; logs: string[]; warns: string[]; errors: string[]; systemctlCalls: string[][] } {
   const fs: FakeFs = { files: new Map(), dirs: new Set() };
-  for (const f of opts?.preExistingFiles ?? []) fs.files.set(f, { data: "stale", mode: 0o600 });
+  for (const f of opts?.preExistingFiles ?? []) fs.files.set(f, { data: opts?.preExistingFileData?.[f] ?? "stale", mode: 0o600 });
 
   const logs: string[] = [];
   const warns: string[] = [];
@@ -33,6 +34,12 @@ function makeDeps(opts?: {
       chmodSync: (p, mode) => {
         const f = fs.files.get(p);
         if (f) f.mode = mode;
+      },
+      renameSync: (from, to) => {
+        const f = fs.files.get(from);
+        if (!f) throw new Error(`ENOENT: ${from}`);
+        fs.files.set(to, f);
+        fs.files.delete(from);
       },
     },
     exec: (cmd, args) => {
@@ -101,8 +108,8 @@ describe("buildCollectorYaml", () => {
 
 describe("buildSystemdUnit", () => {
   it("references the dynamic binary path with the config path", () => {
-    const u = buildSystemdUnit("/usr/local/bin/glassmkr-crucible", "/etc/glassmkr/collector.yaml");
-    expect(u).toContain("ExecStart=/usr/local/bin/glassmkr-crucible /etc/glassmkr/collector.yaml");
+    const u = buildSystemdUnit("/usr/local/bin/glassmkr-crucible", "/etc/glassmkr/crucible.yaml");
+    expect(u).toContain("ExecStart=/usr/local/bin/glassmkr-crucible /etc/glassmkr/crucible.yaml");
     expect(u).toContain("Type=simple");
     expect(u).toContain("Restart=always");
   });
@@ -213,5 +220,69 @@ describe("runInit", () => {
     const code = await runInit({ apiKey: VALID_NEW_KEY, configPath, noVerify: true }, deps);
     expect(code).toBe(9);
     expect(errors[errors.length - 1]).toContain("systemctl enable --now");
+  });
+});
+
+describe("runInit legacy config migration", () => {
+  it("renames /etc/glassmkr/collector.yaml -> crucible.yaml when initing into the canonical path and the new file is absent", async () => {
+    const LEGACY_CONTENT = '# user-edited\nserver_name: "preserved-by-rename"\ntelegram:\n  bot_token: "secret-do-not-rewrite"\n';
+    const { deps, fs, logs, systemctlCalls } = makeDeps({
+      preExistingFiles: [LEGACY_CONFIG_PATH],
+      preExistingFileData: { [LEGACY_CONFIG_PATH]: LEGACY_CONTENT },
+    });
+    const code = await runInit({ apiKey: VALID_NEW_KEY, configPath: DEFAULT_CONFIG_PATH, noVerify: true }, deps);
+    expect(code).toBe(0);
+    // Legacy file moved.
+    expect(fs.files.has(LEGACY_CONFIG_PATH)).toBe(false);
+    // New file holds the exact original content (no rewrite preserves operator edits).
+    const moved = fs.files.get(DEFAULT_CONFIG_PATH);
+    expect(moved?.data).toBe(LEGACY_CONTENT);
+    // Migration log line surfaced.
+    expect(logs.some((l) => l.includes("migrated legacy config"))).toBe(true);
+    // Systemd unit was still written and points at the new path; daemon-reload ran.
+    const unit = fs.files.get(SYSTEMD_UNIT_PATH);
+    expect(unit?.data).toContain(`ExecStart=/usr/local/bin/glassmkr-crucible ${DEFAULT_CONFIG_PATH}`);
+    expect(systemctlCalls).toContainEqual(["daemon-reload"]);
+  });
+
+  it("--force after a legacy migration regenerates the config from scratch", async () => {
+    const LEGACY_CONTENT = '# user-edited\nserver_name: "old"\n';
+    const { deps, fs } = makeDeps({
+      preExistingFiles: [LEGACY_CONFIG_PATH],
+      preExistingFileData: { [LEGACY_CONFIG_PATH]: LEGACY_CONTENT },
+    });
+    const code = await runInit({ apiKey: VALID_NEW_KEY, configPath: DEFAULT_CONFIG_PATH, noVerify: true, force: true }, deps);
+    expect(code).toBe(0);
+    expect(fs.files.has(LEGACY_CONFIG_PATH)).toBe(false);
+    // --force overrides preservation: file was rewritten with the freshly-generated YAML.
+    const after = fs.files.get(DEFAULT_CONFIG_PATH);
+    expect(after?.data).toContain(VALID_NEW_KEY);
+    expect(after?.data).not.toBe(LEGACY_CONTENT);
+  });
+
+  it("warns and leaves the legacy file alone when both files exist", async () => {
+    const { deps, fs, warns } = makeDeps({
+      preExistingFiles: [LEGACY_CONFIG_PATH, DEFAULT_CONFIG_PATH],
+    });
+    // The existing-without-force guard kicks in next, so exit 4. The warn must already have fired.
+    const code = await runInit({ apiKey: VALID_NEW_KEY, configPath: DEFAULT_CONFIG_PATH, noVerify: true }, deps);
+    expect(code).toBe(4);
+    expect(fs.files.has(LEGACY_CONFIG_PATH)).toBe(true);
+    expect(warns.some((w) => w.includes("both") && w.includes(LEGACY_CONFIG_PATH))).toBe(true);
+  });
+
+  it("does not migrate when --config-path points somewhere other than the canonical path", async () => {
+    // Operator using a non-default config path: legacy file at /etc/glassmkr/collector.yaml
+    // is none of our business; leave it alone.
+    const { deps, fs } = makeDeps({
+      preExistingFiles: [LEGACY_CONFIG_PATH],
+      preExistingFileData: { [LEGACY_CONFIG_PATH]: "# legacy content" },
+    });
+    const customPath = "/etc/custom/path.yaml";
+    const code = await runInit({ apiKey: VALID_NEW_KEY, configPath: customPath, noVerify: true }, deps);
+    expect(code).toBe(0);
+    // Legacy still in place, untouched.
+    expect(fs.files.get(LEGACY_CONFIG_PATH)?.data).toBe("# legacy content");
+    expect(fs.files.has(customPath)).toBe(true);
   });
 });
