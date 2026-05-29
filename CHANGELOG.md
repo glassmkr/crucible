@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 Pre-1.0 convention: minor bumps may include breaking changes; we call them
 out under `### Breaking` so downstream consumers can audit.
 
+## [0.13.6] - 2026-05-29
+
+### Fixed
+
+- **dnf-automatic download-only timer no longer reported as
+  configured.** The RHEL/Rocky/Alma auto-update check treated any
+  enabled dnf-automatic timer as "configured", including the
+  download-only timers (`dnf-automatic.timer` /
+  `dnf-automatic-download.timer` with `apply_updates != yes`). A
+  download-only host then suppressed the dashboard's
+  `pending_security_updates` rule while patches were downloaded but
+  never applied; the host appeared patched while it was not (observed
+  on a validation host with 26 pending updates, some Critical). The
+  check now requires either `dnf-automatic-install.timer` (applies
+  unconditionally) or a legacy/download timer **with**
+  `apply_updates = yes` in `/etc/dnf/automatic.conf`; otherwise it
+  reports `configured: false` with a `details` string naming the
+  cause. Mirrors the config-aware rigor the Debian/unattended-upgrades
+  path already had.
+
 ## [0.13.5] - 2026-05-22
 
 ### Changed
