@@ -317,11 +317,26 @@ async function checkAutoUpdates(): Promise<AutoUpdateStatus> {
   // RHEL/Rocky/Alma: dnf-automatic
   const dnfAuto = await run("bash", ["-c", "rpm -q dnf-automatic 2>/dev/null"], 5000);
   if (dnfAuto && !dnfAuto.includes("not installed")) {
-    const timerActive = await run("bash", ["-c", "systemctl is-enabled dnf-automatic-install.timer 2>/dev/null || systemctl is-enabled dnf-automatic.timer 2>/dev/null"], 5000);
-    if (timerActive && timerActive.includes("enabled")) {
-      return { configured: true, mechanism: "dnf-automatic", details: "Installed and timer enabled" };
+    // Two timers ship with dnf-automatic and they are NOT equivalent:
+    //   - dnf-automatic-install.timer applies updates unconditionally.
+    //   - dnf-automatic.timer (legacy) and dnf-automatic-download.timer
+    //     respect /etc/dnf/automatic.conf: they only apply when
+    //     apply_updates = yes; otherwise they download-only and nothing
+    //     is ever installed.
+    // The old code accepted either timer as "configured", so a
+    // download-only host reported configured:true, which suppressed
+    // pending_security_updates while Critical patches sat unapplied.
+    const installTimer = (await run("bash", ["-c", "systemctl is-enabled dnf-automatic-install.timer 2>/dev/null"], 5000))?.includes("enabled") ?? false;
+    const legacyTimer = (await run("bash", ["-c", "systemctl is-enabled dnf-automatic.timer dnf-automatic-download.timer 2>/dev/null"], 5000))?.includes("enabled") ?? false;
+    const applyYes = ((await run("bash", ["-c", "grep -E '^[[:space:]]*apply_updates[[:space:]]*=[[:space:]]*yes' /etc/dnf/automatic.conf 2>/dev/null"], 5000))?.trim().length ?? 0) > 0;
+
+    if (installTimer || (legacyTimer && applyYes)) {
+      return { configured: true, mechanism: "dnf-automatic", details: "Installed and configured to apply updates" };
     }
-    return { configured: false, mechanism: "dnf-automatic", details: "Installed but timer not enabled" };
+    if (legacyTimer && !applyYes) {
+      return { configured: false, mechanism: "dnf-automatic", details: "Timer enabled but download-only (apply_updates not yes); patches are downloaded but never applied" };
+    }
+    return { configured: false, mechanism: "dnf-automatic", details: "Installed but no installing timer enabled" };
   }
 
   return { configured: false, mechanism: "none", details: "No automatic security update mechanism detected" };

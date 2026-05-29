@@ -100,3 +100,72 @@ describe("collectSecurity cache shape (0.9.3 fix)", () => {
     expect(callsAfter).toBeGreaterThan(callsBefore);
   });
 });
+
+// R-P2-RHEL-1 (val-fleet campaign 2026-05-22): the RHEL dnf-automatic
+// path used to treat ANY enabled timer as "configured: true", which
+// included the download-only timers (dnf-automatic.timer /
+// dnf-automatic-download.timer with apply_updates != yes). A
+// download-only host then suppressed pending_security_updates while
+// Critical patches sat unapplied (observed on h12sst: 26 pending,
+// some Critical). The fix requires either dnf-automatic-install.timer
+// (applies unconditionally) OR a legacy/download timer WITH
+// apply_updates = yes in /etc/dnf/automatic.conf.
+describe("checkAutoUpdates dnf-automatic apply-vs-download (R-P2-RHEL-1)", () => {
+  // Helper: route the shell mock so the Debian path is absent (no
+  // unattended-upgrades) and dnf-automatic is installed, then let the
+  // caller decide which timers/config to report.
+  function dnfHost(opts: {
+    installTimer?: boolean;
+    legacyTimer?: boolean;
+    applyYes?: boolean;
+  }) {
+    return (...args: any[]) => {
+      const cmd = String((args[1] as string[])?.join(" ") ?? "");
+      // Debian path: not installed
+      if (cmd.includes("dpkg -l unattended-upgrades")) return Promise.resolve(null);
+      // dnf-automatic installed
+      if (cmd.includes("rpm -q dnf-automatic")) return Promise.resolve("dnf-automatic-1.0.0-1.el9.noarch");
+      // install timer
+      if (cmd.includes("is-enabled dnf-automatic-install.timer")) {
+        return Promise.resolve(opts.installTimer ? "enabled" : "disabled");
+      }
+      // legacy/download timer (single is-enabled call with both unit names)
+      if (cmd.includes("is-enabled dnf-automatic.timer dnf-automatic-download.timer")) {
+        return Promise.resolve(opts.legacyTimer ? "enabled\ndisabled" : "disabled\ndisabled");
+      }
+      // apply_updates grep
+      if (cmd.includes("apply_updates")) {
+        return Promise.resolve(opts.applyYes ? "apply_updates = yes" : "");
+      }
+      return Promise.resolve(null);
+    };
+  }
+
+  it("install.timer enabled => configured: true regardless of apply_updates", async () => {
+    runMock.mockImplementation(dnfHost({ installTimer: true, legacyTimer: false, applyYes: false }));
+    const r = await collectSecurity();
+    expect(r.auto_updates.mechanism).toBe("dnf-automatic");
+    expect(r.auto_updates.configured).toBe(true);
+  });
+
+  it("legacy/download timer enabled but apply_updates != yes => configured: false (download-only)", async () => {
+    runMock.mockImplementation(dnfHost({ installTimer: false, legacyTimer: true, applyYes: false }));
+    const r = await collectSecurity();
+    expect(r.auto_updates.mechanism).toBe("dnf-automatic");
+    expect(r.auto_updates.configured).toBe(false);
+    expect(r.auto_updates.details).toMatch(/download-only/i);
+  });
+
+  it("legacy timer enabled WITH apply_updates = yes => configured: true", async () => {
+    runMock.mockImplementation(dnfHost({ installTimer: false, legacyTimer: true, applyYes: true }));
+    const r = await collectSecurity();
+    expect(r.auto_updates.configured).toBe(true);
+  });
+
+  it("dnf-automatic installed but no timer enabled => configured: false", async () => {
+    runMock.mockImplementation(dnfHost({ installTimer: false, legacyTimer: false, applyYes: false }));
+    const r = await collectSecurity();
+    expect(r.auto_updates.configured).toBe(false);
+    expect(r.auto_updates.details).toMatch(/no installing timer/i);
+  });
+});
