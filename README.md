@@ -8,7 +8,7 @@ Lightweight bare-metal server monitoring agent. Collects hardware and OS health 
 
 Open source. MIT licensed. Built by [Glassmkr](https://glassmkr.com). Crucible is the open-source product; the optional [Glassmkr Dashboard](https://app.glassmkr.com) is a hosted SaaS that consumes Crucible's snapshots.
 
-**Resource usage:** median ~91 MB RSS at idle (validation-fleet measurement 2026-05-21 across 7 hosts, 3 vendors, 4 OS families; range 65 to 103 MB peak; varies primarily with disk count and IPMI sensor count). Effectively 0% CPU at the default 60-second snapshot interval. Random-read I/O throughput delta under 1.5% under fio saturation (no measurable impact on customer workloads). The full measurement campaign lives at [`docs/measurements/2026-05-19/`](docs/measurements/2026-05-19/).
+**Resource usage:** under 1% of host RAM on every host we tested. Crucible 0.13.6 measured across all 10 validation hosts at steady state shows a median 108 MB RSS (range 81 to 116 MB; varies primarily with the bundled Node version). Effectively 0% CPU at the default 60-second snapshot interval. Random-read I/O throughput delta under 1.5% under fio saturation (no measurable impact on customer workloads).
 
 **Security:** See [glassmkr.com/trust](https://glassmkr.com/trust) for the full list of what Crucible does and does not collect.
 
