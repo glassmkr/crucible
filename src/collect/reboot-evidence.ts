@@ -26,20 +26,16 @@
 
 import { existsSync, readdirSync, statSync } from "node:fs";
 import { run } from "../lib/exec.js";
+import { readDirSafe } from "../lib/parse.js";
 import type { RebootEvidence } from "../lib/types.js";
 
 const PSTORE_PATH = "/sys/fs/pstore";
 const VAR_CRASH_PATH = "/var/crash";
 
 function pstoreRecords(): string[] {
-  try {
-    const entries = readdirSync(PSTORE_PATH);
-    return entries.filter(
-      (n) => n.startsWith("dmesg-") || n.startsWith("console-") || n.startsWith("ftrace-"),
-    );
-  } catch {
-    return [];
-  }
+  return readDirSafe(PSTORE_PATH).filter(
+    (n) => n.startsWith("dmesg-") || n.startsWith("console-") || n.startsWith("ftrace-"),
+  );
 }
 
 function vmcorePresent(): boolean {

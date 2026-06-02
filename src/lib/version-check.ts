@@ -1,12 +1,7 @@
 import { CRUCIBLE_VERSION as CURRENT_VERSION } from "./version.js";
 
 let lastCheckTime = 0;
-let lastResult: { updateAvailable: boolean; latest: string; changelog: string } | null = null;
 const CHECK_INTERVAL = 6 * 60 * 60 * 1000; // check every 6 hours
-
-export function getCurrentVersion(): string {
-  return CURRENT_VERSION;
-}
 
 export async function checkForUpdates(dashboardUrl?: string): Promise<void> {
   const now = Date.now();
@@ -25,15 +20,8 @@ export async function checkForUpdates(dashboardUrl?: string): Promise<void> {
       console.log(`[update] New Crucible version available: ${latest} (current: ${CURRENT_VERSION})`);
       console.log(`[update] Changelog: ${data.crucible?.changelog_url || "https://github.com/glassmkr/crucible/releases"}`);
       console.log(`[update] Run: npm update -g @glassmkr/crucible && sudo systemctl restart glassmkr-crucible`);
-      lastResult = { updateAvailable: true, latest, changelog: data.crucible?.changelog_url || "" };
-    } else {
-      lastResult = { updateAvailable: false, latest, changelog: "" };
     }
   } catch {
     // Version check is non-critical, fail silently
   }
-}
-
-export function getUpdateStatus() {
-  return lastResult;
 }

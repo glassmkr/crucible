@@ -22,7 +22,7 @@
 
 import { existsSync } from "fs";
 
-import { run, runDetailed, looksLikeFieldRenameError } from "../lib/exec.js";
+import { run, runDetailed, looksLikeFieldRenameError, isUnitActive } from "../lib/exec.js";
 import type {
   Gpu,
   GpuSnapshot,
@@ -150,8 +150,7 @@ function findInPath(binary: string): string | null {
 
 async function isDcgmActive(): Promise<boolean> {
   // Prefer systemctl is-active; fall back to pgrep.
-  const sysctlOut = await run("systemctl", ["is-active", "nv-hostengine"], PROBE_TIMEOUT_MS);
-  if (sysctlOut && /^active\s*$/.test(sysctlOut.trim())) return true;
+  if (await isUnitActive("nv-hostengine", PROBE_TIMEOUT_MS)) return true;
   const pgrepOut = await run("pgrep", ["-f", "nv-hostengine"], PROBE_TIMEOUT_MS);
   return Boolean(pgrepOut && pgrepOut.trim().length > 0);
 }

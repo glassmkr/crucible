@@ -1,4 +1,4 @@
-import { run } from "../lib/exec.js";
+import { isUnitActive, run } from "../lib/exec.js";
 
 export interface NtpData {
   synced: boolean;
@@ -6,12 +6,6 @@ export interface NtpData {
   source: string;
   daemon_running: boolean;
   daemon_name: string;
-}
-
-// Check whether a systemd unit is active. Returns false for missing units, not-found, etc.
-async function isUnitActive(unit: string): Promise<boolean> {
-  const out = await run("systemctl", ["is-active", unit], 3000);
-  return out?.trim() === "active";
 }
 
 // Detect which time-sync daemon unit is currently active on the host, if any.

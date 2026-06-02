@@ -1,17 +1,8 @@
-import { promises as fs } from "node:fs";
 import { join } from "node:path";
+import { readFileTrim } from "../lib/parse.js";
 import type { DmiInfo, Vendor } from "../lib/types.js";
 
 const DMI_ROOT = "/sys/class/dmi/id";
-
-async function readTrim(path: string): Promise<string | null> {
-  try {
-    const raw = await fs.readFile(path, "utf-8");
-    return raw.trim() || null;
-  } catch {
-    return null;
-  }
-}
 
 /**
  * Classify the contents of /sys/class/dmi/id/sys_vendor (and product_name
@@ -58,12 +49,12 @@ export function classifyVendor(rawVendor: string | null, productName: string | n
 }
 
 export async function collectDmi(root: string = DMI_ROOT): Promise<DmiInfo> {
-  const [rawVendor, productName, biosVersion, biosDate] = await Promise.all([
-    readTrim(join(root, "sys_vendor")),
-    readTrim(join(root, "product_name")),
-    readTrim(join(root, "bios_version")),
-    readTrim(join(root, "bios_date")),
-  ]);
+  // Empty-string contents are treated as absent (|| null), matching the
+  // previous private readTrim's `raw.trim() || null`.
+  const rawVendor = readFileTrim(join(root, "sys_vendor")) || null;
+  const productName = readFileTrim(join(root, "product_name")) || null;
+  const biosVersion = readFileTrim(join(root, "bios_version")) || null;
+  const biosDate = readFileTrim(join(root, "bios_date")) || null;
 
   if (!rawVendor && !productName && !biosVersion && !biosDate) {
     return {

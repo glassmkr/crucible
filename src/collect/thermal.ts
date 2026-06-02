@@ -1,6 +1,7 @@
 import { promises as fs } from "node:fs";
 import { join } from "node:path";
 import { isCpuChip } from "../lib/cpu-thermal-chips.js";
+import { readFileTrim } from "../lib/parse.js";
 import type { ThermalInfo, ThermalReading } from "../lib/types.js";
 
 const HWMON_ROOT = "/sys/class/hwmon";
@@ -13,15 +14,9 @@ const SKIP_CHIPS: ReadonlySet<string> = new Set([
   "nvme", // already covered by SMART
 ]);
 
-async function readTrim(path: string): Promise<string | null> {
-  try {
-    const raw = await fs.readFile(path, "utf-8");
-    return raw.trim();
-  } catch {
-    return null;
-  }
-}
-
+// listDir intentionally returns null (not []) on error so collectThermal
+// can distinguish "looked but empty" from "couldn't look at all" (see the
+// everLookedAt* logic below); readDirSafe's [] return would conflate them.
 async function listDir(path: string): Promise<string[] | null> {
   try {
     return await fs.readdir(path);
@@ -106,7 +101,7 @@ export async function collectFromHwmon(root: string = HWMON_ROOT): Promise<{ cpu
 
   for (const entry of entries) {
     const chipDir = join(root, entry);
-    const chipName = await readTrim(join(chipDir, "name"));
+    const chipName = readFileTrim(join(chipDir, "name"));
     if (!chipName) continue;
     if (SKIP_CHIPS.has(chipName)) continue;
 
@@ -125,7 +120,7 @@ export async function collectFromHwmon(root: string = HWMON_ROOT): Promise<{ cpu
 
     for (const inputFile of tempInputs) {
       const idx = inputFile.match(/^temp(\d+)_input$/)![1];
-      const valueRaw = await readTrim(join(chipDir, inputFile));
+      const valueRaw = readFileTrim(join(chipDir, inputFile));
       if (!valueRaw) continue;
       const millideg = parseInt(valueRaw, 10);
       if (!Number.isFinite(millideg)) continue;
@@ -133,7 +128,7 @@ export async function collectFromHwmon(root: string = HWMON_ROOT): Promise<{ cpu
       // Reject obviously bogus values (millideg out of range / sensor offline)
       if (celsius < -50 || celsius > 200) continue;
 
-      const labelFile = await readTrim(join(chipDir, `temp${idx}_label`));
+      const labelFile = readFileTrim(join(chipDir, `temp${idx}_label`));
       const label = labelFile ? `${chipName} ${labelFile}` : `${chipName} temp${idx}`;
       const reading: ThermalReading = {
         label,
@@ -178,8 +173,8 @@ export async function collectFromThermalZone(root: string = THERMAL_ZONE_ROOT): 
   for (const entry of entries) {
     if (!entry.startsWith("thermal_zone")) continue;
     const zoneDir = join(root, entry);
-    const type = await readTrim(join(zoneDir, "type"));
-    const tempRaw = await readTrim(join(zoneDir, "temp"));
+    const type = readFileTrim(join(zoneDir, "type"));
+    const tempRaw = readFileTrim(join(zoneDir, "temp"));
     if (!type || !tempRaw) continue;
     const millideg = parseInt(tempRaw, 10);
     if (!Number.isFinite(millideg)) continue;

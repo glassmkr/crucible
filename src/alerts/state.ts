@@ -86,7 +86,3 @@ function timeSince(isoDate: string): string {
   const days = Math.floor(hours / 24);
   return `${days} day(s)`;
 }
-
-export function getActiveAlerts(): string[] {
-  return Array.from(state.keys());
-}

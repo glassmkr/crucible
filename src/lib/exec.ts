@@ -49,6 +49,22 @@ export async function runDetailed(
   }
 }
 
+// Is `name` on PATH? Uses `which` (returns a path on stdout and exit 0
+// when found, exit 1 / nothing when not). Shared by the hardware-raid and
+// zfs collectors, which both gated CLI parsing on a `which` probe.
+export async function which(name: string, timeoutMs = 2000): Promise<boolean> {
+  const out = await run("which", [name], timeoutMs);
+  return !!(out && out.trim());
+}
+
+// Is a systemd unit active? `systemctl is-active <unit>` prints "active"
+// (and exits 0) when up, and a non-active state word otherwise. Shared by
+// the ntp daemon detector and the gpu DCGM probe.
+export async function isUnitActive(unit: string, timeoutMs = 3000): Promise<boolean> {
+  const out = await run("systemctl", ["is-active", unit], timeoutMs);
+  return out?.trim() === "active";
+}
+
 // Heuristic: does this stderr look like the "field/tag name not found"
 // pattern that nvidia-smi (and others) emit when a query field has
 // been renamed by a tool upgrade? Used by the gpu.ts collector's

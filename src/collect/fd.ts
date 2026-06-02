@@ -11,9 +11,9 @@
 // expensive read of limits + comm only for the top 50 consumers. Process-
 // disappeared races are tolerated silently (ENOENT swallowed).
 
-import { readdirSync, readFileSync } from "fs";
+import { readdirSync } from "fs";
 
-import { readProcFile } from "../lib/parse.js";
+import { readFileTrim, readProcFile } from "../lib/parse.js";
 
 export interface FileDescriptorData {
   allocated: number;
@@ -108,9 +108,9 @@ export function collectProcessFd(): ProcessFdSnapshot {
   // Expensive pass: read comm + limits for the candidates.
   const top_consumers: ProcessFdEntry[] = [];
   for (const { pid, fd_count } of candidates) {
-    const comm = safeReadTrimmed(`/proc/${pid}/comm`);
+    const comm = readFileTrim(`/proc/${pid}/comm`);
     if (comm === null) continue; // Process disappeared.
-    const limits = safeReadTrimmed(`/proc/${pid}/limits`);
+    const limits = readFileTrim(`/proc/${pid}/limits`);
     if (limits === null) continue;
     const parsed = parseOpenFilesLimit(limits);
     if (!parsed) continue; // Malformed limits; skip.
@@ -143,14 +143,6 @@ export function collectProcessFd(): ProcessFdSnapshot {
     total_processes_scanned: scanned,
     highest_percent_of_limit: highest,
   };
-}
-
-function safeReadTrimmed(path: string): string | null {
-  try {
-    return readFileSync(path, "utf-8").trim();
-  } catch {
-    return null;
-  }
 }
 
 function errCode(err: unknown): string {
