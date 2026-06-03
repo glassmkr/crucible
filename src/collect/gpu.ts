@@ -22,7 +22,8 @@
 
 import { existsSync } from "fs";
 
-import { run, runDetailed, looksLikeFieldRenameError } from "../lib/exec.js";
+import { run, runDetailed, looksLikeFieldRenameError, isUnitActive } from "../lib/exec.js";
+import { readDmesg, parseKernelLogTimestamp } from "../lib/dmesg.js";
 import type {
   Gpu,
   GpuSnapshot,
@@ -150,8 +151,7 @@ function findInPath(binary: string): string | null {
 
 async function isDcgmActive(): Promise<boolean> {
   // Prefer systemctl is-active; fall back to pgrep.
-  const sysctlOut = await run("systemctl", ["is-active", "nv-hostengine"], PROBE_TIMEOUT_MS);
-  if (sysctlOut && /^active\s*$/.test(sysctlOut.trim())) return true;
+  if (await isUnitActive("nv-hostengine", PROBE_TIMEOUT_MS)) return true;
   const pgrepOut = await run("pgrep", ["-f", "nv-hostengine"], PROBE_TIMEOUT_MS);
   return Boolean(pgrepOut && pgrepOut.trim().length > 0);
 }
@@ -431,13 +431,11 @@ export function parseNvLinkStatus(raw: string): NvLinkBasic[] {
 }
 
 async function collectXidEvents(): Promise<XidEvent[]> {
-  const out = await run("dmesg", ["--time-format=iso", "--no-pager"], NVIDIA_SMI_TIMEOUT_MS);
-  if (!out) {
-    // Fallback without --time-format flag (older kernels)
-    const fallback = await run("dmesg", ["--no-pager"], NVIDIA_SMI_TIMEOUT_MS);
-    if (!fallback) return [];
-    return parseXidEvents(fallback);
-  }
+  // Shared kernel-log read: `--time-format=iso` first, plain
+  // `--no-pager` fallback on older kernels. Uses the gpu collector's
+  // 5s nvidia-smi budget rather than run's default.
+  const out = await readDmesg({ timeoutMs: NVIDIA_SMI_TIMEOUT_MS });
+  if (!out) return [];
   return parseXidEvents(out);
 }
 
@@ -474,14 +472,10 @@ export function parseXidEvents(raw: string): XidEvent[] {
   return events;
 }
 
-function parseLineTimestamp(line: string): number | null {
-  const isoMatch = line.match(/^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:[,.]\d+)?(?:[+-]\d{2}:?\d{2}|Z)?)/);
-  if (isoMatch) {
-    const t = Date.parse(isoMatch[1].replace(",", "."));
-    return Number.isFinite(t) ? t : null;
-  }
-  return null;
-}
+// XID lines carry an ISO timestamp (the gpu dmesg read does not pass
+// --ctime). Delegated to the shared kernel-log parser; the parser's
+// extra ctime branch is simply never reached on this read path.
+const parseLineTimestamp = parseKernelLogTimestamp;
 
 // ---------------------------------------------------------------------------
 // Tier 2 (DCGM)

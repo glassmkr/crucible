@@ -87,7 +87,6 @@ function formatPrometheus(snap: Snapshot): string {
   if (snap.ipmi?.available) {
     for (const sensor of snap.ipmi.sensors) {
       if (typeof sensor.value === "number") {
-        const sensorName = sensor.name.replace(/[^a-zA-Z0-9_]/g, "_").toLowerCase();
         lines.push(`glassmkr_ipmi_sensor{sensor="${sensor.name}",unit="${sensor.unit}"} ${sensor.value}`);
       }
     }

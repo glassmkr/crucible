@@ -19,57 +19,31 @@
 // On hosts where EDAC is loaded but counters stay at zero, this
 // collector emits zero counters — that's the correct baseline.
 
-import { readdirSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
+import { readDirSafe, readFileInt, readFileTrim } from "../lib/parse.js";
 import type { EdacSnapshot, EdacDimm } from "../lib/types.js";
 
 const EDAC_ROOT = "/sys/devices/system/edac/mc";
 
-function readUint(path: string): number | null {
-  try {
-    const s = readFileSync(path, "utf8").trim();
-    if (!/^\d+$/.test(s)) return null;
-    return parseInt(s, 10);
-  } catch {
-    return null;
-  }
-}
-
-function readString(path: string): string | null {
-  try {
-    return readFileSync(path, "utf8").trim();
-  } catch {
-    return null;
-  }
-}
-
 function listMcDirs(): string[] {
-  try {
-    return readdirSync(EDAC_ROOT)
-      .filter((n) => /^mc\d+$/.test(n))
-      .map((n) => join(EDAC_ROOT, n));
-  } catch {
-    return [];
-  }
+  return readDirSafe(EDAC_ROOT)
+    .filter((n) => /^mc\d+$/.test(n))
+    .map((n) => join(EDAC_ROOT, n));
 }
 
 function listDimmDirs(mcPath: string): string[] {
-  try {
-    return readdirSync(mcPath)
-      .filter((n) => /^dimm\d+$/.test(n) || /^rank\d+$/.test(n))
-      .map((n) => join(mcPath, n));
-  } catch {
-    return [];
-  }
+  return readDirSafe(mcPath)
+    .filter((n) => /^dimm\d+$/.test(n) || /^rank\d+$/.test(n))
+    .map((n) => join(mcPath, n));
 }
 
 function collectDimm(dimmPath: string): EdacDimm | null {
-  const ce = readUint(join(dimmPath, "dimm_ce_count"));
-  const ue = readUint(join(dimmPath, "dimm_ue_count"));
+  const ce = readFileInt(join(dimmPath, "dimm_ce_count"));
+  const ue = readFileInt(join(dimmPath, "dimm_ue_count"));
   if (ce === null && ue === null) return null;
-  const label = readString(join(dimmPath, "dimm_label"));
-  const location = readString(join(dimmPath, "dimm_location"));
-  const sizeStr = readString(join(dimmPath, "size"));
+  const label = readFileTrim(join(dimmPath, "dimm_label"));
+  const location = readFileTrim(join(dimmPath, "dimm_location"));
+  const sizeStr = readFileTrim(join(dimmPath, "size"));
   const sizeMb = sizeStr && /^\d+$/.test(sizeStr) ? parseInt(sizeStr, 10) : null;
   return {
     label: label ?? "",
@@ -89,8 +63,8 @@ export function collectEdac(): EdacSnapshot | null {
   const dimms: EdacDimm[] = [];
 
   for (const mc of mcDirs) {
-    const ce = readUint(join(mc, "ce_count")) ?? 0;
-    const ue = readUint(join(mc, "ue_count")) ?? 0;
+    const ce = readFileInt(join(mc, "ce_count")) ?? 0;
+    const ue = readFileInt(join(mc, "ue_count")) ?? 0;
     totalCe += ce;
     totalUe += ue;
     for (const dimm of listDimmDirs(mc)) {

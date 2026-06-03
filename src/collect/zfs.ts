@@ -1,10 +1,9 @@
-import { run } from "../lib/exec.js";
+import { run, which } from "../lib/exec.js";
 import type { ZfsData, ZfsPool, ZfsVdev } from "../lib/types.js";
 
 export async function collectZfs(): Promise<ZfsData | null> {
   // Check if zpool is installed
-  const zpoolPath = await run("which", ["zpool"], 3000);
-  if (!zpoolPath || !zpoolPath.trim()) return null;
+  if (!(await which("zpool", 3000))) return null;
 
   const zpoolStatus = await run("zpool", ["status"], 10000);
   if (!zpoolStatus || !zpoolStatus.trim()) return null;

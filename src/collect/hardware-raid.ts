@@ -28,13 +28,8 @@
 //
 // The dashboard's mdadm path is unaffected by this module.
 
-import { run } from "../lib/exec.js";
+import { run, which } from "../lib/exec.js";
 import type { HardwareRaidSnapshot, HardwareRaidController } from "../lib/types.js";
-
-async function hasCli(name: string): Promise<boolean> {
-  const out = await run("which", [name], 2000);
-  return !!(out && out.trim());
-}
 
 async function scrapePerccli(): Promise<HardwareRaidController[]> {
   // perccli /c0 show all J — JSON output for controller 0.
@@ -132,10 +127,10 @@ async function scrapeArcconf(): Promise<HardwareRaidController[]> {
 }
 
 export async function collectHardwareRaid(): Promise<HardwareRaidSnapshot | null> {
-  const hasPerccli = await hasCli("perccli");
-  const hasStorcli = await hasCli("storcli");
-  const hasSsacli = await hasCli("ssacli");
-  const hasArcconf = await hasCli("arcconf");
+  const hasPerccli = await which("perccli");
+  const hasStorcli = await which("storcli");
+  const hasSsacli = await which("ssacli");
+  const hasArcconf = await which("arcconf");
 
   if (!hasPerccli && !hasStorcli && !hasSsacli && !hasArcconf) return null;
 

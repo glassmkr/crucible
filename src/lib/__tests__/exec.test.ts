@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { run, runDetailed, looksLikeFieldRenameError } from "../exec.js";
+import { run, runDetailed, looksLikeFieldRenameError, which, isUnitActive } from "../exec.js";
 
 describe("looksLikeFieldRenameError", () => {
   // Real-world fixtures from the two Crucible bugs that motivated this
@@ -101,5 +101,22 @@ describe("run (backwards-compat shim)", () => {
   it("returns stdout for a normal command", async () => {
     const out = await run("echo", ["hi"]);
     expect(out?.trim()).toBe("hi");
+  });
+});
+
+describe("which", () => {
+  it("returns true for a binary on PATH", async () => {
+    expect(await which("sh")).toBe(true);
+  });
+  it("returns false for a binary not on PATH", async () => {
+    expect(await which("definitely-not-a-real-binary-9j43k")).toBe(false);
+  });
+});
+
+describe("isUnitActive", () => {
+  // A unit that is not active (or a host without systemd, where the
+  // systemctl ENOENT path resolves to "not active") returns false.
+  it("returns false for a non-active / missing unit", async () => {
+    expect(await isUnitActive("crucible-nonexistent-9j43k.service")).toBe(false);
   });
 });

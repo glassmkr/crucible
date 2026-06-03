@@ -34,6 +34,7 @@
 
 import { readProcFile } from "../lib/parse.js";
 import { run } from "../lib/exec.js";
+import { readOsReleaseField } from "./system.js";
 import type { CveDistro, CveSeverity, CveSnapshot, KernelCve } from "../lib/types.js";
 
 export async function collectCve(): Promise<CveSnapshot> {
@@ -67,21 +68,29 @@ export async function collectCve(): Promise<CveSnapshot> {
 function detectDistro(): CveDistro {
   const raw = readProcFile("/etc/os-release");
   if (!raw) return "unknown";
-  for (const line of raw.split("\n")) {
-    if (line.startsWith("ID=")) {
-      const id = line.slice(3).trim().replace(/^"|"$/g, "").toLowerCase();
-      if (id === "ubuntu") return "ubuntu";
-      if (id === "debian") return "debian";
-      if (id === "rhel") return "rhel";
-      if (id === "fedora") return "fedora";
-      if (id === "rocky") return "rocky";
-      if (id === "almalinux" || id === "alma") return "alma";
-      if (id === "centos") return "centos";
-      if (id === "sles") return "sles";
-      if (id === "opensuse" || id === "opensuse-leap" || id === "opensuse-tumbleweed") {
-        return "opensuse";
-      }
-    }
+  return distroFromOsRelease(raw);
+}
+
+/**
+ * Map an /etc/os-release ID field to a CveDistro. ID extraction is
+ * delegated to system.ts's readOsReleaseField (the canonical reader,
+ * already lowercases) so all three Crucible distro consumers parse the
+ * ID line the same way; the family-mapping switch stays here because it
+ * is CVE-collection-specific.
+ */
+function distroFromOsRelease(raw: string): CveDistro {
+  const id = readOsReleaseField(raw, "ID");
+  if (id === undefined) return "unknown";
+  if (id === "ubuntu") return "ubuntu";
+  if (id === "debian") return "debian";
+  if (id === "rhel") return "rhel";
+  if (id === "fedora") return "fedora";
+  if (id === "rocky") return "rocky";
+  if (id === "almalinux" || id === "alma") return "alma";
+  if (id === "centos") return "centos";
+  if (id === "sles") return "sles";
+  if (id === "opensuse" || id === "opensuse-leap" || id === "opensuse-tumbleweed") {
+    return "opensuse";
   }
   return "unknown";
 }
@@ -330,5 +339,6 @@ function normaliseSeverity(raw: string): CveSeverity {
 
 export const __test_only = {
   detectDistro,
+  distroFromOsRelease,
   normaliseSeverity,
 };
