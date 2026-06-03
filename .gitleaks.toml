@@ -1,0 +1,14 @@
+# gitleaks config for the Crucible public repo.
+# Extends the upstream default ruleset and allowlists the synthetic
+# API-key fixtures used by the init format-validation tests
+# (src/__tests__/init.test.ts). These are deliberately fake constants
+# (sequential alphabet / repeating hex), not real credentials.
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Synthetic format-validation test keys (not real credentials)"
+regexes = [
+  '''gmk_cru_live_abcdefghijklmnopqrstuvwx_a1b2''',
+  '''col_abcdef0123456789abcdef0123456789ab''',
+]
