@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 Pre-1.0 convention: minor bumps may include breaking changes; we call them
 out under `### Breaking` so downstream consumers can audit.
 
+## [0.13.8] - 2026-06-03
+
+### Changed
+
+- **Internal collector refactor (no behavior change).** Extracted two
+  more shared helpers from per-collector boilerplate. A `RateTracker`
+  (the cumulative-counter to per-second-rate state machine, including
+  first-snapshot and counter-reset handling) now backs the conntrack and
+  softnet collectors; `parseEqualsKeyValue` and `parseColumnarStat` now
+  back the systemd-unit and TCP-stats parsers. The rate and parse logic
+  is unchanged: the extractions preserve the prior per-counter semantics
+  exactly, and collectors with materially different shapes (vmstat,
+  io-latency, PSI, base-16 and headerless network counters) were
+  deliberately left on their own logic. No change to the data collected,
+  the CLI, the config schema, or the snapshot payload sent to the
+  dashboard; a maintainability pass verified by the full test suite
+  (401 tests).
+
 ## [0.13.7] - 2026-06-03
 
 ### Changed
