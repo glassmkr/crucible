@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 Pre-1.0 convention: minor bumps may include breaking changes; we call them
 out under `### Breaking` so downstream consumers can audit.
 
+## [0.13.7] - 2026-06-03
+
+### Changed
+
+- **Internal collector refactor (no behavior change).** Deduplicated
+  repeated collector boilerplate into shared helpers: file reads
+  (`readFileTrim` / `readFileInt` / `readDirSafe`), CLI and systemd-unit
+  presence checks (`which` / `isUnitActive`), kernel-log reading plus
+  ISO/ctime timestamp parsing (`lib/dmesg`, now shared by the GPU XID
+  and dmesg-events collectors), and `/etc/os-release` ID parsing (the
+  CVE collector now uses the same canonical reader as the system
+  collector). Removed dead/unused exports. No change to the data
+  collected, the CLI, the config schema, or the snapshot payload sent to
+  the dashboard; this is a maintainability and footprint pass, verified
+  by the full test suite (379 tests).
+
 ## [0.13.6] - 2026-05-29
 
 ### Fixed
