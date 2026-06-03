@@ -27,7 +27,7 @@
 // v1 (each occurrence ships as a separate event for now). Dashboard's
 // side can collapse if needed via cross-snapshot library primitives.
 
-import { run } from "../lib/exec.js";
+import { readDmesg, parseKernelLogTimestamp } from "../lib/dmesg.js";
 import type { DmesgEventType, DmesgEventsSnapshot, DmesgStructuredEvent } from "../lib/types.js";
 
 const WINDOW_SECONDS = 3600;
@@ -126,10 +126,9 @@ export async function collectDmesgEvents(): Promise<DmesgEventsSnapshot> {
 
   // `--time-format=iso` for kernel 5.10+; older kernels ignore the
   // flag and produce relative-time output we tolerate downstream.
-  const out = await run("dmesg", ["--time-format=iso", "--no-pager", "--ctime"]).catch(() => null);
-  // Fall back without --time-format if first call fails (no privileges
-  // is more common than missing flag).
-  const dmesgOut = out ?? (await run("dmesg", ["--no-pager"]));
+  // readDmesg falls back to plain `--no-pager` when that call produces
+  // nothing (no privileges is more common than a missing flag).
+  const dmesgOut = await readDmesg({ extraIsoArgs: ["--ctime"] });
   if (!dmesgOut) {
     return empty(
       "dmesg not readable (CAP_SYSLOG missing or kernel.dmesg_restrict=1?)",
@@ -183,28 +182,11 @@ export function parseDmesgOutput(raw: string, cutoffMs: number): DmesgStructured
 }
 
 /**
- * Extract a unix-ms timestamp from a dmesg line. Two shapes:
- *   ISO:        "2026-05-19T12:34:56,789012+00:00 ..."  (--time-format=iso)
- *   ctime:      "[Mon May 19 12:34:56 2026] ..."       (--ctime)
- *
- * Relative-time format ("[12345.678]") returns null (no absolute
- * anchor available without `uptime`).
+ * Extract a unix-ms timestamp from a dmesg line. Thin re-export of the
+ * shared lib/dmesg parser, kept under the original name for callers and
+ * tests that import `parseDmesgTimestamp` directly.
  */
-export function parseDmesgTimestamp(line: string): number | null {
-  const isoMatch = line.match(/^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:[,.]\d+)?(?:[+-]\d{2}:?\d{2}|Z)?)/);
-  if (isoMatch) {
-    // Normalise the comma fractional separator to dot.
-    const iso = isoMatch[1].replace(",", ".");
-    const t = Date.parse(iso);
-    return Number.isFinite(t) ? t : null;
-  }
-  const ctimeMatch = line.match(/^\[([A-Z][a-z]{2}\s+[A-Z][a-z]{2}\s+\d+\s+\d{2}:\d{2}:\d{2}\s+\d{4})\]/);
-  if (ctimeMatch) {
-    const t = Date.parse(ctimeMatch[1]);
-    return Number.isFinite(t) ? t : null;
-  }
-  return null;
-}
+export const parseDmesgTimestamp = parseKernelLogTimestamp;
 
 export const __test_only = {
   parseDmesgOutput,
