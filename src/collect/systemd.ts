@@ -10,6 +10,7 @@
 // Per CC_SPEC_CRUCIBLE_C11_C18_FULL_BUNDLE_2026-05-19.md §1.1.
 
 import { run } from "../lib/exec.js";
+import { parseEqualsKeyValue } from "../lib/parse.js";
 
 export type SystemdUnitResult =
   | "success"
@@ -155,20 +156,21 @@ async function readUnitDetails(unit: string): Promise<SystemdFailedUnit> {
     "--property=Result,ActiveState,SubState,NRestarts",
   ]);
   if (!out) return fallback;
+  return parseUnitDetailsOutput(unit, out);
+}
 
-  const props: Record<string, string> = {};
-  for (const line of out.split("\n")) {
-    const eq = line.indexOf("=");
-    if (eq === -1) continue;
-    props[line.slice(0, eq).trim()] = line.slice(eq + 1).trim();
-  }
+/**
+ * Map a `systemctl show` `Key=Value` block to a SystemdFailedUnit.
+ * Pure: no I/O. Unrecognized Result values collapse to "unknown";
+ * a non-numeric NRestarts defaults to 0.
+ */
+function parseUnitDetailsOutput(unit: string, out: string): SystemdFailedUnit {
+  const props = parseEqualsKeyValue(out);
 
   const rawResult = props.Result ?? "";
   const result: SystemdUnitResult = (RESULT_VALUES as Set<string>).has(rawResult)
     ? (rawResult as SystemdUnitResult)
-    : rawResult.length > 0
-      ? "unknown"
-      : "unknown";
+    : "unknown";
 
   const nRestarts = Number.parseInt(props.NRestarts ?? "0", 10);
 
@@ -183,24 +185,5 @@ async function readUnitDetails(unit: string): Promise<SystemdFailedUnit> {
 
 export const __test_only = {
   RESULT_VALUES,
-  parseUnitDetailsOutput: (unit: string, out: string): SystemdFailedUnit => {
-    const props: Record<string, string> = {};
-    for (const line of out.split("\n")) {
-      const eq = line.indexOf("=");
-      if (eq === -1) continue;
-      props[line.slice(0, eq).trim()] = line.slice(eq + 1).trim();
-    }
-    const rawResult = props.Result ?? "";
-    const result: SystemdUnitResult = (RESULT_VALUES as Set<string>).has(rawResult)
-      ? (rawResult as SystemdUnitResult)
-      : "unknown";
-    const nRestarts = Number.parseInt(props.NRestarts ?? "0", 10);
-    return {
-      name: unit,
-      result,
-      active_state: props.ActiveState ?? "",
-      sub_state: props.SubState ?? "",
-      n_restarts: Number.isFinite(nRestarts) ? nRestarts : 0,
-    };
-  },
+  parseUnitDetailsOutput,
 };

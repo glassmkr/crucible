@@ -2,7 +2,15 @@ import { afterAll, beforeAll, describe, it, expect } from "vitest";
 import { mkdtempSync, rmSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
-import { parseKeyValue, parseKb, readDirSafe, readFileInt, readFileTrim } from "../parse.js";
+import {
+  parseColumnarStat,
+  parseEqualsKeyValue,
+  parseKeyValue,
+  parseKb,
+  readDirSafe,
+  readFileInt,
+  readFileTrim,
+} from "../parse.js";
 
 describe("parseKeyValue", () => {
   it("parses colon-delimited key/value lines", () => {
@@ -14,6 +22,75 @@ describe("parseKeyValue", () => {
   });
   it("trims whitespace around keys and values", () => {
     expect(parseKeyValue("   A   :    1   \n")).toEqual({ A: "1" });
+  });
+});
+
+describe("parseEqualsKeyValue", () => {
+  it("parses equals-delimited key/value lines (systemctl show shape)", () => {
+    const out = parseEqualsKeyValue(
+      "Result=exit-code\nActiveState=failed\nSubState=failed\nNRestarts=2",
+    );
+    expect(out).toEqual({
+      Result: "exit-code",
+      ActiveState: "failed",
+      SubState: "failed",
+      NRestarts: "2",
+    });
+  });
+  it("ignores lines with no equals sign", () => {
+    expect(parseEqualsKeyValue("no equals here\nA=1\n")).toEqual({ A: "1" });
+  });
+  it("trims whitespace around keys and values", () => {
+    expect(parseEqualsKeyValue("   A   =    1   \n")).toEqual({ A: "1" });
+  });
+  it("splits on the first equals so values may contain equals", () => {
+    expect(parseEqualsKeyValue("ExecStart=/bin/sh -c x=1")).toEqual({
+      ExecStart: "/bin/sh -c x=1",
+    });
+  });
+  it("returns {} for empty input", () => {
+    expect(parseEqualsKeyValue("")).toEqual({});
+  });
+});
+
+describe("parseColumnarStat", () => {
+  // Shape of /proc/net/snmp's Tcp: section.
+  const snmp =
+    "Tcp: RtoAlgorithm RtoMin InSegs OutSegs RetransSegs\n" +
+    "Tcp: 1 200 9876543 8765432 1234\n";
+
+  it("extracts requested columns from the header+value rows", () => {
+    expect(parseColumnarStat(snmp, "Tcp:", ["InSegs", "OutSegs", "RetransSegs"])).toEqual({
+      InSegs: 9876543,
+      OutSegs: 8765432,
+      RetransSegs: 1234,
+    });
+  });
+  it("ignores other prefixed sections in the same file", () => {
+    const mixed =
+      "Ip: Forwarding DefaultTTL\nIp: 1 64\n" + snmp + "Udp: InDatagrams\nUdp: 5\n";
+    expect(parseColumnarStat(mixed, "Tcp:", ["InSegs"])).toEqual({ InSegs: 9876543 });
+  });
+  it("returns null when the section is absent", () => {
+    expect(parseColumnarStat("Ip: Forwarding\nIp: 1\n", "Tcp:", ["InSegs"])).toBeNull();
+  });
+  it("returns null when only the header row is present (no value row)", () => {
+    expect(parseColumnarStat("Tcp: InSegs OutSegs\n", "Tcp:", ["InSegs"])).toBeNull();
+  });
+  it("returns null when a requested column is missing from the header", () => {
+    expect(parseColumnarStat(snmp, "Tcp:", ["InSegs", "Nope"])).toBeNull();
+  });
+  it("returns null when a requested value is non-numeric", () => {
+    const bad = "Tcp: InSegs OutSegs\nTcp: 100 notanumber\n";
+    expect(parseColumnarStat(bad, "Tcp:", ["OutSegs"])).toBeNull();
+  });
+  it("strips the prefix token before splitting (longer prefix)", () => {
+    const ext =
+      "TcpExt: ListenOverflows ListenDrops\nTcpExt: 7 3\n";
+    expect(parseColumnarStat(ext, "TcpExt:", ["ListenOverflows", "ListenDrops"])).toEqual({
+      ListenOverflows: 7,
+      ListenDrops: 3,
+    });
   });
 });
 

@@ -15,7 +15,7 @@
 // previous-counters Map, null rates on first snapshot, counter-reset
 // detection.
 
-import { readProcFile } from "../lib/parse.js";
+import { parseColumnarStat, readProcFile } from "../lib/parse.js";
 
 export interface TcpStatsSnapshot {
   available: boolean;
@@ -127,33 +127,13 @@ export function parseTcpSnmp(): {
 } | null {
   const raw = readProcFile("/proc/net/snmp");
   if (!raw) return null;
-  const lines = raw.split("\n");
-  let header: string[] | null = null;
-  for (let i = 0; i < lines.length; i++) {
-    if (!lines[i].startsWith("Tcp:")) continue;
-    const fields = lines[i].slice("Tcp:".length).trim().split(/\s+/);
-    if (!header) {
-      header = fields;
-      continue;
-    }
-    // This is the value row.
-    const inIdx = header.indexOf("InSegs");
-    const outIdx = header.indexOf("OutSegs");
-    const retIdx = header.indexOf("RetransSegs");
-    if (inIdx === -1 || outIdx === -1 || retIdx === -1) return null;
-    const inSegs = Number(fields[inIdx]);
-    const outSegs = Number(fields[outIdx]);
-    const retransSegs = Number(fields[retIdx]);
-    if (
-      !Number.isFinite(inSegs) ||
-      !Number.isFinite(outSegs) ||
-      !Number.isFinite(retransSegs)
-    ) {
-      return null;
-    }
-    return { out_segs: outSegs, retrans_segs: retransSegs, in_segs: inSegs };
-  }
-  return null;
+  const cols = parseColumnarStat(raw, "Tcp:", ["InSegs", "OutSegs", "RetransSegs"]);
+  if (!cols) return null;
+  return {
+    out_segs: cols.OutSegs,
+    retrans_segs: cols.RetransSegs,
+    in_segs: cols.InSegs,
+  };
 }
 
 /**
@@ -166,24 +146,12 @@ export function parseTcpExt(): {
 } | null {
   const raw = readProcFile("/proc/net/netstat");
   if (!raw) return null;
-  const lines = raw.split("\n");
-  let header: string[] | null = null;
-  for (let i = 0; i < lines.length; i++) {
-    if (!lines[i].startsWith("TcpExt:")) continue;
-    const fields = lines[i].slice("TcpExt:".length).trim().split(/\s+/);
-    if (!header) {
-      header = fields;
-      continue;
-    }
-    const overflowsIdx = header.indexOf("ListenOverflows");
-    const dropsIdx = header.indexOf("ListenDrops");
-    if (overflowsIdx === -1 || dropsIdx === -1) return null;
-    const overflows = Number(fields[overflowsIdx]);
-    const drops = Number(fields[dropsIdx]);
-    if (!Number.isFinite(overflows) || !Number.isFinite(drops)) return null;
-    return { listen_overflows: overflows, listen_drops: drops };
-  }
-  return null;
+  const cols = parseColumnarStat(raw, "TcpExt:", ["ListenOverflows", "ListenDrops"]);
+  if (!cols) return null;
+  return {
+    listen_overflows: cols.ListenOverflows,
+    listen_drops: cols.ListenDrops,
+  };
 }
 
 export const __test_only = {
