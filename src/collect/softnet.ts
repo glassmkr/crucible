@@ -18,6 +18,7 @@
 // Per CC_SPEC_CRUCIBLE_C11_C18_FULL_BUNDLE_2026-05-19.md §1.4.
 
 import { readProcFile } from "../lib/parse.js";
+import { RateTracker } from "../lib/rate.js";
 
 export interface SoftnetSnapshot {
   available: boolean;
@@ -31,12 +32,7 @@ export interface SoftnetSnapshot {
   total_dropped_rate_per_sec: number | null;
 }
 
-interface CounterSnapshot {
-  totalDropped: number;
-  capturedAtMs: number;
-}
-
-let previous: CounterSnapshot | null = null;
+const rates = new RateTracker();
 
 const TIME_SQUEEZE_COL = 1;
 const DROPPED_COL = 2;
@@ -74,18 +70,10 @@ export function collectSoftnet(): SoftnetSnapshot {
     };
   }
 
-  const nowMs = Date.now();
-  let ratePerSec: number | null = null;
-  if (previous) {
-    const elapsedSec = (nowMs - previous.capturedAtMs) / 1000;
-    if (elapsedSec > 0) {
-      const delta = total - previous.totalDropped;
-      // Negative delta = counter reset (host reboot, etc.); leave rate
-      // null this tick and reset baseline.
-      if (delta >= 0) ratePerSec = delta / elapsedSec;
-    }
-  }
-  previous = { totalDropped: total, capturedAtMs: nowMs };
+  // Per-second drop rate; null on first snapshot or after a counter
+  // reset (host reboot, etc.). RateTracker owns the baseline + reset
+  // bookkeeping.
+  const ratePerSec = rates.computeRate("dropped", total, Date.now());
 
   return {
     available: true,
@@ -99,6 +87,6 @@ export const __test_only = {
   TIME_SQUEEZE_COL,
   DROPPED_COL,
   resetForTests: () => {
-    previous = null;
+    rates.reset();
   },
 };

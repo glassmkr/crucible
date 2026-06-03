@@ -8,6 +8,7 @@
 // Per CC_SPEC_CRUCIBLE_C7_C10_NETWORK_PROCESS_COLLECTION_2026-05-19.md §3.
 
 import { readProcFile } from "../lib/parse.js";
+import { RateTracker } from "../lib/rate.js";
 
 export interface ConntrackData {
   available: boolean;
@@ -24,13 +25,7 @@ export interface ConntrackData {
   drop_rate_per_sec?: number | null;
 }
 
-interface CounterSnapshot {
-  insert_failed: number;
-  drop: number;
-  capturedAtMs: number;
-}
-
-let previous: CounterSnapshot | null = null;
+const rates = new RateTracker();
 
 export function collectConntrack(): ConntrackData {
   const countRaw = readProcFile("/proc/sys/net/netfilter/nf_conntrack_count");
@@ -57,21 +52,14 @@ export function collectConntrack(): ConntrackData {
     return { available: true, count, max, percent };
   }
 
+  // Per-second rates over the most recent interval; null on first
+  // snapshot or after a counter reset (host reboot, container restart,
+  // rollover). One capture instant for both counters so their baselines
+  // advance together (matches the prior single-`previous`-snapshot
+  // bookkeeping). RateTracker owns the reset/first-snapshot handling.
   const nowMs = Date.now();
-  let insertRate: number | null = null;
-  let dropRate: number | null = null;
-  if (previous) {
-    const elapsedSec = (nowMs - previous.capturedAtMs) / 1000;
-    if (elapsedSec > 0) {
-      const insertDelta = stat.insert_failed - previous.insert_failed;
-      const dropDelta = stat.drop - previous.drop;
-      // Negative delta = counter reset (host reboot, container restart,
-      // or rollover). Treat as a fresh baseline; rates null this tick.
-      if (insertDelta >= 0) insertRate = insertDelta / elapsedSec;
-      if (dropDelta >= 0) dropRate = dropDelta / elapsedSec;
-    }
-  }
-  previous = { ...stat, capturedAtMs: nowMs };
+  const insertRate = rates.computeRate("insert_failed", stat.insert_failed, nowMs);
+  const dropRate = rates.computeRate("drop", stat.drop, nowMs);
 
   return {
     available: true,
@@ -118,6 +106,6 @@ function parseConntrackStat(): { insert_failed: number; drop: number } | null {
 export const __test_only = {
   parseConntrackStat,
   resetForTests: () => {
-    previous = null;
+    rates.reset();
   },
 };
