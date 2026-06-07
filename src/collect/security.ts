@@ -328,7 +328,11 @@ async function checkAutoUpdates(): Promise<AutoUpdateStatus> {
     // pending_security_updates while Critical patches sat unapplied.
     const installTimer = (await run("bash", ["-c", "systemctl is-enabled dnf-automatic-install.timer 2>/dev/null"], 5000))?.includes("enabled") ?? false;
     const legacyTimer = (await run("bash", ["-c", "systemctl is-enabled dnf-automatic.timer dnf-automatic-download.timer 2>/dev/null"], 5000))?.includes("enabled") ?? false;
-    const applyYes = ((await run("bash", ["-c", "grep -E '^[[:space:]]*apply_updates[[:space:]]*=[[:space:]]*yes' /etc/dnf/automatic.conf 2>/dev/null"], 5000))?.trim().length ?? 0) > 0;
+    // apply_updates is parsed by Python configparser's getboolean: yes/true/on/1
+    // (case-insensitive) all mean "apply". Match the full affirmative set, and
+    // anchor the value so `apply_updates = yessir` or a trailing comment is
+    // handled correctly. (Codex review 2026-06-06.)
+    const applyYes = ((await run("bash", ["-c", "grep -Ei '^[[:space:]]*apply_updates[[:space:]]*=[[:space:]]*(yes|true|on|1)([[:space:]]|#|$)' /etc/dnf/automatic.conf 2>/dev/null"], 5000))?.trim().length ?? 0) > 0;
 
     if (installTimer || (legacyTimer && applyYes)) {
       return { configured: true, mechanism: "dnf-automatic", details: "Installed and configured to apply updates" };

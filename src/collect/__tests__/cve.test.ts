@@ -30,4 +30,10 @@ describe("cve distroFromOsRelease", () => {
     expect(distroFromOsRelease('PRETTY_NAME="Something"')).toBe("unknown");
     expect(distroFromOsRelease("ID=plan9")).toBe("unknown");
   });
+
+  it("tolerates non-spec whitespace and quote placement (Codex 2026-06-06 #27)", () => {
+    expect(distroFromOsRelease("ID=ubuntu  ")).toBe("ubuntu"); // trailing spaces
+    expect(distroFromOsRelease('ID="ubuntu" ')).toBe("ubuntu"); // space after closing quote
+    expect(distroFromOsRelease("ID=rocky\r\nVERSION_ID=9")).toBe("rocky"); // CRLF line ending
+  });
 });
