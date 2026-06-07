@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 Pre-1.0 convention: minor bumps may include breaking changes; we call them
 out under `### Breaking` so downstream consumers can audit.
 
+## [0.13.9] - 2026-06-07
+
+### Fixed
+
+- **dnf-automatic `apply_updates` detection** now matches the full Python
+  configparser affirmative set (`yes` / `true` / `on` / `1`, case-insensitive)
+  and anchors the value. A host configured with e.g. `apply_updates = True` is
+  now correctly read as "applies updates", and `apply_updates = yessir` no
+  longer matches. Previously only a case-sensitive, unanchored `yes` matched.
+  RHEL / Fedora family only; no effect on Debian / Ubuntu hosts.
+- **`/etc/os-release` parsing** tolerates non-spec lines (trailing whitespace,
+  a space after the closing quote, CRLF endings): the distro id is trimmed and
+  unquoted so it resolves to the right family instead of falling through to
+  "unknown". Well-formed os-release files are unaffected.
+
 ## [0.13.8] - 2026-06-03
 
 ### Changed
