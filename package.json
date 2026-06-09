@@ -3,6 +3,9 @@
   "version": "0.13.9",
   "description": "Lightweight bare metal server monitoring. IPMI, SMART, OS, network. Opinionated alerts.",
   "type": "module",
+  "engines": {
+    "node": ">=24"
+  },
   "main": "./dist/index.js",
   "exports": {
     ".": "./dist/index.js",
