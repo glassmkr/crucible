@@ -274,7 +274,7 @@ Dashboard evaluates 61 alert rules server-side across 9 categories (storage, zfs
 ## Requirements
 
 - Linux (any distribution: Ubuntu, Debian, RHEL, Rocky, Alma, Arch, Alpine)
-- Node.js 18+
+- Node.js 24+
 - Root access (for SMART, IPMI, dmesg, and `/proc` access)
 - Optional: `smartmontools` for SMART data, `ipmitool` for IPMI data, `zfsutils-linux` for ZFS pools
 
