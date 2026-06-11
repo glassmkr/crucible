@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 
+import { existsSync } from "node:fs";
 import { parseCliArgs, resolveConfigPathWithLegacyFallback } from "./cli.js";
 import { CRUCIBLE_VERSION as PKG_VERSION } from "./lib/version.js";
 
@@ -131,6 +132,14 @@ console.log(`[collector] Starting. Server: ${config.server_name}. Interval: ${co
 console.log(`[collector] IPMI: ${config.collection.ipmi ? "enabled" : "disabled"}, SMART: ${config.collection.smart ? "enabled" : "disabled"}`);
 console.log(`[collector] Dashboard: ${config.dashboard.enabled ? config.dashboard.url : "disabled"}`);
 console.log(`[collector] Prometheus: ${config.prometheus.enabled ? `:${config.prometheus.port}/metrics` : "disabled"}`);
+
+// /proc/pressure is absent on kernels < 4.20, built without CONFIG_PSI, or
+// shipping PSI default-disabled (CONFIG_PSI_DEFAULT_DISABLED=y; stock
+// RHEL/CentOS/Alma/Rocky). The pressure alert rules can never fire then,
+// so say it once at startup instead of omitting the data silently forever.
+if (!existsSync("/proc/pressure")) {
+  console.log("[collector] PSI: unavailable (/proc/pressure missing); cpu/memory/io pressure alerts will not fire. RHEL-family kernels ship PSI disabled by default; boot with psi=1 to enable.");
+}
 
 // Start Prometheus metrics server if enabled
 if (config.prometheus.enabled) {

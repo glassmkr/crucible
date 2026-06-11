@@ -7,6 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 Pre-1.0 convention: minor bumps may include breaking changes; we call them
 out under `### Breaking` so downstream consumers can audit.
 
+## [Unreleased]
+
+### Added
+
+- **PSI availability notice at startup.** When `/proc/pressure` is missing the
+  agent now logs that cpu/memory/io pressure alerts cannot fire and how to
+  enable PSI (`psi=1` boot parameter). Stock RHEL-family kernels (CentOS,
+  Alma, Rocky, RHEL) ship PSI compiled in but disabled by default; previously
+  the agent just omitted the data silently, so the gap was invisible.
+
+### Fixed
+
+- **Docker quickstart pulls from Docker Hub.** `docker-compose.yml` now
+  references `docker.io/glassmkr/crucible:latest`. The previous default,
+  `ghcr.io/glassmkr/crucible`, requires authentication to pull, so the
+  documented anonymous `docker compose up` failed with `denied`.
+- **Removed dead `HOST_PROC` / `HOST_SYS` plumbing from the compose file.**
+  The agent never read those variables or the `/host/proc`, `/host/sys`
+  mounts; it reads `/proc` and `/sys` at their normal paths, which already
+  expose the host kernel's state in a privileged host-network container.
+
 ## [0.13.9] - 2026-06-07
 
 ### Fixed
