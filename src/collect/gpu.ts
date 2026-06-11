@@ -448,7 +448,7 @@ export function parseXidEvents(raw: string): XidEvent[] {
       /NRM(?:: )?Xid \(PCI:([\da-fA-F:.]+)\):\s*(\d+)(?:,)?\s*(.*)$/,
     ) || line.match(/NVRM: Xid \(PCI:([\da-fA-F:.]+)\):\s*(\d+)(?:,)?\s*(.*)$/);
     if (!m) continue;
-    const [, bdf, codeStr, rest] = m;
+    const [, bdf, codeStr] = m;
     const code = Number.parseInt(codeStr, 10);
     if (!Number.isFinite(code)) continue;
     const ts = parseLineTimestamp(line);

@@ -1,5 +1,4 @@
 import { run } from "../lib/exec.js";
-import { readProcFile } from "../lib/parse.js";
 import { readdirSync, readFileSync } from "fs";
 import type { OsAlerts } from "../lib/types.js";
 

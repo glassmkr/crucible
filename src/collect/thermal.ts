@@ -86,12 +86,6 @@ function pickAmdCpuReading(readings: ThermalReading[]): { cpu: ThermalReading | 
   return { cpu: readings[0], other: readings.slice(1) };
 }
 
-interface RawHwmonReading {
-  chip: string;
-  label: string;
-  value_celsius: number;
-}
-
 export async function collectFromHwmon(root: string = HWMON_ROOT): Promise<{ cpu: ThermalReading[]; other: ThermalReading[] } | null> {
   const entries = await listDir(root);
   if (!entries) return null;

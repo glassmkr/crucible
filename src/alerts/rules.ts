@@ -393,7 +393,7 @@ export const allRules: AlertRule[] = [
       recommendation: 'Enable a firewall: "sudo ufw enable" (Debian/Ubuntu) or "sudo systemctl start firewalld" (RHEL/Rocky).' }];
   }},
   // 23. Pending security updates
-  { type: "pending_security_updates", evaluate(snap, t) {
+  { type: "pending_security_updates", evaluate(snap) {
     if (!snap.security?.pending_updates?.available) return [];
     const maxPending = 10;
     if (snap.security.pending_updates.pendingCount <= maxPending) return [];

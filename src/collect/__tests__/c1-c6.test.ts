@@ -7,7 +7,7 @@
 // capability-gate behavior (collectors return null on hosts where the
 // surface is absent).
 
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, beforeEach } from "vitest";
 import { __test_only as psiTest } from "../psi.js";
 import { __test_only as vmstatTest, collectVmstat } from "../vmstat.js";
 import { parseZpoolStatus } from "../zfs.js";
