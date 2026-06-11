@@ -19,6 +19,16 @@ out under `### Breaking` so downstream consumers can audit.
 
 ### Fixed
 
+- **Server IP no longer shows the BMC's USB NIC.** The primary IP was the
+  first `hostname -I` token; on Supermicro boards the BMC's virtual USB
+  interface (usb0, APIPA 169.254.x) often enumerates first, so the
+  dashboard and every notification showed 169.254.x as the server's
+  address. The agent now prefers the first global-scope address and only
+  falls back to link-local/loopback when nothing else exists.
+- **Removed a dead 5-minute SEL filter stub.** `collectSelEvents` declared
+  (but never applied) a five-minute recency cutoff; the real contract is
+  "last 20 SEL events regardless of age, dashboard applies the window."
+  No behavior change; the misleading comment is gone.
 - **Docker quickstart pulls from Docker Hub.** `docker-compose.yml` now
   references `docker.io/glassmkr/crucible:latest`. The previous default,
   `ghcr.io/glassmkr/crucible`, requires authentication to pull, so the

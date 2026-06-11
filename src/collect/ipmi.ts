@@ -212,7 +212,6 @@ async function collectSelEvents(): Promise<SelEvent[]> {
 
   const events: SelEvent[] = [];
   const lines = output.trim().split("\n");
-  const fiveMinAgo = new Date(Date.now() - 5 * 60 * 1000);
 
   for (const line of lines) {
     const parts = line.split("|").map((s) => s.trim());
@@ -221,11 +220,13 @@ async function collectSelEvents(): Promise<SelEvent[]> {
     const [idStr, date, time, sensor, event, direction] = parts;
 
     const timestamp = parseSelTimestamp(date, time);
-    const tsDate = new Date(timestamp);
 
-    // Only include events from the last 5 minutes on subsequent runs
-    // On first run this will include everything (fiveMinAgo is always recent)
-    // We keep last 20 events max regardless
+    // Contract: the agent reports the last 20 SEL events regardless of
+    // age, every snapshot. The dashboard applies the recency window
+    // (ipmi_sel_critical_window_days, default 30, per-server override)
+    // and the transient-pairing filter; a client-side age filter here
+    // would starve that window after an agent restart. (An unused
+    // 5-minute filter once sat here; it was never applied.)
     const sensorType = classifySensor(sensor);
     const severity = deriveSelSeverity(event, sensorType);
 
