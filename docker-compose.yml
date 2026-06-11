@@ -8,7 +8,9 @@
 # Why privileged + host network:
 # - privileged: true gives access to /dev/ipmi0 (IPMI sensors) and raw disk devices (SMART)
 # - network_mode: host lets the agent read the real host network interfaces and bond state
-# - /proc and /sys are mounted so the agent monitors the host, not the container
+# - the agent reads /proc and /sys at their normal paths; in a privileged
+#   host-network container these already expose the host kernel's state,
+#   so no remapping mounts are needed
 
 services:
   crucible:
@@ -19,10 +21,5 @@ services:
     network_mode: host
     volumes:
       - /etc/glassmkr:/etc/glassmkr:ro
-      - /proc:/host/proc:ro
-      - /sys:/host/sys:ro
       - /dev:/dev:ro
       - /run/dbus:/run/dbus:ro
-    environment:
-      - HOST_PROC=/host/proc
-      - HOST_SYS=/host/sys
