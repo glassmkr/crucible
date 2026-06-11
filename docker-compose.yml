@@ -12,7 +12,7 @@
 
 services:
   crucible:
-    image: ghcr.io/glassmkr/crucible:latest
+    image: docker.io/glassmkr/crucible:latest
     container_name: glassmkr-crucible
     restart: unless-stopped
     privileged: true
