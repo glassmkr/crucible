@@ -16,6 +16,23 @@ export function readOsReleaseField(osRelease: string, key: string): string | und
   return value ? value.toLowerCase() : undefined;
 }
 
+// `hostname -I` lists every configured address in interface-enumeration
+// order. On Supermicro boards the BMC's virtual USB NIC (usb0) often
+// enumerates ahead of the real uplink with an APIPA 169.254.x address, so
+// "first address" reported the BMC plumbing as the server's IP in the
+// dashboard and in every notification (seen on glassmkr-val-centos:
+// 169.254.3.1 instead of the real uplink address). Prefer the first
+// global-scope address; fall back to the first entry when nothing better
+// exists.
+export function pickPrimaryIp(hostnameIOutput: string): string {
+  const addrs = hostnameIOutput.trim().split(/\s+/).filter(Boolean);
+  if (addrs.length === 0) return "unknown";
+  const global = addrs.find(
+    (a) => !a.startsWith("169.254.") && !a.startsWith("127.") && !a.toLowerCase().startsWith("fe80")
+  );
+  return global ?? addrs[0];
+}
+
 export async function collectSystem(): Promise<SystemInfo> {
   const osRelease = readProcFile("/etc/os-release") || "";
   const osName = osRelease.match(/PRETTY_NAME="(.+?)"/)?.[1] || "Unknown";
@@ -32,7 +49,7 @@ export async function collectSystem(): Promise<SystemInfo> {
   const kernel = (await run("uname", ["-r"]))?.trim() || "unknown";
   const uptimeRaw = readProcFile("/proc/uptime") || "0";
   const uptimeSeconds = Math.floor(parseFloat(uptimeRaw.split(" ")[0]));
-  const ip = (await run("hostname", ["-I"]))?.trim().split(" ")[0] || "unknown";
+  const ip = pickPrimaryIp((await run("hostname", ["-I"])) || "");
 
   return {
     hostname: hostname(),
