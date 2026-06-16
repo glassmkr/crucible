@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 Pre-1.0 convention: minor bumps may include breaking changes; we call them
 out under `### Breaking` so downstream consumers can audit.
 
+## [Unreleased]
+
+### Added
+
+- **Drive serial number and firmware** are now collected per disk, parsed from
+  the smartctl JSON the agent already reads (SATA and NVMe). They appear in the
+  snapshot's SMART data so the dashboard can include them in hardware alerts and
+  provider / RMA workflows. Optional: the rare drive whose firmware omits them
+  is parsed as before. No new external calls.
+
 ## [0.13.10] - 2026-06-11
 
 ### Added

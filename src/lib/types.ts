@@ -634,6 +634,11 @@ export interface DiskInfo {
 export interface SmartInfo {
   device: string;
   model: string;
+  // Drive identity for hardware RMA / provider-ticket workflows. smartctl
+  // --json exposes both at the top level for SATA and NVMe; optional because
+  // the rare drive whose firmware omits them should not break the parse.
+  serial?: string;
+  firmware?: string;
   health: string;
   temperature_c?: number;
   percentage_used?: number;

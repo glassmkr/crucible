@@ -56,6 +56,33 @@ describe("parseSmartctlJson", () => {
     expect(info.health).toBe("PASSED");
   });
 
+  it("captures serial_number and firmware_version (SATA + NVMe)", () => {
+    const sata = parseSmartctlJson({
+      model_name: "CT500MX500SSD1",
+      serial_number: "2308E6A1B2C3",
+      firmware_version: "M3CR046",
+      smart_status: { passed: true },
+    }, "/dev/sdb");
+    expect(sata.serial).toBe("2308E6A1B2C3");
+    expect(sata.firmware).toBe("M3CR046");
+
+    const nvme = parseSmartctlJson({
+      model_name: "Samsung 980 PRO",
+      serial_number: "S5P2NG0R000001",
+      firmware_version: "5B2QGXA7",
+      smart_status: { passed: true },
+      nvme_smart_health_information_log: { percentage_used: 1 },
+    }, "/dev/nvme0n1");
+    expect(nvme.serial).toBe("S5P2NG0R000001");
+    expect(nvme.firmware).toBe("5B2QGXA7");
+  });
+
+  it("leaves serial and firmware undefined when smartctl omits them", () => {
+    const info = parseSmartctlJson({ model_name: "X", smart_status: { passed: true } }, "/dev/sda");
+    expect(info.serial).toBeUndefined();
+    expect(info.firmware).toBeUndefined();
+  });
+
   it("falls back to 'unknown' model when absent", () => {
     const info = parseSmartctlJson({ smart_status: { passed: true } }, "/dev/sdc");
     expect(info.model).toBe("unknown");
