@@ -35,6 +35,8 @@ export async function collectSmart(): Promise<SmartInfo[]> {
 export function parseSmartctlJson(data: Record<string, unknown> & {
   model_name?: string;
   model_family?: string;
+  serial_number?: string;
+  firmware_version?: string;
   smart_status?: { passed?: boolean };
   temperature?: { current?: number };
   power_on_time?: { hours?: number };
@@ -51,6 +53,8 @@ export function parseSmartctlJson(data: Record<string, unknown> & {
   const info: SmartInfo = {
     device,
     model: data.model_name || data.model_family || "unknown",
+    serial: data.serial_number,
+    firmware: data.firmware_version,
     health: data.smart_status?.passed ? "PASSED" : "FAILED",
     temperature_c: data.temperature?.current,
     power_on_hours: data.power_on_time?.hours,
