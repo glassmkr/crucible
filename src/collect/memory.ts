@@ -11,11 +11,13 @@ export async function collectMemory(): Promise<MemoryInfo> {
 
   const totalKb = parseKb(kv["MemTotal"]);
   const availableKb = parseKb(kv["MemAvailable"]);
+  const freeKb = parseKb(kv["MemFree"]);
   const swapTotalKb = parseKb(kv["SwapTotal"]);
   const swapFreeKb = parseKb(kv["SwapFree"]);
 
   const totalMb = Math.round(totalKb / 1024);
   const availableMb = Math.round(availableKb / 1024);
+  const freeMb = Math.round(freeKb / 1024);
   const usedMb = totalMb - availableMb;
   const swapTotalMb = Math.round(swapTotalKb / 1024);
   const swapUsedMb = Math.round((swapTotalKb - swapFreeKb) / 1024);
@@ -24,6 +26,7 @@ export async function collectMemory(): Promise<MemoryInfo> {
     total_mb: totalMb,
     used_mb: usedMb,
     available_mb: availableMb,
+    free_mb: freeMb,
     swap_total_mb: swapTotalMb,
     swap_used_mb: swapUsedMb,
   };
