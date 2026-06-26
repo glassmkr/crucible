@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 Pre-1.0 convention: minor bumps may include breaking changes; we call them
 out under `### Breaking` so downstream consumers can audit.
 
+## [0.13.12] - 2026-06-26
+
+### Added
+
+- **`memory.free_mb`** (MemFree from `/proc/meminfo`): the genuinely-unused
+  RAM, distinct from MemAvailable (which counts reclaimable page cache). Lets
+  the dashboard split a host's headroom into reclaimable cache vs truly free
+  in the memory breakdown. Additive and backward compatible; the existing
+  `used_mb` / `available_mb` semantics are unchanged.
+
 ## [0.13.11] - 2026-06-16
 
 ### Added

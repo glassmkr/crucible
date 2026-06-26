@@ -610,6 +610,10 @@ export interface MemoryInfo {
   total_mb: number;
   used_mb: number;
   available_mb: number;
+  /** MemFree from /proc/meminfo: truly-unused RAM (not counting reclaimable
+   *  page cache). Lets the dashboard split available headroom into
+   *  reclaimable cache vs genuinely free. Added Crucible 0.13.12. */
+  free_mb: number;
   swap_total_mb: number;
   swap_used_mb: number;
 }

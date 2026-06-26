@@ -21,7 +21,7 @@ function emptySnap(): Snapshot {
     timestamp: "2026-01-01T00:00:00Z",
     system: { hostname: "h", ip: "1.2.3.4", os: "linux", kernel: "6.0", uptime_seconds: 1000 },
     cpu: { user_percent: 0, system_percent: 0, iowait_percent: 0, idle_percent: 100, load_1m: 0, load_5m: 0, load_15m: 0 },
-    memory: { total_mb: 16384, used_mb: 1000, available_mb: 15000, swap_total_mb: 0, swap_used_mb: 0 },
+    memory: { total_mb: 16384, used_mb: 1000, available_mb: 15000, free_mb: 14000, swap_total_mb: 0, swap_used_mb: 0 },
     disks: [],
     smart: [],
     network: [],
