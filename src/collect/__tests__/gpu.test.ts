@@ -11,11 +11,53 @@ import { describe, expect, it } from "vitest";
 import {
   __test_only as gpuTest,
   collectGpu,
+  collectGpuDriverResilience,
+  hasNvidiaGpu,
+  moduleLoaded,
+  nouveauBlacklisted,
   parseNvidiaSmiCsvRow,
   parseNvLinkStatus,
   parseXidEvents,
   probeGpuCapabilities,
 } from "../gpu.js";
+
+describe("GPU driver resilience (nouveau reboot trap)", () => {
+  it("hasNvidiaGpu detects an NVIDIA display/3D-class PCI device", () => {
+    expect(hasNvidiaGpu([{ vendor: "0x10de\n", class: "0x030000\n" }])).toBe(true); // VGA
+    expect(hasNvidiaGpu([{ vendor: "0x10de", class: "0x030200" }])).toBe(true); // 3D controller
+  });
+  it("hasNvidiaGpu ignores non-NVIDIA and non-display NVIDIA devices", () => {
+    expect(hasNvidiaGpu([{ vendor: "0x8086", class: "0x030000" }])).toBe(false); // Intel VGA
+    expect(hasNvidiaGpu([{ vendor: "0x10de", class: "0x010802" }])).toBe(false); // NVIDIA NVMe, not a GPU
+    expect(hasNvidiaGpu([])).toBe(false);
+  });
+  it("moduleLoaded matches the base module at line start, not a submodule", () => {
+    const mods = "nvidia 12345 0 - Live 0x0\nnvidia_uvm 678 0 - Live 0x0\n";
+    expect(moduleLoaded(mods, "nvidia")).toBe(true);
+    expect(moduleLoaded(mods, "nouveau")).toBe(false);
+    expect(moduleLoaded("nvidia_uvm 678 0 - Live 0x0\n", "nvidia")).toBe(false);
+  });
+  it("nouveauBlacklisted counts only an uncommented blacklist directive", () => {
+    expect(nouveauBlacklisted(["blacklist nouveau\n"])).toBe(true);
+    expect(nouveauBlacklisted(["options nouveau modeset=0\n", "  blacklist nouveau"])).toBe(true);
+    expect(nouveauBlacklisted(["# blacklist nouveau\n"])).toBe(false);
+    expect(nouveauBlacklisted(["blacklist radeon\n"])).toBe(false);
+    expect(nouveauBlacklisted([])).toBe(false);
+  });
+  it("collectGpuDriverResilience returns the declared shape without throwing", () => {
+    const r = collectGpuDriverResilience();
+    expect(typeof r.nvidia_pci_present).toBe("boolean");
+    expect(typeof r.nvidia_module_loaded).toBe("boolean");
+    expect(typeof r.nouveau_module_loaded).toBe("boolean");
+    expect(typeof r.nouveau_blacklisted).toBe("boolean");
+    if (!r.nvidia_pci_present) {
+      // a non-NVIDIA dev host short-circuits the module/blacklist reads
+      expect(r.nvidia_module_loaded).toBe(false);
+      expect(r.nouveau_module_loaded).toBe(false);
+      expect(r.nouveau_blacklisted).toBe(false);
+    }
+  });
+});
 
 // ============================================================================
 // Detection probe + capability gating

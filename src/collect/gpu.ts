@@ -20,7 +20,7 @@
 // hosts without NVIDIA GPUs. The `which nvidia-smi` probe is the
 // gate; everything else short-circuits.
 
-import { existsSync } from "fs";
+import { existsSync, readFileSync, readdirSync } from "fs";
 
 import { run, runDetailed, looksLikeFieldRenameError, isUnitActive } from "../lib/exec.js";
 import { readDmesg, parseKernelLogTimestamp } from "../lib/dmesg.js";
@@ -28,6 +28,7 @@ import type {
   Gpu,
   GpuSnapshot,
   GpuCapabilities,
+  GpuDriverResilience,
   NvLinkBasic,
   Tier1Snapshot,
   Tier2Snapshot,
@@ -53,11 +54,16 @@ const XID_WARNING = new Set([8, 14, 22, 25, 32, 38, 39, 42, 44, 46, 60, 67]);
 
 export async function collectGpu(): Promise<GpuSnapshot> {
   const caps = await probeGpuCapabilities();
+  // Driver-resilience facts are collected regardless of nvidia-smi: the
+  // dangerous state (NVIDIA hardware present but the driver will not survive a
+  // reboot) is exactly the case where nvidia-smi is missing or broken.
+  const driver_resilience = collectGpuDriverResilience();
   if (!caps.nvidia_smi) {
     return {
       available: false,
       reason: "nvidia-smi not present (non-NVIDIA host or driver not installed)",
       capabilities: caps,
+      driver_resilience,
     };
   }
   const tier1 = await collectTier1();
@@ -68,7 +74,89 @@ export async function collectGpu(): Promise<GpuSnapshot> {
         reason: "DCGM not active (nv-hostengine service not running)",
       } as Tier2Snapshot | { available: false; reason: string });
   const tier3 = await collectTier3Stub(caps);
-  return { available: true, capabilities: caps, tier1, tier2, tier3 };
+  return { available: true, capabilities: caps, driver_resilience, tier1, tier2, tier3 };
+}
+
+// ---------------------------------------------------------------------------
+// Driver resilience (nouveau-vs-nvidia reboot safety)
+// ---------------------------------------------------------------------------
+//
+// The nouveau trap: if nouveau is not blacklisted, it binds the NVIDIA GPU
+// first on the next boot, the real nvidia driver cannot load, nvidia-smi fails,
+// and a Vast host silently de-lists. We can see this coming while the box is
+// still up: NVIDIA hardware is on the PCI bus, and either the nvidia module is
+// not loaded (already broken) or nouveau is not blacklisted (will break on the
+// next reboot). All reads are cheap and synchronous and never shell out, so
+// there is no nvidia-smi dependency and negligible cost on non-GPU hosts (the
+// PCI scan short-circuits the rest).
+
+// 0x03xx = display controller class (0x0300 VGA, 0x0302 3D). NVIDIA vendor id.
+const NVIDIA_PCI_VENDOR = "0x10de";
+
+// Pure: does this set of PCI devices include an NVIDIA display/3D controller?
+export function hasNvidiaGpu(devices: Array<{ vendor: string; class: string }>): boolean {
+  return devices.some(
+    (d) => d.vendor.trim().toLowerCase() === NVIDIA_PCI_VENDOR && /^0x03/.test(d.class.trim()),
+  );
+}
+
+// Pure: is a kernel module loaded, per /proc/modules text? Matches the module
+// name at the start of a line (the base `nvidia` module, not nvidia_uvm etc.).
+export function moduleLoaded(procModulesText: string, name: string): boolean {
+  return new RegExp(`^${name}\\s`, "m").test(procModulesText);
+}
+
+// Pure: is nouveau blacklisted in any modprobe.d file (uncommented directive)?
+export function nouveauBlacklisted(modprobeFileContents: string[]): boolean {
+  return modprobeFileContents.some((text) =>
+    text.split("\n").some((line) => /^\s*blacklist\s+nouveau\b/.test(line)),
+  );
+}
+
+function safeReadFile(path: string): string {
+  try {
+    return readFileSync(path, "utf8");
+  } catch {
+    return "";
+  }
+}
+
+export function collectGpuDriverResilience(): GpuDriverResilience {
+  let devices: Array<{ vendor: string; class: string }> = [];
+  try {
+    const base = "/sys/bus/pci/devices";
+    devices = readdirSync(base).map((dev) => ({
+      vendor: safeReadFile(`${base}/${dev}/vendor`),
+      class: safeReadFile(`${base}/${dev}/class`),
+    }));
+  } catch {
+    /* no PCI sysfs (non-Linux / container): treat as no NVIDIA GPU */
+  }
+  const nvidia_pci_present = hasNvidiaGpu(devices);
+  if (!nvidia_pci_present) {
+    return {
+      nvidia_pci_present: false,
+      nvidia_module_loaded: false,
+      nouveau_module_loaded: false,
+      nouveau_blacklisted: false,
+    };
+  }
+  const procModules = safeReadFile("/proc/modules");
+  let confTexts: string[] = [];
+  try {
+    const dir = "/etc/modprobe.d";
+    confTexts = readdirSync(dir)
+      .map((f) => safeReadFile(`${dir}/${f}`))
+      .filter(Boolean);
+  } catch {
+    /* no modprobe.d: leave empty (nouveau_blacklisted = false) */
+  }
+  return {
+    nvidia_pci_present: true,
+    nvidia_module_loaded: moduleLoaded(procModules, "nvidia"),
+    nouveau_module_loaded: moduleLoaded(procModules, "nouveau"),
+    nouveau_blacklisted: nouveauBlacklisted(confTexts),
+  };
 }
 
 // ---------------------------------------------------------------------------
