@@ -265,7 +265,14 @@ async function checkKernelReboot(): Promise<KernelRebootStatus | null> {
     // Filter to versioned images only (e.g. linux-image-6.8.0-107-generic),
     // excluding metapackages like linux-image-generic, linux-image-virtual.
     const installed = (await run("bash", ["-c", 'dpkg -l "linux-image-*" 2>/dev/null | grep "^ii" | awk \'{print $2}\' | grep "linux-image-[0-9]" | sed "s/linux-image-//" | sort -V | tail -1']))?.trim() || "unknown";
-    return { running, installed, needsReboot: true };
+    // /var/run/reboot-required fires for ANY package that wants a reboot
+    // (libc, systemd, dbus), not just the kernel. For kernel_needs_reboot the
+    // authoritative signal is whether a newer kernel is installed than the one
+    // running; if the running kernel is already the newest installed, this is
+    // a non-kernel reboot flag and the rule should not fire (fleet report rec
+    // #4 false positive). Only fall back to trusting the flag when we could
+    // not determine the installed kernel.
+    return { running, installed, needsReboot: installed === "unknown" ? true : installed !== running };
   }
 
   // Method 2: Compare packages (Debian/Ubuntu)
