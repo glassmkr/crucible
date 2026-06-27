@@ -7,6 +7,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 Pre-1.0 convention: minor bumps may include breaking changes; we call them
 out under `### Breaking` so downstream consumers can audit.
 
+## [0.13.13] - 2026-06-27
+
+### Added
+
+- **GPU driver-resilience facts** (`gpu.driver_resilience`): on a host with an
+  NVIDIA GPU, the agent now reports whether the `nvidia` kernel module is
+  loaded, whether `nouveau` is loaded, and whether `nouveau` is blacklisted.
+  These are collected from sysfs and `/proc/modules` even when `nvidia-smi` is
+  dead, which is exactly the dangerous case: if `nouveau` is not blacklisted it
+  binds the GPU first on the next reboot, the NVIDIA driver cannot load,
+  `nvidia-smi` fails, and a marketplace host silently de-lists itself. The
+  dashboard's new `gpu_driver_unsafe_reboot` rule consumes these facts to warn
+  before the reboot happens. Additive and backward compatible.
+
+### Fixed
+
+- **`kernel_needs_reboot` false positive on a non-kernel reboot flag**: the
+  Debian/Ubuntu reboot check trusted `/var/run/reboot-required` unconditionally,
+  but that flag is set by ANY package that wants a reboot (libc, systemd, dbus),
+  not just the kernel. A host whose running kernel was already the newest
+  installed could fire a spurious `kernel_needs_reboot`. The check now compares
+  the running kernel to the newest installed kernel (matching the other
+  detection methods) and only falls back to the flag when the installed kernel
+  cannot be determined.
+
 ## [0.13.12] - 2026-06-26
 
 ### Added
