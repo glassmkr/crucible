@@ -74,33 +74,40 @@ interface WtmpRebootRecord {
   prior_shutdown_clean: boolean;
 }
 
+/**
+ * Parse `last -x -F` output into the reboot record. Pure; exported for tests.
+ *
+ * The `-x` flag is essential: it surfaces the `shutdown` and `runlevel` system
+ * pseudo-records. Plain `last reboot` / `last shutdown` do NOT show the
+ * shutdown record on modern systemd + util-linux (verified on Ubuntu, 6.17
+ * kernels): `last shutdown` returns nothing even after a clean `sudo reboot`,
+ * which made prior_shutdown_clean false on EVERY clean reboot and escalated
+ * deliberate reboots to a critical "unclean-shutdown" alert (false positive).
+ *
+ * Output is most-recent-first. We keep only the `reboot`/`shutdown` system
+ * lines so interleaved `runlevel` and user-login records do not break
+ * adjacency. The most recent boot was clean iff a `shutdown` record sits
+ * immediately before it (the next system record). No shutdown before the boot
+ * means a hard reset / power loss / panic.
+ */
+export function parseWtmp(output: string): WtmpRebootRecord {
+  const sysLines = output
+    .split("\n")
+    .map((l) => l.trim())
+    .filter((l) => l.startsWith("reboot") || l.startsWith("shutdown"));
+  const lastReboot = sysLines[0]?.startsWith("reboot") ? sysLines[0] : null;
+  const prior_shutdown_clean =
+    sysLines[0]?.startsWith("reboot") === true &&
+    sysLines[1]?.startsWith("shutdown") === true;
+  return { last_reboot_raw: lastReboot, prior_shutdown_clean };
+}
+
 async function readWtmp(): Promise<WtmpRebootRecord> {
-  const output = await run("last", ["reboot", "-F"], 5000);
+  const output = await run("last", ["-x", "-F"], 5000);
   if (!output) {
     return { last_reboot_raw: null, prior_shutdown_clean: false };
   }
-  const lines = output.split("\n").filter((l) => l.trim().length > 0);
-  // The first non-empty line is the most recent reboot record.
-  const lastReboot = lines[0] ?? null;
-  // Look for a `shutdown` record between the most recent reboot and
-  // the second-most-recent reboot. `last -F` interleaves shutdown
-  // records when present; on a clean shutdown they sit immediately
-  // before the boot record.
-  const shutdownOutput = await run("last", ["shutdown", "-F"], 5000);
-  let priorShutdownClean = false;
-  if (shutdownOutput && lastReboot) {
-    // Extract a date marker from the lastReboot line; if any shutdown
-    // record predates this reboot by <= 5 minutes, treat as clean.
-    // Conservative: if any shutdown record exists in the wtmp at all,
-    // assume the most recent one was clean. Defensive against parsing
-    // glitches; refined by the dashboard evaluator.
-    const sLines = shutdownOutput.split("\n").filter((l) => l.trim().length > 0 && l.startsWith("shutdown"));
-    priorShutdownClean = sLines.length > 0;
-  }
-  return {
-    last_reboot_raw: lastReboot,
-    prior_shutdown_clean: priorShutdownClean,
-  };
+  return parseWtmp(output);
 }
 
 export async function collectRebootEvidence(): Promise<RebootEvidence> {
