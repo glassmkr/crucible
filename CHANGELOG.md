@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 Pre-1.0 convention: minor bumps may include breaking changes; we call them
 out under `### Breaking` so downstream consumers can audit.
 
+## [0.13.14] - 2026-06-27
+
+### Fixed
+
+- **Clean reboots are no longer misreported as unclean shutdowns.** The
+  reboot-evidence collector detected a clean shutdown by running
+  `last shutdown -F`, which returns nothing on modern systemd + util-linux
+  (verified on Ubuntu 6.17 kernels) even after a clean `sudo reboot`. So
+  `prior_shutdown_clean` was false on every clean reboot, and the dashboard's
+  `unexpected_reboot` rule escalated deliberate, planned reboots to a critical
+  "unclean shutdown" alert. The collector now reads `last -x -F` (the `-x` flag
+  surfaces the `shutdown` and `runlevel` system records) and treats a boot as
+  clean when a shutdown record sits immediately before it. Additive; no config
+  change.
+
 ## [0.13.13] - 2026-06-27
 
 ### Added
