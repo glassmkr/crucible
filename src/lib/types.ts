@@ -189,10 +189,24 @@ export interface Tier3Snapshot {
   gpu_module_status: Array<{ uuid: string; status: "ok" | "warning" | "critical" }>;
 }
 
+// Reboot-resilience of the GPU driver stack. Collected even when nvidia-smi is
+// absent or broken, because the dangerous state (nouveau bound, the real nvidia
+// module not loaded) is exactly when nvidia-smi fails. A host is reboot-safe
+// only when the nvidia module is loaded AND nouveau is blacklisted; otherwise
+// nouveau can win the boot race on the next reboot and the GPU does not come
+// back, silently de-listing a marketplace (Vast) host.
+export interface GpuDriverResilience {
+  nvidia_pci_present: boolean;    // an NVIDIA GPU (vendor 0x10de, display/3D class) is on the PCI bus
+  nvidia_module_loaded: boolean;  // the real `nvidia` kernel module is loaded
+  nouveau_module_loaded: boolean; // the open-source `nouveau` module is loaded (competes for the GPU)
+  nouveau_blacklisted: boolean;   // a `blacklist nouveau` directive exists in /etc/modprobe.d
+}
+
 export interface GpuSnapshot {
   available: boolean;
   reason?: string;
   capabilities: GpuCapabilities;
+  driver_resilience?: GpuDriverResilience;
   tier1?: Tier1Snapshot | { available: false; reason: string };
   tier2?: Tier2Snapshot | { available: false; reason: string };
   tier3?: Tier3Snapshot | { available: false; reason: string };
