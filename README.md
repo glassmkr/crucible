@@ -14,16 +14,16 @@ Open source. MIT licensed. Built by [Glassmkr](https://glassmkr.com). Crucible i
 
 ## Screenshots
 
-![Dashboard alert with copy-pasteable fix commands](https://glassmkr.com/screenshots/alerts.png)
+![Dashboard alert with copy-pasteable fix commands](https://glassmkr.com/screenshots/alerts.png?v=20260701)
 *A P1 alert showing the rule trigger, evidence, and the exact remediation
 commands. Each rule ships pre-written fix content; the agent does not write
 to your server.*
 
-![Storage and SMART drive health](https://glassmkr.com/screenshots/hardware.png)
+![Storage and SMART drive health](https://glassmkr.com/screenshots/hardware.png?v=20260701)
 *Per-mount capacity and per-disk SMART status. Drives are checked against
 SMART attributes, NVMe Critical Warning bits, and ZFS pool state.*
 
-![Server fleet overview](https://glassmkr.com/screenshots/overview.png)
+![Server fleet overview](https://glassmkr.com/screenshots/overview.png?v=20260701)
 *Fleet view with per-server status, distro, IP, and last-seen timestamp.
 Alerted servers surface a counter at a glance.*
 
