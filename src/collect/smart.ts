@@ -48,7 +48,7 @@ export function parseSmartctlJson(data: Record<string, unknown> & {
     available_spare?: number;
     available_spare_threshold?: number;
   };
-  ata_smart_attributes?: { table?: Array<{ id?: number; name?: string; raw?: { value?: number } }> };
+  ata_smart_attributes?: { table?: Array<{ id?: number; name?: string; value?: number; raw?: { value?: number } }> };
 }, device: string): SmartInfo {
   const info: SmartInfo = {
     device,
@@ -82,6 +82,18 @@ export function parseSmartctlJson(data: Record<string, unknown> & {
 
   // SATA specific
   if (data.ata_smart_attributes?.table) {
+    // SSD endurance/wear. Unlike NVMe (which has a dedicated percentage_used
+    // field), a SATA SSD reports wear through a vendor-specific attribute whose
+    // NORMALIZED value is "% life remaining" (100 = new, counts down toward the
+    // failure threshold). Convert the most-worn such attribute into
+    // percentage_used so a SATA SSD flows the SAME wear field NVMe does, which
+    // is what the dashboard wear rule + trend engine read. Without this a worn
+    // SATA SSD (e.g. a Crucial MX500 at 25% life remaining) is invisible to
+    // wear detection. Match by attribute NAME (authoritative, and disambiguates
+    // ID 231, which is wear on some drives and temperature on others) with a
+    // known-ID fallback (Micron/Crucial 202, Intel 233, Samsung 177, others
+    // 173/231); skip anything that looks like a temperature attribute.
+    let ssdWearUsedPct: number | null = null;
     for (const attr of data.ata_smart_attributes.table) {
       if (attr.id === 5 || attr.name === "Reallocated_Sector_Ct") {
         info.reallocated_sectors = attr.raw?.value || 0;
@@ -89,6 +101,22 @@ export function parseSmartctlJson(data: Record<string, unknown> & {
       if (attr.id === 197 || attr.name === "Current_Pending_Sector") {
         info.pending_sectors = attr.raw?.value || 0;
       }
+      const name = (attr.name || "").toLowerCase();
+      const isWearName = /wear.?level|wearout|life.?left|life.?time|percent.?life|ssd.?life|endurance/.test(name);
+      const isWearId = attr.id === 202 || attr.id === 233 || attr.id === 177 || attr.id === 173 || attr.id === 231;
+      const looksTemperature = name.includes("temp");
+      if ((isWearName || isWearId) && !looksTemperature && typeof attr.value === "number") {
+        // Normalized value is life remaining; used = 100 - remaining. Take the
+        // most-worn (highest used) across candidates: conservative for a
+        // plan-replacement signal.
+        const used = Math.min(100, Math.max(0, 100 - attr.value));
+        if (ssdWearUsedPct == null || used > ssdWearUsedPct) ssdWearUsedPct = used;
+      }
+    }
+    // Only fill percentage_used for a SATA drive; NVMe already set it from its
+    // own health log above.
+    if (ssdWearUsedPct != null && info.percentage_used == null) {
+      info.percentage_used = ssdWearUsedPct;
     }
   }
 

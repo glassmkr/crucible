@@ -92,4 +92,52 @@ describe("parseSmartctlJson", () => {
     const info = parseSmartctlJson({}, "/dev/sdd");
     expect(info.health).toBe("FAILED");
   });
+
+  it("derives percentage_used from a SATA SSD wear attribute (Crucial MX500 ID 202)", () => {
+    // Percent_Lifetime_Remain normalized value 25 = 25% life left = 75% used.
+    const info = parseSmartctlJson({
+      model_name: "CT500MX500SSD1",
+      smart_status: { passed: true },
+      ata_smart_attributes: {
+        table: [
+          { id: 5, name: "Reallocated_Sector_Ct", value: 100, raw: { value: 0 } },
+          { id: 202, name: "Percent_Lifetime_Remain", value: 25, raw: { value: 75 } },
+        ],
+      },
+    }, "/dev/sdb");
+    expect(info.percentage_used).toBe(75);
+    expect(info.reallocated_sectors).toBe(0);
+  });
+
+  it("reads a fresh SATA SSD wear attribute as 0% used", () => {
+    const info = parseSmartctlJson({
+      model_name: "Samsung SSD 870 EVO",
+      smart_status: { passed: true },
+      ata_smart_attributes: { table: [{ id: 177, name: "Wear_Leveling_Count", value: 100, raw: { value: 0 } }] },
+    }, "/dev/sda");
+    expect(info.percentage_used).toBe(0);
+  });
+
+  it("does not treat ID 231 Temperature as a wear attribute", () => {
+    const info = parseSmartctlJson({
+      model_name: "Some SSD",
+      smart_status: { passed: true },
+      ata_smart_attributes: { table: [{ id: 231, name: "Temperature_Celsius", value: 65, raw: { value: 35 } }] },
+    }, "/dev/sda");
+    expect(info.percentage_used).toBeUndefined();
+  });
+
+  it("takes the most-worn wear attribute when several are present", () => {
+    const info = parseSmartctlJson({
+      model_name: "Intel SSD",
+      smart_status: { passed: true },
+      ata_smart_attributes: {
+        table: [
+          { id: 233, name: "Media_Wearout_Indicator", value: 60, raw: { value: 40 } },
+          { id: 173, name: "Ave_Block-Erase_Count", value: 30, raw: { value: 70 } },
+        ],
+      },
+    }, "/dev/sda");
+    expect(info.percentage_used).toBe(70);
+  });
 });
