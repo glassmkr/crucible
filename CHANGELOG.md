@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 Pre-1.0 convention: minor bumps may include breaking changes; we call them
 out under `### Breaking` so downstream consumers can audit.
 
+## [0.13.15] - 2026-07-01
+
+### Added
+
+- **SATA SSD endurance/wear is now collected.** Previously `percentage_used` was
+  populated only from the NVMe health log, so a worn SATA SSD (for example a
+  Crucial MX500 at 25% life remaining) reported no wear at all and the dashboard
+  drive-wear rule could not see it. The SMART collector now reads a SATA SSD's
+  vendor-specific wear attribute (Micron/Crucial 202, Intel 233, Samsung 177,
+  others 173/231; normalized value = percent life remaining) and exposes it as
+  `percentage_used = 100 - normalized_value`, matched by attribute name with a
+  known-ID fallback and a temperature-attribute guard (ID 231 is wear on some
+  drives, temperature on others). NVMe wear reporting is unchanged. Pairs with
+  the dashboard drive-wear rule, which now covers SATA SSDs and adds a lower
+  "plan replacement" watch tier.
+
 ## [0.13.14] - 2026-06-27
 
 ### Fixed
