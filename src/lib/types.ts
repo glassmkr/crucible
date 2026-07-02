@@ -772,7 +772,7 @@ export type PsuRedundancyState = "fully_redundant" | "redundancy_lost" | "redund
 
 export type IpmiCapability =
   | { available: true; method: "ipmitool_in_band"; ipmitool_version: string | null }
-  | { available: false; reason: "no_ipmitool_binary" | "no_bmc_device" | "execution_failed" | "permission_denied"; detail?: string };
+  | { available: false; reason: "no_ipmitool_binary" | "no_bmc_device" | "execution_failed" | "permission_denied" | "ipmitool_cve_2020_5208"; detail?: string };
 
 export interface IpmiInfo {
   available: boolean;

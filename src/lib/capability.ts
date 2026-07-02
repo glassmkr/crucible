@@ -17,9 +17,37 @@ const execFileAsync = promisify(execFile);
 
 export type IpmiCapability =
   | { available: true; method: "ipmitool_in_band"; ipmitool_version: string | null }
-  | { available: false; reason: "no_ipmitool_binary" | "no_bmc_device" | "execution_failed" | "permission_denied"; detail?: string };
+  | { available: false; reason: "no_ipmitool_binary" | "no_bmc_device" | "execution_failed" | "permission_denied" | "ipmitool_cve_2020_5208"; detail?: string };
 
 const DEVICE_CANDIDATES = ["/dev/ipmi0", "/dev/ipmi/0", "/dev/ipmidev/0"];
+
+// CVE-2020-5208 (GHSA-g659-9qxw-p7cp): heap overflow in ipmitool's
+// read_fru_area_section and related parsers when handling data received
+// from a remote LAN party (a malicious or compromised BMC). Fixed in
+// ipmitool 1.8.19. The agent runs ipmitool in-band against the host BMC,
+// so a compromised BMC parsing path is a real local-blast-radius primitive
+// (audit §2.1 / catalog T-202). Below the fix version we mark IPMI
+// unavailable rather than feed BMC output to a vulnerable parser.
+export const MIN_SAFE_IPMITOOL_VERSION = "1.8.19";
+
+/**
+ * True iff `version` is a parseable ipmitool version strictly below
+ * MIN_SAFE_IPMITOOL_VERSION. Unknown/unparseable versions return false
+ * (we do not disable a capability we cannot positively identify as
+ * vulnerable). Pure; unit-tested.
+ */
+export function isIpmitoolVersionVulnerable(version: string | null): boolean {
+  if (!version) return false;
+  const min = [1, 8, 19];
+  const parts = version.split(/[.\-+]/).map((p) => parseInt(p, 10));
+  if (parts.length === 0 || Number.isNaN(parts[0])) return false; // unparseable
+  for (let i = 0; i < min.length; i++) {
+    const p = Number.isNaN(parts[i]) ? 0 : (parts[i] ?? 0);
+    if (p < min[i]) return true;
+    if (p > min[i]) return false;
+  }
+  return false; // equal or greater
+}
 
 interface DetectDeps {
   /** Override for tests. Returns "ok" | "enoent" | "eacces" per path. */
@@ -81,6 +109,19 @@ export async function detectIpmiCapability(deps: DetectDeps = {}): Promise<IpmiC
     };
   }
 
+  // Version gate (CVE-2020-5208): refuse to feed BMC output to a
+  // vulnerable ipmitool parser. Fail-closed for the IPMI capability only;
+  // every other collector is unaffected. Skipped when the version could
+  // not be parsed (we do not disable a capability we cannot positively
+  // identify as vulnerable).
+  if (isIpmitoolVersionVulnerable(ipmitoolVersion)) {
+    return {
+      available: false,
+      reason: "ipmitool_cve_2020_5208",
+      detail: `ipmitool ${ipmitoolVersion} < ${MIN_SAFE_IPMITOOL_VERSION}; upgrade to close CVE-2020-5208`,
+    };
+  }
+
   // Step 3: device + binary present → assume capable.
   if (deviceFound) {
     return { available: true, method: "ipmitool_in_band", ipmitool_version: ipmitoolVersion };
@@ -119,5 +160,6 @@ export function formatCapabilityLine(cap: IpmiCapability): string {
     case "no_bmc_device":      return "IPMI: not available (no /dev/ipmi*, BMC not detected)";
     case "permission_denied":  return `IPMI: not available (${cap.detail ?? "permission denied"})`;
     case "execution_failed":   return `IPMI: not available (execution failed${cap.detail ? `: ${cap.detail}` : ""})`;
+    case "ipmitool_cve_2020_5208": return `IPMI: disabled (${cap.detail ?? "ipmitool too old (CVE-2020-5208)"})`;
   }
 }
