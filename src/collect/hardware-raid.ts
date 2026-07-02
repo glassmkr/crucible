@@ -28,14 +28,15 @@
 //
 // The dashboard's mdadm path is unaffected by this module.
 
-import { run, which } from "../lib/exec.js";
+import { which } from "../lib/exec.js";
+import { runPrivileged } from "../lib/privileged.js";
 import type { HardwareRaidSnapshot, HardwareRaidController } from "../lib/types.js";
 
 async function scrapePerccli(): Promise<HardwareRaidController[]> {
   // perccli /c0 show all J — JSON output for controller 0.
   // Multi-controller hosts are rare; query c0 only and let follow-ups
   // expand if a customer surfaces multi-controller hardware.
-  const raw = await run("perccli", ["/c0", "show", "all", "J"], 10000);
+  const raw = await runPrivileged("raid-perccli", [], 10000);
   if (!raw) return [];
   try {
     const obj = JSON.parse(raw);
@@ -54,7 +55,7 @@ async function scrapePerccli(): Promise<HardwareRaidController[]> {
 }
 
 async function scrapeStorcli(): Promise<HardwareRaidController[]> {
-  const raw = await run("storcli", ["/call", "show", "all", "J"], 10000);
+  const raw = await runPrivileged("raid-storcli", [], 10000);
   if (!raw) return [];
   try {
     const obj = JSON.parse(raw);
@@ -75,7 +76,7 @@ async function scrapeSsacli(): Promise<HardwareRaidController[]> {
   // ssacli ctrl all show — text format. Conservative: extract one
   // line per "in slot X" entry; status reported on a "Controller Status"
   // line. Real parsing lands when an HPE customer surfaces.
-  const raw = await run("ssacli", ["ctrl", "all", "show", "status"], 10000);
+  const raw = await runPrivileged("raid-ssacli", [], 10000);
   if (!raw) return [];
   const lines = raw.split("\n").map((l) => l.trim()).filter(Boolean);
   const controllers: HardwareRaidController[] = [];
@@ -108,7 +109,7 @@ async function scrapeArcconf(): Promise<HardwareRaidController[]> {
   // arcconf has no JSON mode. Best-effort: detect controllers via
   // `arcconf list` and surface a placeholder state. Real parser
   // for Adaptec lands when a customer surfaces.
-  const raw = await run("arcconf", ["list"], 10000);
+  const raw = await runPrivileged("raid-arcconf", [], 10000);
   if (!raw) return [];
   const controllers: HardwareRaidController[] = [];
   for (const line of raw.split("\n")) {

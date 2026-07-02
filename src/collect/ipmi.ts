@@ -1,4 +1,4 @@
-import { run } from "../lib/exec.js";
+import { runPrivileged } from "../lib/privileged.js";
 import type { BmcVendor, IpmiInfo, SelEvent, FanStatus, Vendor, PsuRedundancyState, IpmiCapability } from "../lib/types.js";
 
 /**
@@ -59,7 +59,7 @@ export async function collectIpmi(vendor: Vendor = "generic", capability?: IpmiC
     };
   }
 
-  const sensorRaw = await run("ipmitool", ["sensor"]);
+  const sensorRaw = await runPrivileged("ipmi-sensor");
   if (!sensorRaw) {
     return {
       available: false, sensors: [],
@@ -115,7 +115,7 @@ export async function collectIpmi(vendor: Vendor = "generic", capability?: IpmiC
 
   // SEL entry count
   let selCount = 0;
-  const selInfo = await run("ipmitool", ["sel", "info"]);
+  const selInfo = await runPrivileged("ipmi-sel-info");
   if (selInfo) {
     const match = selInfo.match(/Entries\s*:\s*(\d+)/i);
     if (match) selCount = parseInt(match[1], 10);
@@ -171,7 +171,7 @@ export const __test_only_c11 = { mapVendorToBmcVendor, parserQualityFor };
  * named sensors. Returns cumulative counts since last SEL clear.
  */
 export async function collectSelEccCounts(): Promise<{ correctable: number; uncorrectable: number; newest_event_timestamp: string | null }> {
-  const output = await run("ipmitool", ["sel", "elist"]);
+  const output = await runPrivileged("ipmi-sel-elist");
   if (!output) return { correctable: 0, uncorrectable: 0, newest_event_timestamp: null };
   return parseSelEccCounts(output);
 }
@@ -207,7 +207,7 @@ export function parseSelEccCounts(output: string): { correctable: number; uncorr
 }
 
 async function collectSelEvents(): Promise<SelEvent[]> {
-  const output = await run("ipmitool", ["sel", "elist"]);
+  const output = await runPrivileged("ipmi-sel-elist");
   if (!output) return [];
 
   const events: SelEvent[] = [];
@@ -316,7 +316,7 @@ export function deriveSelSeverity(event: string, sensorType: string): string {
 }
 
 async function collectFanStatus(): Promise<FanStatus[]> {
-  const output = await run("ipmitool", ["sdr", "type", "Fan"]);
+  const output = await runPrivileged("ipmi-fan");
   if (!output) return [];
   return parseFanStatus(output);
 }

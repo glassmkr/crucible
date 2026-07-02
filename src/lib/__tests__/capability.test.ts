@@ -31,24 +31,26 @@ describe("isIpmitoolVersionVulnerable (CVE-2020-5208, fixed in 1.8.19)", () => {
 describe("detectIpmiCapability", () => {
   it("returns no_ipmitool_binary when neither device nor binary exist (Pi)", async () => {
     const cap = await detectIpmiCapability({
-      statDevice: async () => "enoent",
       runIpmitool: async () => { const e: any = new Error("not found"); e.code = "ENOENT"; throw e; },
+      probeSensor: async () => null,
     });
     expect(cap).toEqual({ available: false, reason: "no_ipmitool_binary" });
   });
 
-  it("returns available when /dev/ipmi0 exists and ipmitool runs (CVE-safe version)", async () => {
+  it("available when the WRAPPED sensor probe returns BMC data (CVE-safe version)", async () => {
+    // §2.1: availability comes from the wrapper (runs as root), not a direct
+    // /dev/ipmi0 stat the unprivileged service user can't do.
     const cap = await detectIpmiCapability({
-      statDevice: async (p) => p === "/dev/ipmi0" ? "ok" : "enoent",
       runIpmitool: async () => ({ stdout: "ipmitool version 1.8.19\n", stderr: "" }),
+      probeSensor: async () => "CPU Temp | 39.000 | degrees C | ok",
     });
     expect(cap).toEqual({ available: true, method: "ipmitool_in_band", ipmitool_version: "1.8.19" });
   });
 
-  it("disables IPMI when ipmitool is below 1.8.19 even with a BMC present (CVE-2020-5208)", async () => {
+  it("disables IPMI when ipmitool is below 1.8.19 even if the BMC answers (CVE-2020-5208)", async () => {
     const cap = await detectIpmiCapability({
-      statDevice: async (p) => p === "/dev/ipmi0" ? "ok" : "enoent",
       runIpmitool: async () => ({ stdout: "ipmitool version 1.8.18\n", stderr: "" }),
+      probeSensor: async () => "CPU Temp | 39.000 | degrees C | ok",
     });
     expect(cap.available).toBe(false);
     if (!cap.available) {
@@ -57,41 +59,19 @@ describe("detectIpmiCapability", () => {
     }
   });
 
-  it("returns no_bmc_device when ipmitool exists but device is missing AND sensor probe fails", async () => {
+  it("no_bmc_device when the wrapped sensor probe returns nothing (no BMC / VM)", async () => {
     const cap = await detectIpmiCapability({
-      statDevice: async () => "enoent",
-      runIpmitool: async (args) => {
-        if (args[0] === "-V") return { stdout: "ipmitool version 1.8.19", stderr: "" };
-        const e: any = new Error("Could not open device");
-        e.stderr = "Could not open device at /dev/ipmi0: No such file or directory";
-        throw e;
-      },
+      runIpmitool: async () => ({ stdout: "ipmitool version 1.8.19", stderr: "" }),
+      probeSensor: async () => null,
     });
     expect(cap.available).toBe(false);
     if (!cap.available) expect(cap.reason).toBe("no_bmc_device");
   });
 
-  it("returns permission_denied on EACCES", async () => {
+  it("no_bmc_device on empty (whitespace-only) sensor output", async () => {
     const cap = await detectIpmiCapability({
-      statDevice: async () => "eacces",
-      runIpmitool: async () => ({ stdout: "ipmitool version 1.8.18", stderr: "" }),
-    });
-    expect(cap.available).toBe(false);
-    if (!cap.available) {
-      expect(cap.reason).toBe("permission_denied");
-      expect(cap.detail).toContain("ipmi");
-    }
-  });
-
-  it("VM with ipmitool installed but no virtual BMC: no_bmc_device", async () => {
-    const cap = await detectIpmiCapability({
-      statDevice: async () => "enoent",
-      runIpmitool: async (args) => {
-        if (args[0] === "-V") return { stdout: "ipmitool version 1.8.19", stderr: "" };
-        const e: any = new Error("could not open");
-        e.stderr = "Could not open device";
-        throw e;
-      },
+      runIpmitool: async () => ({ stdout: "ipmitool version 1.8.19", stderr: "" }),
+      probeSensor: async () => "   \n  ",
     });
     expect(cap.available).toBe(false);
     if (!cap.available) expect(cap.reason).toBe("no_bmc_device");
@@ -99,8 +79,8 @@ describe("detectIpmiCapability", () => {
 
   it("captures ipmitool version when present", async () => {
     const cap = await detectIpmiCapability({
-      statDevice: async (p) => p === "/dev/ipmi0" ? "ok" : "enoent",
       runIpmitool: async () => ({ stdout: "ipmitool version 1.8.21-rc1\n", stderr: "" }),
+      probeSensor: async () => "CPU Temp | 39.000 | degrees C | ok",
     });
     expect(cap.available).toBe(true);
     if (cap.available) expect(cap.ipmitool_version).toBe("1.8.21-rc1");

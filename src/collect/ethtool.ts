@@ -15,6 +15,7 @@
 import { readdirSync } from "fs";
 
 import { run } from "../lib/exec.js";
+import { runPrivileged } from "../lib/privileged.js";
 
 export interface EthtoolInterface {
   iface: string;
@@ -60,7 +61,7 @@ export async function collectEthtool(): Promise<EthtoolSnapshot> {
 
   const results: EthtoolInterface[] = [];
   for (const iface of interfaces) {
-    const out = await run("ethtool", [iface]);
+    const out = await runPrivileged("ethtool", [iface]);
     if (!out) continue; // per-interface read failure tolerated
     results.push(parseEthtoolOutput(iface, out));
   }

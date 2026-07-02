@@ -1,4 +1,5 @@
 import { run } from "../lib/exec.js";
+import { runPrivileged } from "../lib/privileged.js";
 import { readFileSync, existsSync, readdirSync } from "fs";
 
 export interface SshSecurityStatus {
@@ -99,7 +100,7 @@ export function __resetSecurityCacheForTests(): void {
 
 async function checkSshConfig(): Promise<SshSecurityStatus | null> {
   // Prefer sshd -T (resolves includes and match blocks)
-  const output = await run("sshd", ["-T"], 5000);
+  const output = await runPrivileged("sshd", [], 5000);
   if (output) {
     const getVal = (key: string): string => {
       const line = output.split("\n").find((l) => l.startsWith(key + " "));
@@ -132,14 +133,14 @@ async function checkSshConfig(): Promise<SshSecurityStatus | null> {
 
 async function checkFirewall(): Promise<FirewallStatus> {
   // UFW: if installed, its status is authoritative (ignores Docker iptables chains)
-  const ufw = await run("ufw", ["status"], 5000);
+  const ufw = await runPrivileged("ufw", [], 5000);
   if (ufw && ufw.includes("Status:")) {
     const active = ufw.includes("Status: active");
     return { active, source: "ufw", details: active ? "UFW is active" : "UFW is inactive" };
   }
 
   // firewalld: if installed, its status is authoritative
-  const fwd = await run("firewall-cmd", ["--state"], 5000);
+  const fwd = await runPrivileged("firewall-cmd", [], 5000);
   if (fwd) {
     if (fwd.trim() === "running") {
       return { active: true, source: "firewalld", details: "firewalld is running" };
@@ -155,7 +156,7 @@ async function checkFirewall(): Promise<FirewallStatus> {
   // when the systemd service is up; only "enabled/running" counts as
   // active. Added 2026-05-18 after a validation Proxmox host was found
   // with `no_firewall` muted as a workaround for missing detection.
-  const pve = await run("pve-firewall", ["status"], 5000);
+  const pve = await runPrivileged("pve-firewall", [], 5000);
   if (pve) {
     // Status line shape: "Status: <state>/<systemd>" e.g.
     //   "Status: enabled/running"
@@ -174,7 +175,7 @@ async function checkFirewall(): Promise<FirewallStatus> {
   }
 
   // nftables (only if no managed firewall found)
-  const nft = await run("nft", ["list", "ruleset"], 5000);
+  const nft = await runPrivileged("nft", [], 5000);
   if (nft) {
     const ruleLines = nft.split("\n").filter((l) => l.trim().match(/^\s*(meta|ip |ip6 |tcp |udp |ct |drop|reject|accept)/));
     if (ruleLines.length > 0) {
@@ -183,7 +184,7 @@ async function checkFirewall(): Promise<FirewallStatus> {
   }
 
   // iptables fallback: filter out Docker/container chains to avoid false positives
-  const ipt = await run("iptables", ["-L", "-n"], 5000);
+  const ipt = await runPrivileged("iptables", [], 5000);
   if (ipt) {
     const lines = ipt.split("\n").filter((l) =>
       l.trim() &&

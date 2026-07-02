@@ -1,8 +1,8 @@
-import { run } from "../lib/exec.js";
+import { runPrivileged } from "../lib/privileged.js";
 
 export async function collectIoErrors(): Promise<{ count: number; devices: string[] } | null> {
   // Parse dmesg for recent I/O errors (last 10 minutes covers the 5-min collection interval)
-  const output = await run("bash", ["-c", 'dmesg -T --since "10 minutes ago" 2>/dev/null | grep -i "I/O error\\|Buffer I/O error\\|blk_update_request.*error"'], 5000);
+  const output = await runPrivileged("dmesg-io", [], 5000);
   if (!output || !output.trim()) return null;
 
   const lines = output.trim().split("\n").filter((l) => l.trim());

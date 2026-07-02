@@ -1,11 +1,12 @@
 import { run } from "../lib/exec.js";
+import { runPrivileged } from "../lib/privileged.js";
 import { readdirSync, readFileSync } from "fs";
 import type { OsAlerts } from "../lib/types.js";
 
 export async function collectOsAlerts(): Promise<OsAlerts> {
   // OOM kills
   let oomKills = 0;
-  const dmesg = await run("dmesg", ["--level=err,crit", "--since", "5 min ago"]);
+  const dmesg = await runPrivileged("dmesg-errcrit");
   if (dmesg) {
     oomKills = (dmesg.match(/Out of memory/gi) || []).length;
   }
