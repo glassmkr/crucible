@@ -9,17 +9,15 @@
 // This module probes once at startup and caches the result. collectIpmi()
 // reads the cached capability and short-circuits when unavailable.
 
-import { promises as fs } from "node:fs";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
+import { runPrivileged } from "./privileged.js";
 
 const execFileAsync = promisify(execFile);
 
 export type IpmiCapability =
   | { available: true; method: "ipmitool_in_band"; ipmitool_version: string | null }
   | { available: false; reason: "no_ipmitool_binary" | "no_bmc_device" | "execution_failed" | "permission_denied" | "ipmitool_cve_2020_5208"; detail?: string };
-
-const DEVICE_CANDIDATES = ["/dev/ipmi0", "/dev/ipmi/0", "/dev/ipmidev/0"];
 
 // CVE-2020-5208 (GHSA-g659-9qxw-p7cp): heap overflow in ipmitool's
 // read_fru_area_section and related parsers when handling data received
@@ -50,20 +48,17 @@ export function isIpmitoolVersionVulnerable(version: string | null): boolean {
 }
 
 interface DetectDeps {
-  /** Override for tests. Returns "ok" | "enoent" | "eacces" per path. */
-  statDevice?: (path: string) => Promise<"ok" | "enoent" | "eacces">;
-  /** Override for tests. Returns stdout or throws with err.code. */
+  /** Override for tests. Runs `ipmitool -V` (direct; works unprivileged).
+   *  Returns stdout or throws with err.code. Used only for the version /
+   *  CVE gate. */
   runIpmitool?: (args: string[]) => Promise<{ stdout: string; stderr: string }>;
-}
-
-async function defaultStatDevice(path: string): Promise<"ok" | "enoent" | "eacces"> {
-  try {
-    await fs.access(path, fs.constants.R_OK);
-    return "ok";
-  } catch (err: any) {
-    if (err.code === "EACCES" || err.code === "EPERM") return "eacces";
-    return "enoent";
-  }
+  /** Override for tests. The WRAPPED sensor probe (`sudo crucible-collect
+   *  ipmi-sensor`). Returns stdout, or null on any failure. This is the
+   *  availability signal: under the §2.1 unprivileged model the agent user
+   *  cannot stat /dev/ipmi0 or run ipmitool directly, so a direct
+   *  device-node probe is meaningless; the wrapper (which runs as root) is
+   *  the real reachability test. */
+  probeSensor?: () => Promise<string | null>;
 }
 
 async function defaultRunIpmitool(args: string[]): Promise<{ stdout: string; stderr: string }> {
@@ -72,27 +67,11 @@ async function defaultRunIpmitool(args: string[]): Promise<{ stdout: string; std
 }
 
 export async function detectIpmiCapability(deps: DetectDeps = {}): Promise<IpmiCapability> {
-  const statDevice = deps.statDevice ?? defaultStatDevice;
   const runIpmitool = deps.runIpmitool ?? defaultRunIpmitool;
+  const probeSensor = deps.probeSensor ?? (() => runPrivileged("ipmi-sensor"));
 
-  // Step 1: probe /dev/ipmi* device nodes.
-  let deviceFound = false;
-  let permissionDenied = false;
-  for (const path of DEVICE_CANDIDATES) {
-    const result = await statDevice(path);
-    if (result === "ok") { deviceFound = true; break; }
-    if (result === "eacces") { permissionDenied = true; }
-  }
-
-  if (permissionDenied && !deviceFound) {
-    return {
-      available: false,
-      reason: "permission_denied",
-      detail: "/dev/ipmi0 exists but is not readable; run as root or add user to ipmi group",
-    };
-  }
-
-  // Step 2: probe ipmitool binary.
+  // Step 1: probe the ipmitool binary + version. `ipmitool -V` needs no BMC
+  // access, so it works even as the unprivileged service user.
   let ipmitoolVersion: string | null = null;
   try {
     const { stdout } = await runIpmitool(["-V"]);
@@ -109,7 +88,7 @@ export async function detectIpmiCapability(deps: DetectDeps = {}): Promise<IpmiC
     };
   }
 
-  // Version gate (CVE-2020-5208): refuse to feed BMC output to a
+  // Step 2: version gate (CVE-2020-5208): refuse to feed BMC output to a
   // vulnerable ipmitool parser. Fail-closed for the IPMI capability only;
   // every other collector is unaffected. Skipped when the version could
   // not be parsed (we do not disable a capability we cannot positively
@@ -122,26 +101,15 @@ export async function detectIpmiCapability(deps: DetectDeps = {}): Promise<IpmiC
     };
   }
 
-  // Step 3: device + binary present → assume capable.
-  if (deviceFound) {
-    return { available: true, method: "ipmitool_in_band", ipmitool_version: ipmitoolVersion };
-  }
-
-  // Step 4: binary present but no device node — try one sensor probe to
-  // disambiguate (some kernels expose IPMI through unconventional paths).
+  // Step 3: reachability via the WRAPPED sensor probe. Non-empty output means
+  // the BMC answered; empty/failure means no usable BMC on this host.
   try {
-    const { stdout, stderr } = await runIpmitool(["sensor"]);
-    const out = stdout || "";
-    const errOut = (stderr || "").toLowerCase();
-    if (out.trim().length > 0 && !errOut.includes("could not open")) {
+    const out = await probeSensor();
+    if (out && out.trim().length > 0) {
       return { available: true, method: "ipmitool_in_band", ipmitool_version: ipmitoolVersion };
     }
     return { available: false, reason: "no_bmc_device" };
   } catch (err: any) {
-    const stderr = String(err?.stderr ?? "").toLowerCase();
-    if (stderr.includes("could not open")) {
-      return { available: false, reason: "no_bmc_device" };
-    }
     return {
       available: false,
       reason: "execution_failed",

@@ -25,7 +25,7 @@
 // own P0 alert.
 
 import { existsSync, readdirSync, statSync } from "node:fs";
-import { run } from "../lib/exec.js";
+import { runPrivileged } from "../lib/privileged.js";
 import { readDirSafe } from "../lib/parse.js";
 import type { RebootEvidence } from "../lib/types.js";
 
@@ -103,7 +103,7 @@ export function parseWtmp(output: string): WtmpRebootRecord {
 }
 
 async function readWtmp(): Promise<WtmpRebootRecord> {
-  const output = await run("last", ["-x", "-F"], 5000);
+  const output = await runPrivileged("last", [], 5000);
   if (!output) {
     return { last_reboot_raw: null, prior_shutdown_clean: false };
   }

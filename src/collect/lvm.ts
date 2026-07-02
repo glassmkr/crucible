@@ -11,7 +11,7 @@
 //
 // Per CC_SPEC_CRUCIBLE_C11_C18_FULL_BUNDLE_2026-05-19.md §1.2.
 
-import { run } from "../lib/exec.js";
+import { runPrivileged } from "../lib/privileged.js";
 
 export interface LvmThinPool {
   lv_name: string;
@@ -27,12 +27,7 @@ export interface LvmSnapshot {
 }
 
 export async function collectLvm(): Promise<LvmSnapshot> {
-  const out = await run("lvs", [
-    "--reportformat=json",
-    "--options=lv_name,vg_name,lv_attr,data_percent,metadata_percent",
-    "--units=b",
-    "--noheadings",
-  ]);
+  const out = await runPrivileged("lvs");
   if (!out) {
     return {
       available: false,

@@ -1,4 +1,4 @@
-import { run } from "../lib/exec.js";
+import { runPrivileged } from "../lib/privileged.js";
 import { readdirSync } from "fs";
 import type { SmartInfo } from "../lib/types.js";
 
@@ -18,7 +18,7 @@ export async function collectSmart(): Promise<SmartInfo[]> {
 
   const results: SmartInfo[] = [];
   for (const device of devices) {
-    const output = await run("smartctl", ["--json", "--all", device]);
+    const output = await runPrivileged("smart", [device]);
     if (!output) continue;
 
     try {

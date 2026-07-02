@@ -25,6 +25,11 @@ import * as fsDefault from "node:fs";
 import { execFileSync as execFileSyncDefault } from "node:child_process";
 import * as osDefault from "node:os";
 import * as pathDefault from "node:path";
+import {
+  SERVICE_USER, WRAPPER_PATH, WRAPPER_SCRIPT, SUDOERS_PATH, SUDOERS_CONTENT,
+} from "./lib/privileged.js";
+
+export const STATE_DIRS = ["/var/lib/glassmkr", "/var/lib/crucible"];
 
 export interface InitOptions {
   apiKey: string; // raw value, may be the literal "-" to mean "read from stdin"
@@ -91,7 +96,7 @@ function escapeDoubleQuoted(s: string): string {
   return s.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
 }
 
-export function buildSystemdUnit(binPath: string, configPath: string): string {
+export function buildSystemdUnit(binPath: string, configPath: string, user = "root"): string {
   return [
     `[Unit]`,
     `Description=Glassmkr Crucible - Bare Metal Monitoring`,
@@ -99,7 +104,10 @@ export function buildSystemdUnit(binPath: string, configPath: string): string {
     ``,
     `[Service]`,
     `Type=simple`,
-    `User=root`,
+    // §2.1: run unprivileged when privilege separation is in place; the
+    // agent escalates only through the sudo wrapper. Falls back to root
+    // when setup didn't complete, so collection never silently breaks.
+    `User=${user}`,
     `ExecStart=${binPath} ${configPath}`,
     `Restart=always`,
     `RestartSec=10`,
@@ -108,6 +116,84 @@ export function buildSystemdUnit(binPath: string, configPath: string): string {
     `WantedBy=multi-user.target`,
     ``,
   ].join("\n");
+}
+
+/**
+ * Establish the §2.1 privilege boundary: an unprivileged `glassmkr` system
+ * user that escalates only through the sudo wrapper. Idempotent; safe to run
+ * on every install/upgrade. Returns true iff the box is fully ready to run
+ * the service as `glassmkr` (user + wrapper + valid sudoers + writable state).
+ * On ANY hard failure it returns false and the caller keeps the unit on
+ * User=root, so an install where this can't complete never loses collection.
+ *
+ * Ordering matters for the root->unprivileged migration: the wrapper and
+ * sudoers are installed BEFORE the unit flips to User=glassmkr (done by the
+ * caller), so there is never a window where the agent is unprivileged but the
+ * escalation path is absent.
+ */
+export function setupPrivilegeSeparation(deps: InitDeps, configPath: string): boolean {
+  // 1. Service user (system, no login, no home).
+  const idr = deps.exec("id", ["-u", SERVICE_USER]);
+  if (idr.status !== 0) {
+    const ur = deps.exec("useradd", [
+      "--system", "--no-create-home", "--shell", "/usr/sbin/nologin", SERVICE_USER,
+    ]);
+    if (ur.status !== 0) {
+      deps.warn(`[init] could not create '${SERVICE_USER}' user (status=${ur.status}); staying on User=root.`);
+      return false;
+    }
+    deps.log(`[init] created system user '${SERVICE_USER}'.`);
+  }
+
+  // 2. The collection wrapper (root:root 0755 — must NOT be writable by the
+  //    service user, or the sudo grant could be hijacked).
+  try {
+    deps.fs.writeFileSync(WRAPPER_PATH, WRAPPER_SCRIPT, { mode: 0o755 });
+    deps.fs.chmodSync(WRAPPER_PATH, 0o755);
+  } catch (err: any) {
+    deps.warn(`[init] could not install wrapper ${WRAPPER_PATH}: ${err?.message ?? err}; staying on User=root.`);
+    return false;
+  }
+
+  // 3. Sudoers drop-in, validated with `visudo -cf` on a temp file BEFORE it
+  //    goes live (a malformed sudoers file breaks sudo host-wide).
+  const sudoersTmp = `${SUDOERS_PATH}.tmp`;
+  try {
+    deps.fs.writeFileSync(sudoersTmp, SUDOERS_CONTENT, { mode: 0o440 });
+    const chk = deps.exec("visudo", ["-cf", sudoersTmp]);
+    if (chk.status !== 0) {
+      deps.warn(`[init] visudo rejected the sudoers drop-in (status=${chk.status}); staying on User=root.`);
+      return false;
+    }
+    deps.fs.renameSync(sudoersTmp, SUDOERS_PATH);
+    deps.fs.chmodSync(SUDOERS_PATH, 0o440);
+  } catch (err: any) {
+    deps.warn(`[init] could not install sudoers ${SUDOERS_PATH}: ${err?.message ?? err}; staying on User=root.`);
+    return false;
+  }
+
+  // 4. State dirs the agent writes directly (alert-state, reboot-marker) +
+  //    the config it reads: hand ownership to the service user.
+  for (const dir of STATE_DIRS) {
+    try { deps.fs.mkdirSync(dir, { recursive: true, mode: 0o750 }); } catch { /* exists */ }
+    const ch = deps.exec("chown", ["-R", `${SERVICE_USER}:${SERVICE_USER}`, dir]);
+    if (ch.status !== 0) {
+      deps.warn(`[init] could not chown ${dir} to ${SERVICE_USER} (status=${ch.status}); staying on User=root.`);
+      return false;
+    }
+  }
+  const chc = deps.exec("chown", [`${SERVICE_USER}:${SERVICE_USER}`, configPath]);
+  if (chc.status !== 0) {
+    deps.warn(`[init] could not chown ${configPath} to ${SERVICE_USER}; staying on User=root.`);
+    return false;
+  }
+
+  // 5. adm group: several collectors read log-adjacent paths directly. Best
+  //    effort; not fatal (the wrapper covers the binary paths regardless).
+  deps.exec("usermod", ["-aG", "adm", SERVICE_USER]);
+
+  deps.log(`[init] privilege separation ready: service will run as '${SERVICE_USER}' via ${WRAPPER_PATH}.`);
+  return true;
 }
 
 /**
@@ -246,8 +332,15 @@ export async function runInit(opts: InitOptions, deps: InitDeps): Promise<number
     return 7;
   }
 
+  // §2.1: establish the unprivileged-user + sudo-wrapper boundary. Runs
+  // AFTER the config is written (so it can hand ownership to the service
+  // user) and BEFORE the unit is written (so the escalation path exists
+  // before the unit flips to User=glassmkr). Fail-safe: on any hard failure
+  // this returns false and the unit stays on User=root.
+  const serviceUser = setupPrivilegeSeparation(deps, configPath) ? SERVICE_USER : "root";
+
   // Write systemd unit (0644).
-  const unit = buildSystemdUnit(binPath, configPath);
+  const unit = buildSystemdUnit(binPath, configPath, serviceUser);
   try {
     deps.fs.writeFileSync(SYSTEMD_UNIT_PATH, unit, { mode: 0o644 });
     deps.fs.chmodSync(SYSTEMD_UNIT_PATH, 0o644);
