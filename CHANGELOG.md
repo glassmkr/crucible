@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 Pre-1.0 convention: minor bumps may include breaking changes; we call them
 out under `### Breaking` so downstream consumers can audit.
 
+## [0.13.16] - 2026-07-03
+
+### Added
+
+- **SSH config-vs-runtime detection.** The SSH security check reads `sshd -T`,
+  which reflects the on-disk config, not the running daemon. So an operator who
+  edits `sshd_config` to disable root-password login but forgets to reload or
+  restart `sshd` would clear the `ssh_root_password` alert while the box stays
+  exposed until the daemon reloads: the monitor reporting "safe" on a
+  still-exploitable host. The SSH snapshot now carries `configApplied`, computed
+  by comparing the newest `sshd_config*` mtime against the sshd unit's
+  `StateChangeTimestampMonotonic` (which advances on a `reload` as well as a
+  restart, so the recommended `systemctl reload` path is correctly seen as
+  applied). A new `ssh_config_unapplied` alert fires while a config change is
+  staged but not live, so a host is never reported all-clear on an unapplied SSH
+  change. Defaults to "applied" when the signal is undeterminable (no systemd),
+  so it never false-fires. Surfaced by the live blind-remediation campaign.
+
 ## [0.13.15] - 2026-07-01
 
 ### Added
