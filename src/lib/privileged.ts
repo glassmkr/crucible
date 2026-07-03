@@ -20,6 +20,7 @@
 // hijacked by tampering with the script.
 
 import { run } from "./exec.js";
+import { existsSync } from "fs";
 
 export const SERVICE_USER = "glassmkr";
 export const WRAPPER_PATH = "/usr/local/sbin/crucible-collect";
@@ -50,19 +51,69 @@ export function isAllowedIface(name: string): boolean {
 }
 
 /**
- * Invoke a privileged collection action through the sudo wrapper. Returns
- * the command stdout, or null on any failure (wrapper/sudoers not installed,
- * tool absent, non-zero exit) - callers already treat null as "capability
- * unavailable", so a missing wrapper degrades gracefully rather than
- * crashing. When the agent still runs as root (pre-migration or old installs)
- * `sudo -n` simply runs the wrapper without a password prompt.
+ * The real command each action maps to, mirroring WRAPPER_SCRIPT's `case`
+ * statement below. Used only for the root fallback in runPrivileged; the
+ * parameterized actions re-validate their argument so the fallback is as
+ * constrained as the wrapper. Returns null for an action we won't run
+ * directly (unknown, or a rejected smart/ethtool argument).
+ */
+function directCommand(action: PrivilegedAction, args: string[]): { cmd: string; args: string[] } | null {
+  switch (action) {
+    case "ipmi-sensor": return { cmd: "ipmitool", args: ["sensor"] };
+    case "ipmi-sel-info": return { cmd: "ipmitool", args: ["sel", "info"] };
+    case "ipmi-sel-elist": return { cmd: "ipmitool", args: ["sel", "elist"] };
+    case "ipmi-fan": return { cmd: "ipmitool", args: ["sdr", "type", "Fan"] };
+    case "smart": return isAllowedSmartDevice(args[0] ?? "") ? { cmd: "smartctl", args: ["--json", "--all", args[0]] } : null;
+    case "zpool": return { cmd: "zpool", args: ["status"] };
+    case "raid-perccli": return { cmd: "perccli", args: ["/c0", "show", "all", "J"] };
+    case "raid-storcli": return { cmd: "storcli", args: ["/call", "show", "all", "J"] };
+    case "raid-ssacli": return { cmd: "ssacli", args: ["ctrl", "all", "show", "status"] };
+    case "raid-arcconf": return { cmd: "arcconf", args: ["list"] };
+    case "dmesg-errcrit": return { cmd: "dmesg", args: ["--level=err,crit", "--since", "5 min ago"] };
+    case "dmesg-io": return { cmd: "sh", args: ["-c", 'dmesg -T --since "10 minutes ago" 2>/dev/null | grep -i "I/O error\\|Buffer I/O error\\|blk_update_request.*error"'] };
+    case "iptables": return { cmd: "iptables", args: ["-L", "-n"] };
+    case "nft": return { cmd: "nft", args: ["list", "ruleset"] };
+    case "ufw": return { cmd: "ufw", args: ["status"] };
+    case "firewall-cmd": return { cmd: "firewall-cmd", args: ["--state"] };
+    case "pve-firewall": return { cmd: "pve-firewall", args: ["status"] };
+    case "sshd": return { cmd: "sshd", args: ["-T"] };
+    case "lvs": return { cmd: "lvs", args: ["--reportformat=json", "--options=lv_name,vg_name,lv_attr,data_percent,metadata_percent", "--units=b", "--noheadings"] };
+    case "ethtool": return isAllowedIface(args[0] ?? "") ? { cmd: "ethtool", args: [args[0]] } : null;
+    case "last": return { cmd: "last", args: ["-x", "-F"] };
+    default: return null;
+  }
+}
+
+/**
+ * Invoke a privileged collection action. Preferred path is the fixed-argv
+ * sudo wrapper (the unprivileged `glassmkr` service user escalates only
+ * through it). Returns the command stdout, or null on any failure - callers
+ * treat null as "capability unavailable", so a missing tool degrades
+ * gracefully rather than crashing.
+ *
+ * Root fallback: if the wrapper is NOT installed (e.g. an upgrade via
+ * `npm i -g` without re-running `init`, or a host still on User=root that
+ * never migrated) AND we are running as root, run the underlying command
+ * directly. As root that is exactly what the wrapper would exec, so it
+ * restores collection instead of silently returning null for every
+ * hardware/security probe. This honors init.ts's documented "User=root
+ * never loses collection" invariant, which the wrapper-only path (audit
+ * §2.1) had regressed on wrapper-less root hosts. A non-root agent without
+ * the wrapper still gets null (it cannot and must not escalate).
  */
 export function runPrivileged(
   action: PrivilegedAction,
   args: string[] = [],
   timeoutMs = 10000,
 ): Promise<string | null> {
-  return run("sudo", ["-n", WRAPPER_PATH, action, ...args], timeoutMs);
+  if (existsSync(WRAPPER_PATH)) {
+    return run("sudo", ["-n", WRAPPER_PATH, action, ...args], timeoutMs);
+  }
+  if (typeof process.getuid === "function" && process.getuid() === 0) {
+    const direct = directCommand(action, args);
+    if (direct) return run(direct.cmd, direct.args, timeoutMs);
+  }
+  return Promise.resolve(null);
 }
 
 // The wrapper script, written verbatim to WRAPPER_PATH by init. POSIX sh.
