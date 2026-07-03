@@ -113,6 +113,7 @@ function formatPrometheus(snap: Snapshot): string {
   // Security
   if (snap.security) {
     lines.push(`glassmkr_ssh_root_password_exposed ${snap.security.ssh?.rootPasswordExposed ? 1 : 0}`);
+    lines.push(`glassmkr_ssh_config_unapplied ${snap.security.ssh?.configApplied === false ? 1 : 0}`);
     lines.push(`glassmkr_firewall_active ${snap.security.firewall.active ? 1 : 0}`);
     if (snap.security.pending_updates?.available) {
       lines.push(`glassmkr_pending_security_updates ${snap.security.pending_updates.pendingCount}`);

@@ -48,7 +48,7 @@ export const ALL_RULE_IDS: readonly string[] = [
   "interface_errors", "link_speed_mismatch", "interface_saturation",
   "cpu_temperature_high", "ecc_errors", "psu_redundancy_loss",
   "ipmi_sel_critical", "ipmi_fan_failure",
-  "ssh_root_password", "no_firewall", "pending_security_updates",
+  "ssh_root_password", "ssh_config_unapplied", "no_firewall", "pending_security_updates",
   "kernel_vulnerabilities", "kernel_needs_reboot", "unattended_upgrades_disabled",
 ] as const;
 
@@ -373,7 +373,7 @@ export const allRules: AlertRule[] = [
       evidence: { failed_fans: failed, total_fans: total, all_fans: snap.ipmi.fans.filter(f => f.status !== "absent") },
       recommendation: "Check physical fans. Monitor temps: `ipmitool sdr type Temperature`. Replace failed fan module." }];
   }},
-  // === Security (6) ===
+  // === Security (7) ===
   // 21. SSH root password login
   { type: "ssh_root_password", evaluate(snap) {
     if (!snap.security?.ssh?.rootPasswordExposed) return [];
@@ -382,6 +382,22 @@ export const allRules: AlertRule[] = [
       message: `PermitRootLogin is "${snap.security.ssh.permitRootLogin}" and PasswordAuthentication is "${snap.security.ssh.passwordAuthentication}". Root can be brute-forced over SSH.`,
       evidence: { permitRootLogin: snap.security.ssh.permitRootLogin, passwordAuthentication: snap.security.ssh.passwordAuthentication },
       recommendation: 'Set "PermitRootLogin prohibit-password" in /etc/ssh/sshd_config and restart sshd. Key-based root login still works.' }];
+  }},
+  // 21b. SSH config edited but not reloaded. The security fields above are
+  // read from `sshd -T` (the on-disk config), NOT the running daemon, so a
+  // fix that isn't reloaded would silently clear ssh_root_password while the
+  // box stays exposed. This fires until the daemon reloads/restarts, so the
+  // host is never reported all-clear on a staged-but-unapplied SSH change.
+  // configApplied defaults to true when undeterminable (and is absent on
+  // pre-0.13.16 snapshots), so this never false-fires.
+  { type: "ssh_config_unapplied", evaluate(snap) {
+    const ssh = snap.security?.ssh;
+    if (!ssh || ssh.configApplied !== false) return [];
+    return [{ type: "ssh_config_unapplied", severity: "warning" as const,
+      title: "SSH config changed but not applied",
+      message: "sshd_config was modified after the sshd daemon last loaded its configuration. The running daemon is still using the previous config, so any change (including security hardening) is not yet in effect.",
+      evidence: { permitRootLogin: ssh.permitRootLogin, passwordAuthentication: ssh.passwordAuthentication, configMtime: ssh.configMtime ?? null, configLoadedAt: ssh.configLoadedAt ?? null },
+      recommendation: 'Validate and apply: "sudo sshd -t && sudo systemctl reload ssh" (Debian/Ubuntu) or "... reload sshd" (RHEL). Existing sessions are unaffected.' }];
   }},
   // 22. No firewall
   { type: "no_firewall", evaluate(snap) {
