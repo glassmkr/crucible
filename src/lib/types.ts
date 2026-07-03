@@ -572,7 +572,7 @@ export interface ZfsData {
 }
 
 export interface SecurityData {
-  ssh: { permitRootLogin: string; passwordAuthentication: string; rootPasswordExposed: boolean } | null;
+  ssh: { permitRootLogin: string; passwordAuthentication: string; rootPasswordExposed: boolean; configApplied: boolean; configMtime?: number | null; configLoadedAt?: number | null } | null;
   firewall: { active: boolean; source: string; details: string };
   pending_updates: { distro: string; pendingCount: number; available: boolean } | null;
   kernel_vulns: Array<{ name: string; status: string; mitigated: boolean }>;

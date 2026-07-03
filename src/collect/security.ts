@@ -1,11 +1,23 @@
 import { run } from "../lib/exec.js";
 import { runPrivileged } from "../lib/privileged.js";
-import { readFileSync, existsSync, readdirSync } from "fs";
+import { readFileSync, existsSync, readdirSync, statSync } from "fs";
 
 export interface SshSecurityStatus {
   permitRootLogin: string;
   passwordAuthentication: string;
   rootPasswordExposed: boolean;
+  // False iff the on-disk sshd config is newer than the running daemon's
+  // last config load, i.e. an edit is staged but not live. `sshd -T` (and
+  // therefore every field above) reflects the FILE, not the running daemon,
+  // so without this an operator who edits sshd_config to fix root login but
+  // forgets to reload/restart clears the alert while the box stays exposed.
+  // Defaults to true whenever we cannot positively prove otherwise, so a
+  // missing signal never raises a false "unapplied" alarm.
+  configApplied: boolean;
+  // Evidence for the ssh_config_unapplied rule (epoch seconds). Null when
+  // undeterminable. configLoadedAt is the last sshd start OR reload.
+  configMtime?: number | null;
+  configLoadedAt?: number | null;
 }
 
 export interface FirewallStatus {
@@ -98,7 +110,91 @@ export function __resetSecurityCacheForTests(): void {
 
 // === SSH ===
 
+const SSHD_CONFIG_PATH = "/etc/ssh/sshd_config";
+const SSHD_CONFIG_D = "/etc/ssh/sshd_config.d";
+
+// Newest mtime (epoch seconds) among sshd_config and its *.conf drop-ins,
+// or null if none is stat-able. mtime only needs directory traversal, not
+// file read, so this works even when the config contents are root-only.
+function newestSshdConfigMtime(): number | null {
+  let newest: number | null = null;
+  const consider = (p: string): void => {
+    try {
+      const secs = Math.floor(statSync(p).mtimeMs / 1000);
+      if (newest === null || secs > newest) newest = secs;
+    } catch {
+      // missing / unreadable: skip
+    }
+  };
+  consider(SSHD_CONFIG_PATH);
+  try {
+    for (const f of readdirSync(SSHD_CONFIG_D)) {
+      if (f.endsWith(".conf")) consider(`${SSHD_CONFIG_D}/${f}`);
+    }
+  } catch {
+    // no drop-in dir: fine
+  }
+  return newest;
+}
+
+// Boot time (epoch seconds) from /proc/stat `btime`, or null off-Linux.
+function bootTimeEpoch(): number | null {
+  try {
+    const m = readFileSync("/proc/stat", "utf-8").match(/^btime\s+(\d+)/m);
+    return m ? parseInt(m[1], 10) : null;
+  } catch {
+    return null;
+  }
+}
+
+// Has the running sshd loaded the on-disk config? Compares the newest
+// sshd_config* mtime against the last time the sshd unit started OR
+// reloaded. We use systemd's StateChangeTimestampMonotonic (microseconds
+// since boot) because - unlike the process start time or
+// ExecMainStartTimestamp - it advances on a SIGHUP `reload` too, so an
+// operator who reloads (the path our own remediation recommends) rather
+// than restarts is correctly seen as "applied". Monotonic-since-boot
+// avoids wall-clock/timezone skew. Returns applied=true whenever the
+// signal is undeterminable so a missing systemctl never false-alarms.
+async function sshConfigApplyState(): Promise<{
+  applied: boolean;
+  configMtime: number | null;
+  loadedAt: number | null;
+}> {
+  const configMtime = newestSshdConfigMtime();
+  const btime = bootTimeEpoch();
+  if (configMtime === null || btime === null) {
+    return { applied: true, configMtime, loadedAt: null };
+  }
+  let monoUs: number | null = null;
+  for (const unit of ["ssh", "sshd"]) {
+    const out = await run(
+      "systemctl",
+      ["show", unit, "-p", "StateChangeTimestampMonotonic", "--value"],
+      3000,
+    );
+    const n = out ? parseInt(out.trim(), 10) : NaN;
+    if (Number.isFinite(n) && n > 0) {
+      monoUs = n;
+      break;
+    }
+  }
+  if (monoUs === null) {
+    return { applied: true, configMtime, loadedAt: null };
+  }
+  const loadedAt = btime + Math.floor(monoUs / 1_000_000); // epoch seconds
+  // 2s tolerance covers same-second write-then-reload + rounding.
+  return { applied: configMtime <= loadedAt + 2, configMtime, loadedAt };
+}
+
 async function checkSshConfig(): Promise<SshSecurityStatus | null> {
+  const cfg = await sshConfigApplyState();
+  const applyFields = {
+    configApplied: cfg.applied,
+    configMtime: cfg.configMtime,
+    configLoadedAt: cfg.loadedAt,
+  };
+
   // Prefer sshd -T (resolves includes and match blocks)
   const output = await runPrivileged("sshd", [], 5000);
   if (output) {
@@ -109,12 +205,12 @@ async function checkSshConfig(): Promise<SshSecurityStatus | null> {
     const permitRootLogin = getVal("permitrootlogin");
     const passwordAuth = getVal("passwordauthentication");
     const rootPasswordExposed = permitRootLogin === "yes" && passwordAuth !== "no";
-    return { permitRootLogin, passwordAuthentication: passwordAuth, rootPasswordExposed };
+    return { permitRootLogin, passwordAuthentication: passwordAuth, rootPasswordExposed, ...applyFields };
   }
 
   // Fallback: parse sshd_config directly
   try {
-    const config = readFileSync("/etc/ssh/sshd_config", "utf-8");
+    const config = readFileSync(SSHD_CONFIG_PATH, "utf-8");
     const lines = config.split("\n").map((l) => l.trim()).filter((l) => l && !l.startsWith("#"));
     const find = (key: string): string | null => {
       const line = lines.find((l) => l.toLowerCase().startsWith(key.toLowerCase()));
@@ -123,7 +219,7 @@ async function checkSshConfig(): Promise<SshSecurityStatus | null> {
     const permitRootLogin = find("PermitRootLogin") || "prohibit-password";
     const passwordAuth = find("PasswordAuthentication") || "yes";
     const rootPasswordExposed = permitRootLogin.toLowerCase() === "yes" && passwordAuth.toLowerCase() !== "no";
-    return { permitRootLogin, passwordAuthentication: passwordAuth, rootPasswordExposed };
+    return { permitRootLogin, passwordAuthentication: passwordAuth, rootPasswordExposed, ...applyFields };
   } catch {
     return null;
   }

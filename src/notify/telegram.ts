@@ -4,7 +4,7 @@ const PRIORITY_MAP: Record<string, string> = {
   raid_degraded: "P1", smart_failing: "P1", ecc_errors: "P1", psu_redundancy_loss: "P1", ipmi_fan_failure: "P1",
   oom_kills: "P2", ram_high: "P2", disk_space_high: "P2", ipmi_sel_critical: "P2", disk_io_errors: "P2", zfs_pool_unhealthy: "P2",
   cpu_iowait_high: "P3", nvme_wear_high: "P3", disk_latency_high: "P3", cpu_temperature_high: "P3",
-  ssh_root_password: "P3", pending_security_updates: "P3", kernel_vulnerabilities: "P3", zfs_scrub_errors: "P3",
+  ssh_root_password: "P3", ssh_config_unapplied: "P3", pending_security_updates: "P3", kernel_vulnerabilities: "P3", zfs_scrub_errors: "P3",
   swap_high: "P4", no_firewall: "P4", kernel_needs_reboot: "P4", unattended_upgrades_disabled: "P4",
   interface_errors: "P4", link_speed_mismatch: "P4", interface_saturation: "P4",
 };

@@ -20,6 +20,7 @@
     "ipmi_sel_critical",
     "ipmi_fan_failure",
     "ssh_root_password",
+    "ssh_config_unapplied",
     "no_firewall",
     "pending_security_updates",
     "kernel_vulnerabilities",

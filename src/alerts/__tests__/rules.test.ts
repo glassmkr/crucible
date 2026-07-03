@@ -337,6 +337,46 @@ describe("disk_latency_high", () => {
   });
 });
 
+const sshConfigUnappliedRule = allRules.find(r => r.type === "ssh_config_unapplied")!;
+
+function snapWithSsh(ssh: any): Snapshot {
+  const s = emptySnap();
+  (s as any).security = {
+    ssh,
+    firewall: { active: true, source: "ufw", details: "" },
+    pending_updates: null,
+    kernel_vulns: [],
+    kernel_reboot: null,
+    auto_updates: { configured: true, mechanism: "", details: "" },
+  };
+  return s;
+}
+
+describe("ssh_config_unapplied (config-vs-runtime false-negative guard)", () => {
+  it("fires when the on-disk config is newer than the running daemon", () => {
+    const snap = snapWithSsh({ permitRootLogin: "prohibit-password", passwordAuthentication: "no", rootPasswordExposed: false, configApplied: false, configMtime: 200, configLoadedAt: 100 });
+    const out = sshConfigUnappliedRule.evaluate(snap, baseThresholds);
+    expect(out).toHaveLength(1);
+    expect(out[0].type).toBe("ssh_config_unapplied");
+    expect(out[0].severity).toBe("warning");
+    expect(out[0].evidence.configLoadedAt).toBe(100);
+  });
+
+  it("does not fire once the daemon has reloaded (configApplied true)", () => {
+    const snap = snapWithSsh({ permitRootLogin: "prohibit-password", passwordAuthentication: "no", rootPasswordExposed: false, configApplied: true });
+    expect(sshConfigUnappliedRule.evaluate(snap, baseThresholds)).toEqual([]);
+  });
+
+  it("does not fire when configApplied is absent (pre-0.13.16 agents)", () => {
+    const snap = snapWithSsh({ permitRootLogin: "yes", passwordAuthentication: "yes", rootPasswordExposed: true });
+    expect(sshConfigUnappliedRule.evaluate(snap, baseThresholds)).toEqual([]);
+  });
+
+  it("does not fire when there is no ssh block", () => {
+    expect(sshConfigUnappliedRule.evaluate(emptySnap(), baseThresholds)).toEqual([]);
+  });
+});
+
 describe("ALL_RULE_IDS export sync", () => {
   it("matches the actual rule definitions in allRules", async () => {
     const { ALL_RULE_IDS } = await import("../rules.js");
