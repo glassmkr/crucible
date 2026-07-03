@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 Pre-1.0 convention: minor bumps may include breaking changes; we call them
 out under `### Breaking` so downstream consumers can audit.
 
+## [0.13.17] - 2026-07-03
+
+### Fixed
+
+- **Privileged collection no longer stops on root hosts without the sudo
+  wrapper.** 0.13.16 (via the audit §2.1 sudo-wrapper facade) routed all
+  privileged collection through `sudo /usr/local/sbin/crucible-collect`, but
+  that wrapper is installed only by `crucible init`. A host running the agent
+  as root that never ran init (or was upgraded via `npm i -g` without it) had
+  no wrapper, so IPMI, SMART, RAID, firewall, and dmesg collection silently
+  returned nothing. `runPrivileged` now falls back to running the underlying
+  command directly when it is root and the wrapper is absent (as root, exactly
+  what the wrapper would exec); a non-root agent without the wrapper still
+  collects nothing (it cannot and must not escalate). Restores the documented
+  "User=root never loses collection" behavior.
+
 ## [0.13.16] - 2026-07-03
 
 ### Added
