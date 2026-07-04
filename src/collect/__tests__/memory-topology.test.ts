@@ -108,6 +108,48 @@ describe("parseDmidecodeMemory", () => {
     expect(t.downclocked).toBe(true);
   });
 
+  // Real ASRock (Ryzen 5950X) shape: bare "DIMM 0"/"DIMM 1" locators (no
+  // channel letter) so the channel MUST come from the "P0 CHANNEL A" bank
+  // locator (space separator). Both channels have a DIMM => healthy.
+  const ASROCK = `Memory Device
+\tSize: No Module Installed
+\tLocator: DIMM 0
+\tBank Locator: P0 CHANNEL A
+Memory Device
+\tSize: 32 GB
+\tLocator: DIMM 1
+\tBank Locator: P0 CHANNEL A
+\tSpeed: 3200 MT/s
+\tConfigured Memory Speed: 3200 MT/s
+Memory Device
+\tSize: No Module Installed
+\tLocator: DIMM 0
+\tBank Locator: P0 CHANNEL B
+Memory Device
+\tSize: 32 GB
+\tLocator: DIMM 1
+\tBank Locator: P0 CHANNEL B
+\tSpeed: 3200 MT/s
+\tConfigured Memory Speed: 3200 MT/s`;
+
+  it("parses ASRock's bare 'DIMM 0' locator via the 'P0 CHANNEL A' bank locator", () => {
+    const t = parseDmidecodeMemory(ASROCK)!;
+    expect(t.total_slots).toBe(4);
+    expect(t.populated_slots).toBe(2);
+    expect(t.available_channels).toBe(2); // A + B, from bank locator only
+    expect(t.populated_channels).toBe(2); // one DIMM per channel => healthy
+    const populated = t.dimms.filter((d) => d.populated);
+    expect(populated.map((d) => d.channel).sort()).toEqual(["A", "B"]);
+    expect(populated.every((d) => d.socket === 0)).toBe(true);
+  });
+
+  it("reads the channel through an underscore separator (Channel_A)", () => {
+    const raw = ASROCK.replace(/P0 CHANNEL A/g, "P0_Channel_A").replace(/P0 CHANNEL B/g, "P0_Channel_B");
+    const t = parseDmidecodeMemory(raw)!;
+    expect(t.available_channels).toBe(2);
+    expect(t.dimms.filter((d) => d.populated).map((d) => d.channel).sort()).toEqual(["A", "B"]);
+  });
+
   it("flags mixed part numbers across populated DIMMs", () => {
     const raw = AGENTIC12.replace("9965745-039.A00G\n\tRank: 2\n\tConfigured Memory Speed: 3200 MT/s\nHandle 0x003B", "OTHER-PART-XYZ\n\tRank: 2\n\tConfigured Memory Speed: 3200 MT/s\nHandle 0x003B");
     const t = parseDmidecodeMemory(raw)!;

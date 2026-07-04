@@ -48,7 +48,9 @@ function parseIntOrNull(raw: string | undefined): number | null {
  *  Returns uppercase so "a" and "A" collapse. */
 function parseChannel(locator: string, bank: string | null): string | null {
   if (bank) {
-    const m = bank.match(/Channel\s*([0-9A-Za-z]+)/i);
+    // Separator after "Channel" varies by vendor: "Channel0" (Supermicro),
+    // "CHANNEL A" (ASRock, space), "Channel_A" (underscore). Accept any.
+    const m = bank.match(/Channel[\s_]*([0-9A-Za-z]+)/i);
     if (m) return m[1].toUpperCase();
   }
   const m = locator.match(/DIMM[_ ]?([A-H])(?:\d|$)/i);
