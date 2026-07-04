@@ -48,12 +48,22 @@ function parseIntOrNull(raw: string | undefined): number | null {
  *  Returns uppercase so "a" and "A" collapse. */
 function parseChannel(locator: string, bank: string | null): string | null {
   if (bank) {
-    // Separator after "Channel" varies by vendor: "Channel0" (Supermicro),
-    // "CHANNEL A" (ASRock, space), "Channel_A" (underscore). Accept any.
+    // Explicit "Channel<id>" in the bank locator (Supermicro "Channel0",
+    // ASRock "CHANNEL A", ASUS EPYC "P0 CHANNEL A", "Channel_A"). Separator
+    // after "Channel" varies; accept space / underscore / none. Most reliable
+    // when present.
     const m = bank.match(/Channel[\s_]*([0-9A-Za-z]+)/i);
     if (m) return m[1].toUpperCase();
   }
-  const m = locator.match(/DIMM[_ ]?([A-H])(?:\d|$)/i);
+  // Gigabyte EPYC "DIMM_P0_A0": the channel letter follows the P<socket>_
+  // prefix (bank locator here is just "BANK 0", no channel). Must be tried
+  // BEFORE the generic pattern below, which would otherwise capture the
+  // socket letter "P". Channels span A-P across a dual-socket box.
+  let m = locator.match(/DIMM_P\d+_([A-Z]+)\d*/i);
+  if (m) return m[1].toUpperCase();
+  // "DIMMA1" (Supermicro/Xeon), "CPU1_DIMM_A2" (ASUS EPYC), "DIMM_A1": the
+  // channel letter sits right after DIMM (optional _/space), before the slot.
+  m = locator.match(/DIMM[_ ]?([A-Z])\d/i);
   return m ? m[1].toUpperCase() : null;
 }
 

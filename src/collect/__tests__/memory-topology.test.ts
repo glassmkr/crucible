@@ -150,6 +150,70 @@ Memory Device
     expect(t.dimms.filter((d) => d.populated).map((d) => d.channel).sort()).toEqual(["A", "B"]);
   });
 
+  // Real dual EPYC 7302 (Gigabyte): locator "DIMM_P0_A0", bank "BANK 0" (no
+  // channel). 8 channels/socket (P0: A-H, P1: I-P), 1 DPC. Populated A,B,E,F
+  // on socket 0 and I,J,M,N on socket 1 = 4 of 8 channels per socket. The
+  // channel MUST come from the locator's post-P<n>_ letter, not "P".
+  function gigabyteEpyc(): string {
+    const p0 = ["A", "B", "C", "D", "E", "F", "G", "H"];
+    const p1 = ["I", "J", "K", "L", "M", "N", "O", "P"];
+    const pop = new Set(["A", "B", "E", "F", "I", "J", "M", "N"]);
+    const slot = (sock: number, ch: string, i: number) => {
+      const filled = pop.has(ch);
+      return `Handle 0x0${sock}${i}0, DMI type 17, 92 bytes
+Memory Device
+\tSize: ${filled ? "16 GiB" : "No Module Installed"}
+\tLocator: DIMM_P${sock}_${ch}0
+\tBank Locator: BANK 0${filled ? "\n\tType: DDR4\n\tSpeed: 3200 MT/s\n\tPart Number: M393A2K43DB3-CWE\n\tRank: 2\n\tConfigured Memory Speed: 3200 MT/s" : ""}`;
+    };
+    return [...p0.map((c, i) => slot(0, c, i)), ...p1.map((c, i) => slot(1, c, i))].join("\n");
+  }
+
+  it("parses dual EPYC 7302 (DIMM_P0_A0) channels from the locator, not the socket letter", () => {
+    const t = parseDmidecodeMemory(gigabyteEpyc())!;
+    expect(t.total_slots).toBe(16);
+    expect(t.populated_slots).toBe(8);
+    expect(t.available_channels).toBe(16); // A-P across 2 sockets
+    expect(t.populated_channels).toBe(8);  // 4 per socket => under-populated
+    const chans = t.dimms.filter((d) => d.populated).map((d) => d.channel).sort();
+    expect(chans).toEqual(["A", "B", "E", "F", "I", "J", "M", "N"]);
+    expect(chans).not.toContain("P"); // regression guard: not the socket letter
+    // per-socket split the dashboard rule will use
+    const s0 = t.dimms.filter((d) => d.populated && d.socket === 0).map((d) => d.channel).sort();
+    const s1 = t.dimms.filter((d) => d.populated && d.socket === 1).map((d) => d.channel).sort();
+    expect(s0).toEqual(["A", "B", "E", "F"]);
+    expect(s1).toEqual(["I", "J", "M", "N"]);
+  });
+
+  // Real EPYC 9754 (ASUS): locator "CPU1_DIMM_A2", bank "P0 CHANNEL A". 12
+  // channels (A-L), 2 DPC. 8 channels populated in slot 2 => 8 of 12.
+  function asusEpyc9754(): string {
+    const chans = ["A", "B", "C", "D", "E", "F", "G", "H", "I", "J", "K", "L"];
+    const pop = new Set(["A", "B", "C", "E", "G", "H", "I", "K"]);
+    const out: string[] = [];
+    chans.forEach((ch, ci) => {
+      for (const dpc of [1, 2]) {
+        const filled = pop.has(ch) && dpc === 2;
+        out.push(`Handle 0x${ci}${dpc}00, DMI type 17, 92 bytes
+Memory Device
+\tSize: ${filled ? "64 GiB" : "No Module Installed"}
+\tLocator: CPU1_DIMM_${ch}${dpc}
+\tBank Locator: P0 CHANNEL ${ch}${filled ? "\n\tType: DDR5\n\tSpeed: 4800 MT/s\n\tPart Number: HMCG94AGBRA\n\tRank: 2\n\tConfigured Memory Speed: 4800 MT/s" : ""}`);
+      }
+    });
+    return out.join("\n");
+  }
+
+  it("parses EPYC 9754 (CPU1_DIMM_A2) as 8 of 12 channels populated", () => {
+    const t = parseDmidecodeMemory(asusEpyc9754())!;
+    expect(t.total_slots).toBe(24);
+    expect(t.populated_slots).toBe(8);
+    expect(t.available_channels).toBe(12); // A-L
+    expect(t.populated_channels).toBe(8);  // under-populated on a 12-ch CPU
+    expect(t.dimms.filter((d) => d.populated).map((d) => d.channel).sort())
+      .toEqual(["A", "B", "C", "E", "G", "H", "I", "K"]);
+  });
+
   it("flags mixed part numbers across populated DIMMs", () => {
     const raw = AGENTIC12.replace("9965745-039.A00G\n\tRank: 2\n\tConfigured Memory Speed: 3200 MT/s\nHandle 0x003B", "OTHER-PART-XYZ\n\tRank: 2\n\tConfigured Memory Speed: 3200 MT/s\nHandle 0x003B");
     const t = parseDmidecodeMemory(raw)!;
