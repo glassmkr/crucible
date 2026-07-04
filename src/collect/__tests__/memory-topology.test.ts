@@ -214,6 +214,38 @@ Memory Device
       .toEqual(["A", "B", "C", "E", "G", "H", "I", "K"]);
   });
 
+  // Negative controls from the two FULLY-populated val boxes: the rule input
+  // must read populated == available so the dashboard rule stays silent on
+  // correctly-built servers.
+  it("EPYC 7443 with all 8 channels populated reads 8/8 (negative control)", () => {
+    const chans = ["A", "B", "C", "D", "E", "F", "G", "H"];
+    const raw = chans.map((c, i) => `Memory Device
+\tSize: 32 GiB
+\tLocator: DIMM${c}1
+\tBank Locator: P0_Node0_Channel${i}_Dimm0
+\tType: DDR4
+\tSpeed: 3200 MT/s
+\tPart Number: M393A4K40EB3-CWE
+\tRank: 2
+\tConfigured Memory Speed: 3200 MT/s`).join("\n");
+    const t = parseDmidecodeMemory(raw)!;
+    expect(t.available_channels).toBe(8);
+    expect(t.populated_channels).toBe(8);
+    expect(t.downclocked).toBe(false);
+  });
+
+  it("EPYC 9355P with all 12 channels populated reads 12/12 (negative control)", () => {
+    const chans = ["A", "B", "C", "D", "E", "F", "G", "H", "I", "J", "K", "L"];
+    const raw = chans.flatMap((c) => [1, 2].map((dpc) => `Memory Device
+\tSize: ${dpc === 2 ? "64 GiB" : "No Module Installed"}
+\tLocator: CPU1_DIMM_${c}${dpc}
+\tBank Locator: P0 CHANNEL ${c}${dpc === 2 ? "\n\tType: DDR5\n\tSpeed: 4800 MT/s\n\tPart Number: M321R8GA0BB0\n\tRank: 2\n\tConfigured Memory Speed: 4800 MT/s" : ""}`)).join("\n");
+    const t = parseDmidecodeMemory(raw)!;
+    expect(t.total_slots).toBe(24);
+    expect(t.available_channels).toBe(12);
+    expect(t.populated_channels).toBe(12);
+  });
+
   it("flags mixed part numbers across populated DIMMs", () => {
     const raw = AGENTIC12.replace("9965745-039.A00G\n\tRank: 2\n\tConfigured Memory Speed: 3200 MT/s\nHandle 0x003B", "OTHER-PART-XYZ\n\tRank: 2\n\tConfigured Memory Speed: 3200 MT/s\nHandle 0x003B");
     const t = parseDmidecodeMemory(raw)!;
