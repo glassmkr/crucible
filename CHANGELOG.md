@@ -7,6 +7,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 Pre-1.0 convention: minor bumps may include breaking changes; we call them
 out under `### Breaking` so downstream consumers can audit.
 
+## [0.13.19] - 2026-07-05
+
+### Added
+
+- **DIMM population topology (SMBIOS Type 17).** The agent now reports each
+  memory slot (populated or empty), its channel, socket, size, rank, rated
+  and configured speed via a new `memory_topology` snapshot block, collected
+  with `dmidecode -t 17` through the privileged facade (new `dmidecode-memory`
+  action). The dashboard uses it to flag under-populated memory channels and
+  DIMMs running below rated speed, the silent bandwidth killers on
+  multi-channel CPUs (an 8-channel EPYC with 4 DIMMs runs at roughly half its
+  peak). Locator parsing validated on real Supermicro, ASRock, Gigabyte, and
+  ASUS boards, including dual-socket EPYC. Hosts without dmidecode, and VMs,
+  simply omit the block. Existing hosts running the unprivileged service user
+  need a one-time wrapper refresh to gain the new action (rerunning
+  `glassmkr-crucible init` does it); root hosts pick it up automatically.
+
+### Fixed
+
+- **No more phantom SMART failure on virtual/unreadable devices.** A device
+  smartctl could not interrogate (BMC virtual media such as "AMI Virtual
+  HDisk0", USB bridges without a device type) was reported as
+  `health: FAILED` with model "unknown", firing a critical `smart_failing`
+  on a fake disk. The collector now skips 0-byte virtual block devices and
+  treats "no SMART data" as exactly that, never as a failure.
+
 ## [0.13.18] - 2026-07-04
 
 ### Fixed
