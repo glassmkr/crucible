@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 Pre-1.0 convention: minor bumps may include breaking changes; we call them
 out under `### Breaking` so downstream consumers can audit.
 
+## [0.13.18] - 2026-07-04
+
+### Fixed
+
+- **`kernel_needs_reboot` false positive on RHEL 8/9/10.** Kernel-reboot
+  detection queried `rpm -q kernel`, but modern RHEL ships the kernel as
+  `kernel-core`, so rpm returned the literal "package kernel is not installed".
+  That string is non-empty and never equals the running kernel, so the alert
+  fired on healthy hosts and showed "Installed kernel: package kernel is not
+  installed". Detection now queries `kernel-core` (plus `kernel` and
+  `kernel-default` for older RHEL / SUSE) and keeps only real version lines, so
+  the running-vs-installed comparison is correct on the RHEL family. Confirmed
+  on Rocky Linux 10.2; Debian/Ubuntu detection is unchanged.
+
 ## [0.13.17] - 2026-07-03
 
 ### Fixed
