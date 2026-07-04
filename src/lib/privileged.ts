@@ -35,7 +35,7 @@ export type PrivilegedAction =
   | "raid-perccli" | "raid-storcli" | "raid-ssacli" | "raid-arcconf"
   | "dmesg-errcrit" | "dmesg-io"
   | "iptables" | "nft" | "ufw" | "firewall-cmd" | "pve-firewall"
-  | "sshd" | "lvs" | "ethtool" | "last";
+  | "sshd" | "lvs" | "ethtool" | "last" | "dmidecode-memory";
 
 /** SMART device paths the wrapper accepts. Mirrors the sh `valid_device`
  *  case in WRAPPER_SCRIPT; kept in TS so it is unit-testable. Blocks path
@@ -80,6 +80,7 @@ function directCommand(action: PrivilegedAction, args: string[]): { cmd: string;
     case "lvs": return { cmd: "lvs", args: ["--reportformat=json", "--options=lv_name,vg_name,lv_attr,data_percent,metadata_percent", "--units=b", "--noheadings"] };
     case "ethtool": return isAllowedIface(args[0] ?? "") ? { cmd: "ethtool", args: [args[0]] } : null;
     case "last": return { cmd: "last", args: ["-x", "-F"] };
+    case "dmidecode-memory": return { cmd: "dmidecode", args: ["-t", "17"] };
     default: return null;
   }
 }
@@ -168,6 +169,7 @@ case "$action" in
   firewall-cmd)   exec firewall-cmd --state ;;
   pve-firewall)   exec pve-firewall status ;;
   sshd)           exec sshd -T ;;
+  dmidecode-memory) exec dmidecode -t 17 ;;
   lvs)            exec lvs --reportformat=json --options=lv_name,vg_name,lv_attr,data_percent,metadata_percent --units=b --noheadings ;;
   ethtool)
     ifc="\${1:-}"

@@ -87,6 +87,7 @@ import { pushToDashboard, initDashboardAgent } from "./push/dashboard.js";
 import { collectSecurity, type SecurityData } from "./collect/security.js";
 import { collectZfs } from "./collect/zfs.js";
 import { collectEdac } from "./collect/edac.js";
+import { collectMemoryTopology } from "./collect/memory-topology.js";
 import { collectPsi } from "./collect/psi.js";
 import { collectVmstat } from "./collect/vmstat.js";
 import { collectRebootEvidence } from "./collect/reboot-evidence.js";
@@ -283,6 +284,7 @@ async function collect() {
   // → field omitted → dashboard rules degrade gracefully per the
   // activation PR's capability gates.
   try { snapshot.ecc_edac = collectEdac() ?? undefined; } catch { /* skip on error */ }
+  try { snapshot.memory_topology = await collectMemoryTopology() ?? undefined; } catch { /* skip on error */ }
   try { snapshot.psi = collectPsi() ?? undefined; } catch { /* skip on error */ }
   try { snapshot.vmstat = collectVmstat() ?? undefined; } catch { /* skip on error */ }
   try { snapshot.reboot_evidence = await collectRebootEvidence(); } catch { /* skip on error */ }

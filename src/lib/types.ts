@@ -33,6 +33,9 @@ export interface Snapshot {
   // field presence.
   /** EDAC memory-error counters per memory controller + DIMM. */
   ecc_edac?: EdacSnapshot;
+  /** DIMM population + channel balance from SMBIOS Type 17 (dmidecode).
+   *  Omitted on VMs / when dmidecode is unavailable. */
+  memory_topology?: MemoryTopology;
   /** PSI pressure-stall counters per resource (cpu, memory, io). */
   psi?: PsiSnapshot;
   /** /proc/vmstat swap-in/out rates. */
@@ -630,6 +633,40 @@ export interface MemoryInfo {
   free_mb: number;
   swap_total_mb: number;
   swap_used_mb: number;
+}
+
+/** One SMBIOS Type 17 Memory Device record (a physical DIMM slot). */
+export interface MemoryDimm {
+  locator: string;              // e.g. "DIMMA1"
+  bank_locator: string | null;  // e.g. "P0_Node0_Channel0_Dimm0"
+  socket: number | null;        // parsed from P<n> / CPU<n>; 0 for single-socket
+  channel: string | null;       // normalized channel id (e.g. "0" or "A")
+  slot: number | null;          // slot within the channel (DPC index)
+  populated: boolean;
+  size_mb: number | null;
+  rank: number | null;
+  type: string | null;          // DDR4 / DDR5
+  speed_mts: number | null;     // rated speed
+  configured_mts: number | null;// running speed (< rated => downclock)
+  manufacturer: string | null;
+  part_number: string | null;
+}
+
+/** DIMM population topology derived from dmidecode -t 17. These are the raw
+ *  COLLECTED facts only; the controller/quadrant-balance judgment (Tier 2) is
+ *  derived dashboard-side from these + the snapshot's cpu_model against a
+ *  CPU-family map, so the map can be updated without an agent re-release. */
+export interface MemoryTopology {
+  source: "dmidecode";
+  total_slots: number;
+  populated_slots: number;
+  available_channels: number;
+  populated_channels: number;
+  /** Any populated DIMM whose configured speed is below its rated speed. */
+  downclocked: boolean;
+  /** >1 distinct part number / size / rank among populated DIMMs. */
+  mixed_parts: boolean;
+  dimms: MemoryDimm[];
 }
 
 export interface DiskInfo {
