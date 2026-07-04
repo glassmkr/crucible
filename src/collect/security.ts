@@ -379,8 +379,15 @@ async function checkKernelReboot(): Promise<KernelRebootStatus | null> {
     return { running, installed: debPkg, needsReboot: debPkg !== running };
   }
 
-  // Method 3: RPM-based
-  const rpmPkg = (await run("bash", ["-c", 'rpm -q kernel --queryformat "%{VERSION}-%{RELEASE}.%{ARCH}\\n" 2>/dev/null | sort -V | tail -1']))?.trim();
+  // Method 3: RPM-based (RHEL/Fedora/SUSE). Modern RHEL (EL8+) ships the
+  // kernel as `kernel-core`, not `kernel`; SUSE uses `kernel-default`.
+  // Querying only `kernel` returns the literal "package kernel is not
+  // installed" on EL8/9/10, which is truthy and != running, so the rule
+  // misfired with that string as the "installed" version (Rocky 10 false
+  // positive). Query every package that carries the kernel and keep only
+  // real version lines (they start with a digit; "package X is not
+  // installed" does not), then take the newest.
+  const rpmPkg = (await run("bash", ["-c", 'rpm -q --queryformat "%{VERSION}-%{RELEASE}.%{ARCH}\\n" kernel-core kernel kernel-default 2>/dev/null | grep -E "^[0-9]" | sort -V | tail -1']))?.trim();
   if (rpmPkg) {
     return { running, installed: rpmPkg, needsReboot: rpmPkg !== running };
   }
