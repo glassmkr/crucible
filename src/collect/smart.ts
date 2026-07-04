@@ -1,5 +1,5 @@
 import { runPrivileged } from "../lib/privileged.js";
-import { readdirSync } from "fs";
+import { readdirSync, readFileSync } from "fs";
 import type { SmartInfo } from "../lib/types.js";
 
 export async function collectSmart(): Promise<SmartInfo[]> {
@@ -8,9 +8,16 @@ export async function collectSmart(): Promise<SmartInfo[]> {
   try {
     const entries = readdirSync("/sys/block");
     for (const entry of entries) {
-      if (entry.startsWith("sd") || entry.startsWith("nvme") || entry.startsWith("hd")) {
-        devices.push(`/dev/${entry}`);
-      }
+      if (!(entry.startsWith("sd") || entry.startsWith("nvme") || entry.startsWith("hd"))) continue;
+      // Skip media-less virtual devices (BMC virtual media: "AMI Virtual
+      // HDisk0" enumerates as a 0-byte USB /dev/sda on Supermicro/ASUS
+      // boards). smartctl cannot interrogate them and they are not disks;
+      // without this guard one produced a phantom "SMART failure on
+      // /dev/sda" (agentic-17, 2026-07-05).
+      try {
+        if (parseInt(readFileSync(`/sys/block/${entry}/size`, "utf-8").trim(), 10) === 0) continue;
+      } catch { /* unreadable size: let smartctl decide */ }
+      devices.push(`/dev/${entry}`);
     }
   } catch {
     return [];
@@ -23,7 +30,7 @@ export async function collectSmart(): Promise<SmartInfo[]> {
 
     try {
       const info = parseSmartctlJson(JSON.parse(output), device);
-      results.push(info);
+      if (info) results.push(info);
     } catch {
       // Failed to parse, skip this device
     }
@@ -49,7 +56,16 @@ export function parseSmartctlJson(data: Record<string, unknown> & {
     available_spare_threshold?: number;
   };
   ata_smart_attributes?: { table?: Array<{ id?: number; name?: string; value?: number; raw?: { value?: number } }> };
-}, device: string): SmartInfo {
+}, device: string): SmartInfo | null {
+  // No SMART surface at all: smartctl emitted JSON but could not interrogate
+  // the device (USB bridge without a -d type, BMC virtual media, unsupported
+  // enclosure). "Cannot read SMART" is NOT "FAILED": before this guard,
+  // `smart_status?.passed` being undefined fell through to FAILED and fired a
+  // phantom critical smart_failing on AMI Virtual HDisk0 (agentic-17).
+  if (data.smart_status === undefined && data.nvme_smart_health_information_log === undefined) {
+    return null;
+  }
+
   const info: SmartInfo = {
     device,
     model: data.model_name || data.model_family || "unknown",

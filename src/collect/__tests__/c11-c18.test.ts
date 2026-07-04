@@ -219,7 +219,7 @@ describe("C17 NVMe critical warning decode", () => {
         available_spare_threshold: 10,
       },
     };
-    const info = parseSmartctlJson(raw as never, "/dev/nvme0");
+    const info = parseSmartctlJson(raw as never, "/dev/nvme0")!;
     expect(info.critical_warning_raw).toBe(0x02);
     expect(info.critical_warning_decoded?.temperature_threshold).toBe(true);
     expect(info.critical_warning_decoded?.read_only).toBe(false);
@@ -233,7 +233,7 @@ describe("C17 NVMe critical warning decode", () => {
       smart_status: { passed: true },
       ata_smart_attributes: { table: [] },
     };
-    const info = parseSmartctlJson(raw as never, "/dev/sda");
+    const info = parseSmartctlJson(raw as never, "/dev/sda")!;
     expect(info.critical_warning_decoded).toBeUndefined();
     expect(info.critical_warning_raw).toBeUndefined();
   });
