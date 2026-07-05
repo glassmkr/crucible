@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 Pre-1.0 convention: minor bumps may include breaking changes; we call them
 out under `### Breaking` so downstream consumers can audit.
 
+## [0.13.20] - 2026-07-05
+
+### Fixed
+
+- **Per-process FD scan now sees root-owned processes.** When Crucible runs as
+  the unprivileged `glassmkr` service user, the per-process file-descriptor
+  scan read `/proc/<pid>/fd` directly and got permission-denied on root-owned
+  processes, silently skipping them: a root daemon leaking descriptors was
+  invisible to the per-process `fd_exhaustion` signal (the host-wide
+  `/proc/sys/fs/file-nr` path was unaffected). The scan now runs through the
+  privileged facade (new `proc-fd` action) so it sees every process, and falls
+  back to the in-process scan when the wrapper is absent, so it only ever gains
+  visibility. Existing unprivileged-user hosts need a one-time wrapper refresh
+  to gain the new action (rerunning `glassmkr-crucible init` does it); root
+  hosts pick it up automatically.
+- **Fan false positive on discrete PSU sensors (agent-side rule).** The
+  agent's local `ipmi_fan_failure` rule counted a zero-RPM fan as failed even
+  when its BMC state was `ok` (discrete PSU fan sensors report a state string,
+  not an RPM). The BMC's own ok verdict now wins, mirroring the dashboard fix.
+
 ## [0.13.19] - 2026-07-05
 
 ### Added
