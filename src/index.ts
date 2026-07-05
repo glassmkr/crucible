@@ -295,7 +295,7 @@ async function collect() {
   // when its underlying /proc surface is missing. Dashboard rules
   // degrade gracefully on older agents and hosts that lack the
   // relevant kernel modules.
-  try { snapshot.process_fd = collectProcessFd(); } catch { /* skip on error */ }
+  try { snapshot.process_fd = await collectProcessFd(); } catch { /* skip on error */ }
   try { snapshot.bonding = collectBonding(); } catch { /* skip on error */ }
   try { snapshot.tcp_stats = collectTcpStats(); } catch { /* skip on error */ }
 

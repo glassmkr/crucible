@@ -61,6 +61,43 @@ describe("C7 process FD: parseOpenFilesLimit", () => {
 });
 
 // ============================================================================
+// proc-fd wrapper output parsing (0.13.20: root-visible FD scan)
+// ============================================================================
+
+describe("proc-fd: parseProcFdOutput", () => {
+  it("parses SCANNED + pipe-delimited consumer lines (incl. a root-owned proc)", () => {
+    const raw = [
+      "SCANNED 142",
+      "812|903|1024 1024|python3",
+      "1|58|1024 524288|systemd",
+    ].join("\n");
+    const out = fdTest.parseProcFdOutput(raw)!;
+    expect(out.available).toBe(true);
+    expect(out.total_processes_scanned).toBe(142);
+    expect(out.top_consumers[0]).toEqual({
+      pid: 812, comm: "python3", fd_count: 903,
+      rlimit_nofile_soft: 1024, rlimit_nofile_hard: 1024, percent_of_soft_limit: 88.2,
+    });
+    expect(out.highest_percent_of_limit).toBe(88.2);
+  });
+
+  it("handles a comm containing a pipe (split cap)", () => {
+    const out = fdTest.parseProcFdOutput("SCANNED 3\n5|10|1024 4096|weird|name")!;
+    expect(out.top_consumers[0].comm).toBe("weird|name");
+  });
+
+  it("unlimited soft limit maps to 0 sentinel and 0 percent", () => {
+    const out = fdTest.parseProcFdOutput("SCANNED 1\n9|40|unlimited unlimited|bash")!;
+    expect(out.top_consumers[0].percent_of_soft_limit).toBe(0);
+  });
+
+  it("returns null on empty / dataless output so the caller falls back", () => {
+    expect(fdTest.parseProcFdOutput("")).toBeNull();
+    expect(fdTest.parseProcFdOutput("   \n  ")).toBeNull();
+  });
+});
+
+// ============================================================================
 // C8 bonding: parseBondFile
 // ============================================================================
 
