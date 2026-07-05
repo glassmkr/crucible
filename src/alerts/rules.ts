@@ -363,7 +363,7 @@ export const allRules: AlertRule[] = [
   // 20. Fan failure
   { type: "ipmi_fan_failure", evaluate(snap) {
     if (!snap.ipmi?.available || !snap.ipmi.fans?.length) return [];
-    const failed = snap.ipmi.fans.filter(f => f.status === "critical" || (f.rpm === 0 && f.status !== "absent"));
+    const failed = snap.ipmi.fans.filter(f => f.status === "critical" || (f.rpm === 0 && f.status !== "absent" && f.status !== "ok"));
     if (failed.length === 0) return [];
     const total = snap.ipmi.fans.filter(f => f.status !== "absent").length;
     const names = failed.map(f => `${f.name} (${f.rpm} RPM)`).join(", ");
