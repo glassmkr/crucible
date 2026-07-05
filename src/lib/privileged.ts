@@ -35,7 +35,20 @@ export type PrivilegedAction =
   | "raid-perccli" | "raid-storcli" | "raid-ssacli" | "raid-arcconf"
   | "dmesg-errcrit" | "dmesg-io"
   | "iptables" | "nft" | "ufw" | "firewall-cmd" | "pve-firewall"
-  | "sshd" | "lvs" | "ethtool" | "last" | "dmidecode-memory";
+  | "sshd" | "lvs" | "ethtool" | "last" | "dmidecode-memory" | "proc-fd";
+
+// proc-fd scan (added 0.13.20). Runs the per-process FD count + RLIMIT read as
+// root so the unprivileged `glassmkr` service user can see root-owned processes
+// (a root daemon leaking descriptors was previously invisible: readdir on
+// /proc/<root-pid>/fd returns EACCES to a non-root uid). No args, no shell
+// metacharacters from outside; a fixed scan. Two cheap passes over /proc, then
+// limits for the top 50. Emits `SCANNED <n>` then `pid|fd_count|soft hard|comm`
+// lines. `$(cat comm)` strips its own trailing newline, so no \n handling. The
+// if/then guards keep it safe under the wrapper's `set -eu`.
+const PROC_FD_SH = `c=0
+for d in /proc/[0-9]*; do if [ -r "$d/fd" ]; then c=$((c+1)); fi; done
+echo "SCANNED $c"
+for d in /proc/[0-9]*; do [ -r "$d/fd" ] || continue; p=$(basename "$d"); n=$(ls "$d/fd" 2>/dev/null | wc -l); echo "$n $p"; done | sort -rn | head -50 | while read n p; do comm=$(cat /proc/$p/comm 2>/dev/null); lim=$(awk '/^Max open files/{print $4" "$5}' /proc/$p/limits 2>/dev/null); if [ -n "$comm" ]; then echo "$p|$n|$lim|$comm"; fi; done`;
 
 /** SMART device paths the wrapper accepts. Mirrors the sh `valid_device`
  *  case in WRAPPER_SCRIPT; kept in TS so it is unit-testable. Blocks path
@@ -81,6 +94,7 @@ function directCommand(action: PrivilegedAction, args: string[]): { cmd: string;
     case "ethtool": return isAllowedIface(args[0] ?? "") ? { cmd: "ethtool", args: [args[0]] } : null;
     case "last": return { cmd: "last", args: ["-x", "-F"] };
     case "dmidecode-memory": return { cmd: "dmidecode", args: ["-t", "17"] };
+    case "proc-fd": return { cmd: "sh", args: ["-c", PROC_FD_SH] };
     default: return null;
   }
 }
@@ -176,6 +190,9 @@ case "$action" in
     valid_iface "$ifc" || { echo "crucible-collect: rejected iface: $ifc" >&2; exit 65; }
     exec ethtool "$ifc" ;;
   last)           exec last -x -F ;;
+  proc-fd)
+${PROC_FD_SH}
+    exit 0 ;;
   *) echo "crucible-collect: unknown action: $action" >&2; exit 64 ;;
 esac
 `;

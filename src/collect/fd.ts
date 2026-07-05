@@ -14,6 +14,7 @@
 import { readdirSync } from "fs";
 
 import { readFileTrim, readProcFile } from "../lib/parse.js";
+import { runPrivileged } from "../lib/privileged.js";
 
 export interface FileDescriptorData {
   allocated: number;
@@ -65,14 +66,66 @@ export function collectFileDescriptors(): FileDescriptorData {
 }
 
 /**
- * Per-process FD scan. Walks /proc, counts FDs per PID, then reads
- * `/proc/<pid>/limits` for the top-N consumers to compute proximity
- * to each process's RLIMIT_NOFILE soft limit.
+ * Per-process FD scan. Prefers the privileged facade (`proc-fd`) so
+ * root-owned processes are visible: running as the unprivileged `glassmkr`
+ * service user, an in-process readdir on /proc/<root-pid>/fd returns EACCES,
+ * so a root daemon leaking descriptors was silently skipped (found by the
+ * validation-ladder Round F arming, 2026-07-05). The wrapper runs the scan as
+ * root and returns it parseable.
  *
- * Returns `{ available: false }` when /proc/1 is not a directory
- * (essentially never on Linux; defensive).
+ * Falls back to the in-process scan when the privileged call returns null
+ * (host still on User=root without the wrapper, or a wrapper-less non-root
+ * agent) - identical behaviour to before, so this only ever ADDS visibility.
  */
-export function collectProcessFd(): ProcessFdSnapshot {
+export async function collectProcessFd(): Promise<ProcessFdSnapshot> {
+  // 15s: the scan shells out over all of /proc; generous but bounded.
+  const raw = await runPrivileged("proc-fd", [], 15000);
+  if (raw !== null) {
+    const parsed = parseProcFdOutput(raw);
+    if (parsed) return parsed;
+  }
+  return scanProcessFdInProcess();
+}
+
+/** Parse the `proc-fd` wrapper output: a `SCANNED <n>` line followed by
+ *  `pid|fd_count|soft hard|comm` lines (top consumers, pre-sorted). Returns
+ *  null if the output has no usable data (so the caller falls back). */
+export function parseProcFdOutput(raw: string): ProcessFdSnapshot | null {
+  const lines = raw.split("\n").map((l) => l.trim()).filter(Boolean);
+  if (lines.length === 0) return null;
+  let scanned = 0;
+  const top_consumers: ProcessFdEntry[] = [];
+  for (const line of lines) {
+    if (line.startsWith("SCANNED ")) {
+      const n = Number(line.slice("SCANNED ".length).trim());
+      if (Number.isInteger(n) && n >= 0) scanned = n;
+      continue;
+    }
+    // pid|fd_count|soft hard|comm  (comm may contain spaces; limit split to 4)
+    const parts = line.split("|");
+    if (parts.length < 4) continue;
+    const pid = Number(parts[0]);
+    const fd_count = Number(parts[1]);
+    const lim = parts[2].trim().split(/\s+/);
+    const comm = parts.slice(3).join("|");
+    if (!Number.isInteger(pid) || !Number.isInteger(fd_count)) continue;
+    const soft = parseLimitValue(lim[0] ?? "");
+    const hard = parseLimitValue(lim[1] ?? "");
+    if (soft === null || hard === null) continue;
+    const percent = soft > 0 ? Math.round((fd_count / soft) * 1000) / 10 : 0;
+    top_consumers.push({ pid, comm, fd_count, rlimit_nofile_soft: soft, rlimit_nofile_hard: hard, percent_of_soft_limit: percent });
+  }
+  if (scanned === 0 && top_consumers.length === 0) return null;
+  const highest = top_consumers.length > 0
+    ? top_consumers.reduce((m, e) => (e.percent_of_soft_limit > m ? e.percent_of_soft_limit : m), 0)
+    : null;
+  return { available: true, top_consumers, total_processes_scanned: scanned, highest_percent_of_limit: highest };
+}
+
+/** In-process fallback scan (the pre-0.13.20 behaviour). Sees only the
+ *  processes this uid can readdir - complete when run as root, partial as an
+ *  unprivileged user without the wrapper. */
+function scanProcessFdInProcess(): ProcessFdSnapshot {
   let pidNames: string[];
   try {
     pidNames = readdirSync("/proc");
@@ -192,5 +245,6 @@ function parseLimitValue(v: string): number | null {
 
 export const __test_only = {
   parseOpenFilesLimit,
+  parseProcFdOutput,
   TOP_N,
 };
