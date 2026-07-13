@@ -77,7 +77,7 @@ docker compose up -d
 docker compose logs -f crucible
 ```
 
-The image is published to [`docker.io/glassmkr/crucible`](https://hub.docker.com/r/glassmkr/crucible) (public; the compose file above pulls `:latest` from there). It is also mirrored to [`ghcr.io/glassmkr/crucible`](https://github.com/glassmkr/crucible/pkgs/container/crucible), which currently requires authentication to pull. The container needs `--privileged` and `network_mode: host` for IPMI, SMART, and accurate host network monitoring. Details in the [compose file](./docker-compose.yml).
+The image is published to [`docker.io/glassmkr/crucible`](https://hub.docker.com/r/glassmkr/crucible) (public; the compose file above pulls `:latest` from there) and mirrored to [`ghcr.io/glassmkr/crucible`](https://github.com/glassmkr/crucible/pkgs/container/crucible) (also public). Both pull without authentication. The container needs `--privileged` and `network_mode: host` for IPMI, SMART, and accurate host network monitoring. Details in the [compose file](./docker-compose.yml).
 
 ## Quick Start
 
