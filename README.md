@@ -3,8 +3,8 @@
 [![MIT License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![npm version](https://img.shields.io/npm/v/@glassmkr/crucible.svg)](https://www.npmjs.com/package/@glassmkr/crucible)
 
-<!-- Canonical rule count: 61 across 9 categories. -->
-Lightweight bare-metal server monitoring agent. Collects hardware and OS health every 60 seconds at the default interval and pushes snapshots to the [Glassmkr Dashboard](https://app.glassmkr.com), which evaluates 61 alert rules across 9 categories and sends notifications.
+<!-- Canonical rule count: 65 across 9 categories. -->
+Lightweight bare-metal server monitoring agent. Collects hardware and OS health every 60 seconds at the default interval and pushes snapshots to the [Glassmkr Dashboard](https://app.glassmkr.com), which evaluates 65 alert rules across 9 categories and sends notifications.
 
 Open source. MIT licensed. Built by [Glassmkr](https://glassmkr.com). Crucible is the open-source product; the optional [Glassmkr Dashboard](https://app.glassmkr.com) is a hosted SaaS that consumes Crucible's snapshots.
 
@@ -268,8 +268,8 @@ this detection automatically; the manual flow above is just the equivalent.
 | File descriptors | System-wide allocation |
 | Reboot evidence | pstore / kdump / wtmp; expected-vs-unexpected reboot classification |
 
-<!-- Canonical rule count: 61 across 9 categories. -->
-Dashboard evaluates 61 alert rules server-side across 9 categories (storage, zfs, filesystem, memory & CPU, network, hardware/BMC, time & services, security & patching, GPU), with priorities P1 Urgent through P4 Low. 20 rules ship with deep FIX content (copy-pasteable remediation + verdict prior + rollback notes); 30+ are verified end-to-end on real hardware. Full list: [glassmkr.com/docs/rules](https://glassmkr.com/docs/rules).
+<!-- Canonical rule count: 65 across 9 categories. -->
+Dashboard evaluates 65 alert rules server-side across 9 categories (storage, zfs, filesystem, memory & CPU, network, hardware/BMC, time & services, security & patching, GPU), with priorities P1 Urgent through P4 Low. Every rule ships with deep FIX content (copy-pasteable remediation + verdict prior + rollback notes); 30+ are verified end-to-end on real hardware. Full list: [glassmkr.com/docs/rules](https://glassmkr.com/docs/rules).
 
 ## Requirements
 
