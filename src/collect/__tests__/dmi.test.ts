@@ -140,3 +140,38 @@ describe("classifyVendor: HP edge cases (regression for 0.8.0 medium)", () => {
     expect(classifyVendor("HP ProLiant DL360", "DL360 G7")).toEqual({ vendor: "hpe", is_virtual: false });
   });
 });
+
+describe("classifyVendor: board_vendor fallback (val campaign, asrock)", () => {
+  it("falls back to baseboard vendor when sys_vendor is 'To Be Filled By O.E.M.'", () => {
+    // The exact asrock case: consumer/OEM board, placeholder sys_vendor,
+    // real vendor only in baseboard-manufacturer.
+    expect(classifyVendor("To Be Filled By O.E.M.", "X570D4U", "ASRockRack")).toEqual({ vendor: "asrockrack", is_virtual: false });
+  });
+
+  it("falls back for other common placeholder strings", () => {
+    expect(classifyVendor("Default string", "X11", "Supermicro").vendor).toBe("supermicro");
+    expect(classifyVendor("System manufacturer", "Z790", "ASRock").vendor).toBe("asrockrack");
+  });
+
+  it("falls back when sys_vendor is simply unrecognized", () => {
+    expect(classifyVendor("Acme Whitebox Co", "Model 1", "Dell Inc.").vendor).toBe("dell");
+  });
+
+  it("prefers a recognized sys_vendor over board_vendor", () => {
+    // A real Dell system with a Dell board: sys_vendor wins, no fallback.
+    expect(classifyVendor("Dell Inc.", "PowerEdge R740", "Dell Inc.").vendor).toBe("dell");
+  });
+
+  it("stays generic when neither sys_vendor nor board_vendor is recognized", () => {
+    expect(classifyVendor("To Be Filled By O.E.M.", "X", "Also Unknown").vendor).toBe("generic");
+  });
+
+  it("does not use board_vendor for virtual detection", () => {
+    // A hypervisor sys_vendor is authoritative; board_vendor is irrelevant.
+    expect(classifyVendor("QEMU", "Standard PC", "Seabios")).toEqual({ vendor: "virtual", is_virtual: true });
+  });
+
+  it("backwards-compatible when board_vendor is omitted", () => {
+    expect(classifyVendor("To Be Filled By O.E.M.", "X570D4U").vendor).toBe("generic");
+  });
+});
