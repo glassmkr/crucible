@@ -115,8 +115,20 @@ const SSHD_CONFIG_D = "/etc/ssh/sshd_config.d";
 
 // Newest mtime (epoch seconds) among sshd_config and its *.conf drop-ins,
 // or null if none is stat-able. mtime only needs directory traversal, not
-// file read, so this works even when the config contents are root-only.
-function newestSshdConfigMtime(): number | null {
+// file read, so this works even when the config CONTENTS are root-only.
+//
+// The drop-in directory itself, however, is 0700 root by default on RHEL, so
+// an UNPRIVILEGED agent (User=glassmkr) gets EACCES from readdir and would
+// silently miss every drop-in edit, leaving ssh_config_unapplied blind to
+// drop-in changes on RHEL. When the direct readdir fails for any reason other
+// than "dir absent" (ENOENT), fall back to the privileged wrapper, which lists
+// + stats the drop-ins as root and prints the newest epoch-seconds mtime. Root
+// hosts keep the direct path (readdir succeeds), so the wrapper is only hit
+// when it is actually needed. The reader is injectable for tests.
+export async function newestSshdConfigMtime(
+  readPrivilegedMtime: () => Promise<string | null> = () =>
+    runPrivileged("ssh-config-mtime", [], 5000),
+): Promise<number | null> {
   let newest: number | null = null;
   const consider = (p: string): void => {
     try {
@@ -126,13 +138,22 @@ function newestSshdConfigMtime(): number | null {
       // missing / unreadable: skip
     }
   };
+  const considerSecs = (secs: number): void => {
+    if (Number.isFinite(secs) && secs > 0 && (newest === null || secs > newest)) newest = secs;
+  };
   consider(SSHD_CONFIG_PATH);
   try {
     for (const f of readdirSync(SSHD_CONFIG_D)) {
       if (f.endsWith(".conf")) consider(`${SSHD_CONFIG_D}/${f}`);
     }
-  } catch {
-    // no drop-in dir: fine
+  } catch (err) {
+    // ENOENT: no drop-in dir, nothing to add. Any other error (notably EACCES:
+    // the 0700-root dir on RHEL when we run unprivileged) means the direct path
+    // is blind to drop-ins, so read them through the privileged wrapper.
+    if ((err as NodeJS.ErrnoException)?.code !== "ENOENT") {
+      const out = await readPrivilegedMtime();
+      if (out) considerSecs(parseInt(out.trim(), 10));
+    }
   }
   return newest;
 }
@@ -161,7 +182,7 @@ async function sshConfigApplyState(): Promise<{
   configMtime: number | null;
   loadedAt: number | null;
 }> {
-  const configMtime = newestSshdConfigMtime();
+  const configMtime = await newestSshdConfigMtime();
   const btime = bootTimeEpoch();
   if (configMtime === null || btime === null) {
     return { applied: true, configMtime, loadedAt: null };

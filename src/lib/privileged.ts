@@ -35,7 +35,8 @@ export type PrivilegedAction =
   | "raid-perccli" | "raid-storcli" | "raid-ssacli" | "raid-arcconf"
   | "dmesg-errcrit" | "dmesg-io"
   | "iptables" | "nft" | "ufw" | "firewall-cmd" | "pve-firewall"
-  | "sshd" | "lvs" | "ethtool" | "last" | "dmidecode-memory" | "proc-fd";
+  | "sshd" | "lvs" | "ethtool" | "last" | "dmidecode-memory" | "proc-fd"
+  | "ssh-config-mtime";
 
 // proc-fd scan (added 0.13.20). Runs the per-process FD count + RLIMIT read as
 // root so the unprivileged `glassmkr` service user can see root-owned processes
@@ -49,6 +50,26 @@ const PROC_FD_SH = `c=0
 for d in /proc/[0-9]*; do if [ -r "$d/fd" ]; then c=$((c+1)); fi; done
 echo "SCANNED $c"
 for d in /proc/[0-9]*; do [ -r "$d/fd" ] || continue; p=$(basename "$d"); n=$(ls "$d/fd" 2>/dev/null | wc -l); echo "$n $p"; done | sort -rn | head -50 | while read n p; do comm=$(cat /proc/$p/comm 2>/dev/null); lim=$(awk '/^Max open files/{print $4" "$5}' /proc/$p/limits 2>/dev/null); if [ -n "$comm" ]; then echo "$p|$n|$lim|$comm"; fi; done`;
+
+// ssh-config-mtime scan (added for the RHEL drop-in visibility fix). Prints the
+// newest mtime (epoch seconds) among /etc/ssh/sshd_config and its *.conf
+// drop-ins, so the unprivileged `glassmkr` service user can still tell whether
+// an sshd edit is staged-but-unapplied even when /etc/ssh/sshd_config.d is
+// 0700 root (RHEL default), where a direct readdir returns EACCES. Strictly
+// read-only + fixed-path: it only ever stats those two locations, never reads
+// contents and never writes. `stat -c %Y` is Linux/coreutils (the wrapper only
+// ever runs on Linux hosts). if/then guards keep it safe under `set -eu`; a
+// non-matching glob stays literal and is skipped by the `[ -e ]` test.
+const SSH_CONFIG_MTIME_SH = `newest=0
+m=$(stat -c %Y /etc/ssh/sshd_config 2>/dev/null || echo 0)
+if [ "$m" -gt "$newest" ]; then newest=$m; fi
+for f in /etc/ssh/sshd_config.d/*.conf; do
+  if [ -e "$f" ]; then
+    m=$(stat -c %Y "$f" 2>/dev/null || echo 0)
+    if [ "$m" -gt "$newest" ]; then newest=$m; fi
+  fi
+done
+echo "$newest"`;
 
 /** SMART device paths the wrapper accepts. Mirrors the sh `valid_device`
  *  case in WRAPPER_SCRIPT; kept in TS so it is unit-testable. Blocks path
@@ -95,6 +116,7 @@ function directCommand(action: PrivilegedAction, args: string[]): { cmd: string;
     case "last": return { cmd: "last", args: ["-x", "-F"] };
     case "dmidecode-memory": return { cmd: "dmidecode", args: ["-t", "17"] };
     case "proc-fd": return { cmd: "sh", args: ["-c", PROC_FD_SH] };
+    case "ssh-config-mtime": return { cmd: "sh", args: ["-c", SSH_CONFIG_MTIME_SH] };
     default: return null;
   }
 }
@@ -147,10 +169,19 @@ action="\${1:-}"
 shift 2>/dev/null || true
 
 valid_device() {
+  # Mirror the anchored TS isAllowedSmartDevice. POSIX 'case' patterns treat
+  # the operand as a plain string, so a trailing '*' matches '/' too; that let
+  # /dev/nvme0/../../etc/shadow and /dev/bus/0/../../etc/passwd slip through the
+  # old '/dev/nvme[0-9]*' / '/dev/bus/[0-9]*' arms. Reject any '..' outright,
+  # then constrain the variable tail of each arm to the allowed characters
+  # (digits, and a single 'n' for nvme) so no post-stem '/' survives.
+  case "$1" in *..*) return 1 ;; esac
   case "$1" in
     /dev/sd[a-z]|/dev/sd[a-z][a-z]|/dev/hd[a-z]|/dev/hd[a-z][a-z]) return 0 ;;
-    /dev/nvme[0-9]*n[0-9]*|/dev/nvme[0-9]*) return 0 ;;
-    /dev/bus/[0-9]*) return 0 ;;
+    /dev/nvme[0-9]*n[0-9]*|/dev/nvme[0-9]*)
+      case "\${1#/dev/nvme}" in *[!0-9n]*) return 1 ;; *) return 0 ;; esac ;;
+    /dev/bus/[0-9]*)
+      case "\${1#/dev/bus/}" in ""|*[!0-9]*) return 1 ;; *) return 0 ;; esac ;;
     *) return 1 ;;
   esac
 }
@@ -193,6 +224,9 @@ case "$action" in
   proc-fd)
 ${PROC_FD_SH}
     exit 0 ;;
+  ssh-config-mtime)
+${SSH_CONFIG_MTIME_SH}
+    exit 0 ;;
   *) echo "crucible-collect: unknown action: $action" >&2; exit 64 ;;
 esac
 `;
@@ -203,6 +237,6 @@ esac
 export const SUDOERS_CONTENT = `# Glassmkr Crucible (audit §2.1). Managed by glassmkr-crucible init.
 # The service user may run ONLY the fixed-argv collection facade as root.
 Defaults!${WRAPPER_PATH} env_reset
-Defaults!${WRAPPER_PATH} secure_path="/usr/local/sbin:/usr/sbin:/usr/bin:/sbin:/bin"
+Defaults!${WRAPPER_PATH} secure_path="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 ${SERVICE_USER} ALL=(root) NOPASSWD: ${WRAPPER_PATH}
 `;
