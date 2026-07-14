@@ -317,7 +317,20 @@ async function checkSecurityUpdates(): Promise<SecurityUpdateStatus | null> {
 
   if (osRelease.includes("rhel") || osRelease.includes("rocky") || osRelease.includes("alma") || osRelease.includes("fedora") || osRelease.includes("centos")) {
     const cmd = existsSync("/usr/bin/dnf") ? "dnf" : "yum";
-    const output = await run("bash", ["-c", `${cmd} updateinfo list security --available 2>/dev/null | grep -c "/"`], 60000);
+    // Count only INSTALLABLE security updates. `updateinfo list security
+    // --available` also lists advisories for installonly kernels that are
+    // already on disk (installed but not yet booted), which inflates the
+    // count and points remediation at a no-op. (val campaign agentic-12,
+    // Rocky 10: it reported 8 "pending" that were all the installed-but-
+    // unbooted 211.28/211.32 kernels; the truly installable security count
+    // was 0, and the real fix is the reboot kernel_needs_reboot already
+    // flags, not `dnf update --security`.) `check-update --security` lists
+    // only packages with an installable newer NVRA (name.arch  version  repo,
+    // three whitespace fields); the informational "Security: ... is an
+    // installed/running version" lines have more fields and are excluded by
+    // the anchored 3-field match. `|| true` keeps a zero count (grep exit 1)
+    // from being read as a command failure.
+    const output = await run("bash", ["-c", `${cmd} -q check-update --security 2>/dev/null | grep -cE '^[[:alnum:]][^[:space:]]*[[:space:]]+[^[:space:]]+[[:space:]]+[^[:space:]]+$' || true`], 60000);
     if (output) {
       const count = parseInt(output.trim()) || 0;
       const distro = osRelease.includes("rocky") ? "rocky" : osRelease.includes("alma") ? "alma" : osRelease.includes("fedora") ? "fedora" : "rhel";
