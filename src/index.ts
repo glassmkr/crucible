@@ -36,6 +36,25 @@ if (cliArgs.mode === "init") {
   }, defaultDeps());
   process.exit(code);
 }
+if (cliArgs.mode === "enroll") {
+  const { runEnroll, defaultEnrollDeps } = await import("./enroll.js");
+  const flags = cliArgs.enroll;
+  if (!flags || !flags.accountKey) {
+    console.error("[enroll] missing required --account-key (use --account-key - to read from stdin). See 'glassmkr-crucible enroll --help'.");
+    process.exit(2);
+  }
+  const code = await runEnroll({
+    accountKey: flags.accountKey,
+    name: flags.name,
+    dashboardUrl: flags.dashboardUrl,
+    configPath: flags.configPath,
+    tags: flags.tags,
+    noStart: flags.noStart,
+    force: flags.force,
+    noVerify: flags.noVerify,
+  }, defaultEnrollDeps());
+  process.exit(code);
+}
 if (cliArgs.mode === "mark-reboot" || cliArgs.mode === "reboot") {
   const { writeRebootMarker, parseDuration, DEFAULT_TTL_MS } = await import("./lib/reboot-marker.js");
   const ttlMs = cliArgs.ttl ? parseDuration(cliArgs.ttl) : DEFAULT_TTL_MS;

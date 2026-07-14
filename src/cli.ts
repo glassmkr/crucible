@@ -4,7 +4,7 @@
 
 import * as fs from "node:fs";
 
-export type CliMode = "version" | "help" | "run" | "mark-reboot" | "reboot" | "init" | "doctor-ipmi";
+export type CliMode = "version" | "help" | "run" | "mark-reboot" | "reboot" | "init" | "enroll" | "doctor-ipmi";
 
 export interface CliArgs {
   mode: CliMode;
@@ -12,6 +12,7 @@ export interface CliArgs {
   reason?: string;
   ttl?: string; // raw duration string, parsed by caller
   init?: InitFlags;
+  enroll?: EnrollFlags;
 }
 
 export interface InitFlags {
@@ -19,6 +20,17 @@ export interface InitFlags {
   name?: string;
   ingestUrl?: string;
   configPath?: string;
+  noStart: boolean;
+  force: boolean;
+  noVerify: boolean;
+}
+
+export interface EnrollFlags {
+  accountKey?: string;
+  name?: string;
+  dashboardUrl?: string;
+  configPath?: string;
+  tags?: string[];
   noStart: boolean;
   force: boolean;
   noVerify: boolean;
@@ -58,6 +70,32 @@ export function parseCliArgs(argv: string[], version: string): { result: CliArgs
       if (a === "--no-verify") { flags.noVerify = true; continue; }
     }
     return { result: { mode: "init", configPath: "", init: flags }, output: null };
+  }
+
+  // Subcommand dispatch: `enroll` — hands-off fleet onboarding with an
+  // account-scoped key. Takes its own flag set.
+  if (argv[0] === "enroll") {
+    const flags: EnrollFlags = { noStart: false, force: false, noVerify: false };
+    for (let i = 1; i < argv.length; i++) {
+      const a = argv[i];
+      if (a === "--help" || a === "-h") {
+        return { result: { mode: "help", configPath: "" }, output: enrollHelp(version) };
+      }
+      if (a === "--account-key") { flags.accountKey = argv[++i]; continue; }
+      if (a.startsWith("--account-key=")) { flags.accountKey = a.slice("--account-key=".length); continue; }
+      if (a === "--name") { flags.name = argv[++i]; continue; }
+      if (a.startsWith("--name=")) { flags.name = a.slice("--name=".length); continue; }
+      if (a === "--dashboard-url") { flags.dashboardUrl = argv[++i]; continue; }
+      if (a.startsWith("--dashboard-url=")) { flags.dashboardUrl = a.slice("--dashboard-url=".length); continue; }
+      if (a === "--config-path") { flags.configPath = argv[++i]; continue; }
+      if (a.startsWith("--config-path=")) { flags.configPath = a.slice("--config-path=".length); continue; }
+      if (a === "--tags") { flags.tags = splitTags(argv[++i]); continue; }
+      if (a.startsWith("--tags=")) { flags.tags = splitTags(a.slice("--tags=".length)); continue; }
+      if (a === "--no-start") { flags.noStart = true; continue; }
+      if (a === "--force") { flags.force = true; continue; }
+      if (a === "--no-verify") { flags.noVerify = true; continue; }
+    }
+    return { result: { mode: "enroll", configPath: "", enroll: flags }, output: null };
   }
 
   // Subcommand dispatch: `doctor <topic>` — read-only diagnostic.
@@ -152,6 +190,12 @@ export function resolveConfigPathWithLegacyFallback(
   return LEGACY_CONFIG_PATH;
 }
 
+// Parse a comma-separated --tags value into a trimmed, non-empty list.
+function splitTags(raw: string | undefined): string[] {
+  if (!raw) return [];
+  return raw.split(",").map((t) => t.trim()).filter(Boolean);
+}
+
 export function helpText(version: string): string {
   return [
     `glassmkr-crucible v${version} - Bare metal server monitoring agent`,
@@ -159,6 +203,7 @@ export function helpText(version: string): string {
     "Usage:",
     "  glassmkr-crucible [options]",
     "  glassmkr-crucible init        --api-key <K> [--name <N>] [--ingest-url <U>] [--no-start] [--force]",
+    "  glassmkr-crucible enroll      --account-key <K> [--name <N>] [--tags a,b] [--no-start] [--force]",
     "  glassmkr-crucible mark-reboot [--reason TEXT] [--ttl DURATION]",
     "  glassmkr-crucible reboot      [--reason TEXT] [--ttl DURATION]",
     "  glassmkr-crucible doctor ipmi",
@@ -172,6 +217,10 @@ export function helpText(version: string): string {
     "  init             First-run setup: validate API key, write",
     "                   crucible.yaml + systemd unit, enable service.",
     "                   See 'glassmkr-crucible init --help'.",
+    "  enroll           Hands-off fleet onboarding: self-register this host",
+    "                   with a shared account key, get its own collector key,",
+    "                   then configure + start. Idempotent per machine.",
+    "                   See 'glassmkr-crucible enroll --help'.",
     "  mark-reboot      Write a planned-reboot marker so the next boot",
     "                   does not fire `server_rebooted_unexpectedly`.",
     "                   You run the reboot yourself afterwards.",
@@ -216,6 +265,48 @@ export function initHelp(version: string): string {
     "  5. Unless --no-start, runs systemctl enable --now glassmkr-crucible.",
     "",
     "Requires root for the filesystem and systemd writes (sudo).",
+    `v${version}`,
+  ].join("\n");
+}
+
+export function enrollHelp(version: string): string {
+  return [
+    `glassmkr-crucible enroll - hands-off fleet onboarding`,
+    "",
+    "Usage:",
+    "  glassmkr-crucible enroll --account-key <KEY> [options]",
+    "  glassmkr-crucible enroll --account-key - [options]   # read key from stdin",
+    "",
+    "Required:",
+    "  --account-key <KEY>   A write-scoped account key (gmk_acct_live_<...>).",
+    "                        Create one in the dashboard: Settings -> API keys.",
+    "                        Use - to read it from stdin. Safe to bake into an",
+    "                        Ansible/cloud-init run and share across the fleet;",
+    "                        it is used once here and never written to disk.",
+    "",
+    "Options:",
+    "  --name <NAME>         Server name in the dashboard. Defaults to hostname.",
+    "  --tags a,b,c          Comma-separated tags to set on the server.",
+    "  --dashboard-url <URL> Dashboard base URL (default: https://app.glassmkr.com).",
+    "  --config-path <P>     Where to write crucible.yaml (default: /etc/glassmkr/crucible.yaml).",
+    "  --no-start            Write config + unit, daemon-reload, but do not start the service.",
+    "  --force               Re-enroll even if already configured (rotates the collector key).",
+    "  --no-verify           Skip the post-register connectivity probe.",
+    "  -h, --help            Print this help and exit.",
+    "",
+    "What this does:",
+    "  1. Derives this host's stable machine id (DMI product_uuid, else",
+    "     /etc/machine-id) so a re-run maps back to the SAME dashboard server",
+    "     instead of creating a duplicate.",
+    "  2. POSTs it to /api/v1/servers with the account key; the dashboard",
+    "     self-registers the server and returns this host's own collector key.",
+    "  3. Hands that collector key to the same setup path as 'init' (writes",
+    "     crucible.yaml, sets up privilege separation, installs + starts the",
+    "     systemd unit). The account key is NOT written to disk.",
+    "",
+    "Idempotent: if the host is already configured, it is a no-op (no key",
+    "rotation) unless --force is passed. Requires root for the filesystem and",
+    "systemd writes (sudo).",
     `v${version}`,
   ].join("\n");
 }
