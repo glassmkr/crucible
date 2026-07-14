@@ -7,6 +7,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 Pre-1.0 convention: minor bumps may include breaking changes; we call them
 out under `### Breaking` so downstream consumers can audit.
 
+## [0.13.21] - 2026-07-14
+
+### Added
+
+- **`glassmkr-crucible enroll` subcommand for hands-off fleet onboarding.** Where
+  `init` needs a per-server collector key, `enroll` takes one write-scoped
+  account key (`gmk_acct_live_...`) that can be baked into an Ansible /
+  cloud-init / post-install run and shared across the whole fleet. Each host
+  derives a stable machine identity (DMI product UUID, else `/etc/machine-id`),
+  self-registers with the dashboard, receives its own collector key, and
+  configures itself: `glassmkr-crucible enroll --account-key <KEY> [--name N]
+  [--tags a,b]`. A re-run maps back to the same server instead of creating a
+  duplicate. The account key is used only for that one registration call and is
+  never written to disk; only the per-server collector key is stored.
+
+### Fixed
+
+- **RHEL security-update count no longer over-reports.** On RHEL-family hosts the
+  pending-security-update count was derived from `dnf updateinfo list security
+  --available`, which also counts advisories for kernels already installed but
+  not yet booted. That inflated the count and pointed remediation at a no-op
+  (`dnf update --security`) when the real action was a reboot. The count now
+  comes from `dnf check-update --security` (installable packages only).
+- **True hardware vendor recovered on OEM-placeholder boards.** Boards whose
+  system-manufacturer is a firmware placeholder (e.g. "To Be Filled By O.E.M.")
+  were classified as a generic vendor, discarding the real manufacturer held in
+  the baseboard field. Vendor classification now falls back to the baseboard
+  manufacturer, so BMC-specific parsing and vendor-aware guidance work on those
+  hosts.
+
 ## [0.13.20] - 2026-07-05
 
 ### Fixed
