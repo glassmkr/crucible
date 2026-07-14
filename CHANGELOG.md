@@ -7,6 +7,41 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 Pre-1.0 convention: minor bumps may include breaking changes; we call them
 out under `### Breaking` so downstream consumers can audit.
 
+## [0.13.22] - 2026-07-14
+
+### Fixed
+
+- **`ssh_config_unapplied` now sees drop-in edits on RHEL-family hosts.** The
+  agent runs unprivileged, and `/etc/ssh/sshd_config.d` is `0700 root` by
+  default on RHEL, so a direct read failed with EACCES and the agent was blind
+  to any config placed in a drop-in file: an SSH hardening change applied only
+  via a drop-in looked unapplied forever. When the direct read is denied, the
+  newest drop-in mtime is now read through a strictly read-only, fixed-path
+  privileged helper action, restoring visibility.
+- **Dual-socket DIMM channel counts are no longer halved.** A board that labels
+  its channels A-H on both sockets was collapsing 16 channels to 8, because the
+  channel key was not qualified by socket. Channel counts are now keyed as
+  `<socket>:<channel>`, so populated/available channel totals are correct on
+  dual-socket systems.
+- **SATA wear estimate no longer misreads a temperature attribute.** SMART
+  attribute id 231 is drive-wear on some SATA SSDs but temperature on others;
+  the id-only fallback treated a generic-named 231 as wear. It has been dropped
+  from that fallback set (a genuine wear drive still carries a wear-like
+  attribute name the parser matches), so temperature is no longer reported as
+  remaining life.
+
+### Security
+
+- **Privileged helper rejects path traversal in device arguments.** The shell
+  wrapper's device-path check used a POSIX `case` glob whose `*` also matched
+  `/`, so crafted arguments such as `/dev/nvme0/../../etc/shadow` slipped
+  through. The patterns are now anchored to mirror the TypeScript allowlist:
+  any `..` or post-stem `/` is rejected, and bus paths are digits-only.
+- **Privileged helper resolves bare-name tools in `/usr/local/bin`.** The
+  sudoers `secure_path` now includes `/usr/local/bin`, so hand-built tools and
+  RAID-CLI symlinks placed there resolve for the unprivileged agent instead of
+  silently failing to run.
+
 ## [0.13.21] - 2026-07-14
 
 ### Added
