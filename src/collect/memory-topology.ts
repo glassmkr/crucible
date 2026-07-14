@@ -138,12 +138,21 @@ export function parseDmidecodeMemory(raw: string | null): MemoryTopology | null 
   );
   const mixed_parts = distinct(populatedDimms.map((d) => d.part_number)) > 1;
 
+  // Channel identity is only unique WITHIN a socket: on a dual-socket box both
+  // sockets label their channels A-H, so counting distinct channel labels alone
+  // collapses 16 physical channels to 8. Qualify each channel by its socket
+  // ("<socket>:<channel>") so per-socket channels stay distinct; entries with a
+  // null channel are dropped (distinct() already filters null). Single-socket
+  // boxes are unchanged (one socket value in front of every label).
+  const socketChannel = (d: MemoryDimm): string | null =>
+    d.channel === null ? null : `${d.socket}:${d.channel}`;
+
   return {
     source: "dmidecode",
     total_slots: dimms.length,
     populated_slots: populatedDimms.length,
-    available_channels: distinct(dimms.map((d) => d.channel)),
-    populated_channels: distinct(populatedDimms.map((d) => d.channel)),
+    available_channels: distinct(dimms.map(socketChannel)),
+    populated_channels: distinct(populatedDimms.map(socketChannel)),
     downclocked,
     mixed_parts,
     dimms,

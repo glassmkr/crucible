@@ -72,7 +72,7 @@ export function parseCliArgs(argv: string[], version: string): { result: CliArgs
     return { result: { mode: "init", configPath: "", init: flags }, output: null };
   }
 
-  // Subcommand dispatch: `enroll` — hands-off fleet onboarding with an
+  // Subcommand dispatch: `enroll`: hands-off fleet onboarding with an
   // account-scoped key. Takes its own flag set.
   if (argv[0] === "enroll") {
     const flags: EnrollFlags = { noStart: false, force: false, noVerify: false };

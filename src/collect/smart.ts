@@ -107,8 +107,12 @@ export function parseSmartctlJson(data: Record<string, unknown> & {
     // SATA SSD (e.g. a Crucial MX500 at 25% life remaining) is invisible to
     // wear detection. Match by attribute NAME (authoritative, and disambiguates
     // ID 231, which is wear on some drives and temperature on others) with a
-    // known-ID fallback (Micron/Crucial 202, Intel 233, Samsung 177, others
-    // 173/231); skip anything that looks like a temperature attribute.
+    // known-ID fallback (Micron/Crucial 202, Intel 233, Samsung 177, other 173).
+    // ID 231 is deliberately NOT in the id-only fallback: it is temperature on
+    // some drives, so a generic-named 231 would be misread as wear (used = 100 -
+    // value) on a healthy drive. A 231-as-wear drive carries a wear-like NAME
+    // that the regex above already catches. Skip anything that looks like a
+    // temperature attribute.
     let ssdWearUsedPct: number | null = null;
     for (const attr of data.ata_smart_attributes.table) {
       if (attr.id === 5 || attr.name === "Reallocated_Sector_Ct") {
@@ -119,7 +123,7 @@ export function parseSmartctlJson(data: Record<string, unknown> & {
       }
       const name = (attr.name || "").toLowerCase();
       const isWearName = /wear.?level|wearout|life.?left|life.?time|percent.?life|ssd.?life|endurance/.test(name);
-      const isWearId = attr.id === 202 || attr.id === 233 || attr.id === 177 || attr.id === 173 || attr.id === 231;
+      const isWearId = attr.id === 202 || attr.id === 233 || attr.id === 177 || attr.id === 173;
       const looksTemperature = name.includes("temp");
       if ((isWearName || isWearId) && !looksTemperature && typeof attr.value === "number") {
         // Normalized value is life remaining; used = 100 - remaining. Take the

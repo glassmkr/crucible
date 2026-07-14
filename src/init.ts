@@ -145,7 +145,7 @@ export function setupPrivilegeSeparation(deps: InitDeps, configPath: string): bo
     deps.log(`[init] created system user '${SERVICE_USER}'.`);
   }
 
-  // 2. The collection wrapper (root:root 0755 — must NOT be writable by the
+  // 2. The collection wrapper (root:root 0755; must NOT be writable by the
   //    service user, or the sudo grant could be hijacked).
   try {
     deps.fs.writeFileSync(WRAPPER_PATH, WRAPPER_SCRIPT, { mode: 0o755 });

@@ -185,6 +185,35 @@ Memory Device
     expect(s1).toEqual(["I", "J", "M", "N"]);
   });
 
+  // Regression: a dual-socket box that labels channels the SAME on both sockets
+  // (DIMM_P0_A0 and DIMM_P1_A0 -> both channel "A", sockets 0 and 1). Counting
+  // distinct channel LABELS alone collapses the two physical channels to one;
+  // channels must be qualified by socket. Both are populated => 2 available and
+  // 2 populated channels, not 1.
+  it("keeps same-letter channels on different sockets distinct (socket-qualified count)", () => {
+    const raw = `Memory Device
+\tSize: 32 GiB
+\tLocator: DIMM_P0_A0
+\tBank Locator: BANK 0
+\tType: DDR4
+\tSpeed: 3200 MT/s
+\tConfigured Memory Speed: 3200 MT/s
+Memory Device
+\tSize: 32 GiB
+\tLocator: DIMM_P1_A0
+\tBank Locator: BANK 0
+\tType: DDR4
+\tSpeed: 3200 MT/s
+\tConfigured Memory Speed: 3200 MT/s`;
+    const t = parseDmidecodeMemory(raw)!;
+    expect(t.total_slots).toBe(2);
+    expect(t.populated_slots).toBe(2);
+    expect(t.dimms.map((d) => d.channel)).toEqual(["A", "A"]); // same label
+    expect(t.dimms.map((d) => d.socket)).toEqual([0, 1]);      // different socket
+    expect(t.available_channels).toBe(2); // NOT collapsed to 1
+    expect(t.populated_channels).toBe(2);
+  });
+
   // Real EPYC 9754 (ASUS): locator "CPU1_DIMM_A2", bank "P0 CHANNEL A". 12
   // channels (A-L), 2 DPC. 8 channels populated in slot 2 => 8 of 12.
   function asusEpyc9754(): string {
