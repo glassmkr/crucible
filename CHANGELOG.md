@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 Pre-1.0 convention: minor bumps may include breaking changes; we call them
 out under `### Breaking` so downstream consumers can audit.
 
+## [0.13.23] - 2026-07-15
+
+### Added
+
+- **PCIe slot width per GPU (`pcie_slot_max_width`).** The GPU collector now
+  reads the upstream PCIe port's max link width from sysfs (the electrical width
+  of the slot the card sits in), alongside the card's own max width that
+  nvidia-smi reports. This lets the dashboard tell an x16 card seated in a
+  physically x8 slot (benign: negotiated width == slot width) from a link
+  trained below the slot's capability (a real degradation), removing a
+  persistent false `gpu_pcie_link_degraded` warning on such hosts. `null` off
+  Linux or where sysfs is unavailable.
+
 ## [0.13.22] - 2026-07-14
 
 ### Fixed
