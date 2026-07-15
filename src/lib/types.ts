@@ -13,6 +13,11 @@ export interface Snapshot {
   thermal?: ThermalInfo;
   os_alerts: OsAlerts;
   security?: SecurityData;
+  /** OS extended-support enrollment (Ubuntu Pro/ESM, RHEL EUS). Omitted when
+   *  no unprivileged mechanism is present. The dashboard os_end_of_life rule
+   *  pairs this with the release EOL date so a past-standard-support host that
+   *  is still enrolled is not falsely reported unsupported. Crucible 0.13.24+. */
+  support_status?: SupportStatus;
   zfs?: ZfsData;
   io_errors?: { count: number; devices: string[] };
   io_latency?: Array<{ device: string; avg_read_latency_ms: number | null; avg_write_latency_ms: number | null; read_iops: number; write_iops: number }>;
@@ -588,6 +593,18 @@ export interface SecurityData {
   kernel_vulns: Array<{ name: string; status: string; mitigated: boolean }>;
   kernel_reboot: { running: string; installed: string; needsReboot: boolean } | null;
   auto_updates: { configured: boolean; mechanism: string; details: string };
+}
+
+// Mirrors the SupportStatus interface in collect/support-status.ts (kept in
+// sync by hand, matching the SecurityData duplication convention above).
+export interface SupportStatus {
+  source: "ubuntu-pro" | "rhel-eus-repos";
+  extended_support_active: boolean | null;
+  details: string;
+  attached?: boolean;
+  esm_infra?: boolean;
+  esm_apps?: boolean;
+  eus?: boolean;
 }
 
 export interface SystemInfo {

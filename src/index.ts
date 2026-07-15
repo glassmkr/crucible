@@ -104,6 +104,7 @@ import { sendSlack } from "./notify/slack.js";
 import { sendEmail } from "./notify/email.js";
 import { pushToDashboard, initDashboardAgent } from "./push/dashboard.js";
 import { collectSecurity, type SecurityData } from "./collect/security.js";
+import { collectSupportStatus } from "./collect/support-status.js";
 import { collectZfs } from "./collect/zfs.js";
 import { collectEdac } from "./collect/edac.js";
 import { collectMemoryTopology } from "./collect/memory-topology.js";
@@ -332,6 +333,10 @@ async function collect() {
   // which-nvidia-smi probe. Per CC_SPEC_CRUCIBLE_GPU_COLLECTION_
   // 2026-05-19.md.
   try { snapshot.gpu = await collectGpu(); } catch { /* skip on error */ }
+
+  // OS extended-support enrollment (currency-monitoring milestone, v0.13.24+).
+  // Unprivileged only; omitted on distros/hosts without a readable mechanism.
+  try { snapshot.support_status = await collectSupportStatus() ?? undefined; } catch { /* skip on error */ }
 
   // Update Prometheus metrics
   updateMetrics(snapshot);

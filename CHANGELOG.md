@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 Pre-1.0 convention: minor bumps may include breaking changes; we call them
 out under `### Breaking` so downstream consumers can audit.
 
+## [0.13.24] - 2026-07-15
+
+### Added
+
+- **OS extended-support enrollment (`support_status`).** The agent now reports
+  whether the host is enrolled in extended security support past its standard
+  release end-of-life: Ubuntu Pro/ESM (read from `pro security-status`) and
+  RHEL Extended Update Support (an enabled EUS repository). This lets the
+  dashboard distinguish a past-end-of-life release that is still receiving
+  security fixes from one that is genuinely unsupported, instead of judging by
+  the calendar alone. Read strictly unprivileged: it never runs as root and
+  never calls `subscription-manager`, and it degrades silently where no signal
+  is available. `null` on distros without a supported mechanism.
+
 ## [0.13.23] - 2026-07-15
 
 ### Added
