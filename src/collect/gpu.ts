@@ -121,6 +121,38 @@ function safeReadFile(path: string): string {
   }
 }
 
+/** nvidia-smi reports the PCI bus id with an 8-hex-digit domain and uppercase
+ *  ("00000000:02:00.0"); sysfs pci device dirs use a 4-hex-digit lowercase
+ *  domain ("0000:02:00.0"). Returns null for an unparseable id. */
+export function normalizePciBdfForSysfs(pciBdf: string): string | null {
+  const segs = pciBdf.trim().split(":");
+  if (segs.length < 3 || !segs[0]) return null;
+  const domain = segs[0].slice(-4).padStart(4, "0");
+  return `${domain}:${segs.slice(1).join(":")}`.toLowerCase();
+}
+
+/** The upstream PCIe port's max link width = the electrical width of the slot
+ *  the GPU is in. nvidia-smi only reports the CARD's max width, so the dashboard
+ *  would flag an x16 card in a physical x8 slot as "degraded" forever. Reading
+ *  the slot width lets it distinguish that benign case (negotiated == slot max)
+ *  from a link trained below the slot's capability (negotiated < slot max).
+ *  "<dev>/.." resolves through the sysfs device symlink to the upstream bridge,
+ *  whose max_link_width is the slot width. null when sysfs is unavailable. */
+function readPcieSlotMaxWidth(pciBdf: string): number | null {
+  const sysfsBdf = normalizePciBdfForSysfs(pciBdf);
+  if (!sysfsBdf) return null;
+  const raw = safeReadFile(`/sys/bus/pci/devices/${sysfsBdf}/../max_link_width`).trim();
+  const n = Number(raw);
+  return Number.isInteger(n) && n > 0 ? n : null;
+}
+
+/** Fill pcie_slot_max_width per GPU from sysfs. Synchronous, no-op off Linux. */
+function enrichPcieSlotWidth(gpus: Gpu[]): void {
+  for (const gpu of gpus) {
+    gpu.pcie_slot_max_width = readPcieSlotMaxWidth(gpu.pci_bdf);
+  }
+}
+
 export function collectGpuDriverResilience(): GpuDriverResilience {
   let devices: Array<{ vendor: string; class: string }> = [];
   try {
@@ -319,6 +351,11 @@ async function collectTier1(): Promise<Tier1Snapshot | { available: false; reaso
     return { available: false, reason: "nvidia-smi returned no GPU rows" };
   }
 
+  // Slot (upstream-port) max PCIe link width per GPU, from sysfs. Lets the
+  // dashboard tell a card in a physically-narrow slot from a real link-width
+  // degradation. Synchronous sysfs reads; no-op off Linux.
+  enrichPcieSlotWidth(gpus);
+
   // Throttle reasons from XML output (CSV path doesn't expose
   // performance_state.reasons cleanly).
   await enrichThrottleReasons(gpus);
@@ -386,6 +423,7 @@ export function parseNvidiaSmiCsvRow(line: string): Gpu | null {
     pcie_link_gen_max: num(17),
     pcie_link_width_current: num(18),
     pcie_link_width_max: num(19),
+    pcie_slot_max_width: null, // filled by enrichPcieSlotWidth (sysfs; not in nvidia-smi CSV)
     ecc_mode_current: bool(20),
     ecc_errors_corrected_volatile: num(21),
     ecc_errors_corrected_aggregate: num(22),
