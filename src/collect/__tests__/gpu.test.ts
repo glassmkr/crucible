@@ -15,6 +15,7 @@ import {
   hasNvidiaGpu,
   moduleLoaded,
   nouveauBlacklisted,
+  normalizePciBdfForSysfs,
   parseNvidiaSmiCsvRow,
   parseNvLinkStatus,
   parseXidEvents,
@@ -101,6 +102,19 @@ describe("C19 GPU probe + capability gate", () => {
 // ============================================================================
 // Tier 1: nvidia-smi CSV parser
 // ============================================================================
+
+describe("normalizePciBdfForSysfs (nvidia-smi bus id -> sysfs pci id)", () => {
+  it("truncates the 8-hex-digit domain to 4 and lowercases", () => {
+    expect(normalizePciBdfForSysfs("00000000:02:00.0")).toBe("0000:02:00.0");
+  });
+  it("handles a nonzero domain and uppercase hex bus", () => {
+    expect(normalizePciBdfForSysfs("00000001:C1:00.0")).toBe("0001:c1:00.0");
+  });
+  it("returns null for an unparseable id", () => {
+    expect(normalizePciBdfForSysfs("garbage")).toBeNull();
+    expect(normalizePciBdfForSysfs("")).toBeNull();
+  });
+});
 
 describe("C19 Tier 1: parseNvidiaSmiCsvRow", () => {
   it("parses a fully-populated L4 row", () => {

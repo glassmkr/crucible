@@ -124,6 +124,13 @@ export interface Gpu {
   pcie_link_gen_max: number;
   pcie_link_width_current: number;
   pcie_link_width_max: number;
+  // Upstream PCIe port's max link width = the electrical width of the slot the
+  // GPU sits in (from sysfs). Compared with pcie_link_width_current, this tells a
+  // card in a physically-narrower slot (current == slot max: benign) from a link
+  // trained below the slot's capability (current < slot max: real degradation).
+  // null when sysfs is unavailable (non-Linux / container); the dashboard then
+  // falls back to comparing against the card's own pcie_link_width_max.
+  pcie_slot_max_width: number | null;
   ecc_mode_current: boolean;
   ecc_errors_corrected_volatile: number;
   ecc_errors_corrected_aggregate: number;
