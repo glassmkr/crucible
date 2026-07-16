@@ -188,22 +188,55 @@ describe("parseSmartctlJson", () => {
     });
   });
 
-  it("unpacks Seagate multi-counter raws for 187/188/189 (low 16 bits)", () => {
-    // Real Seagate shape: 188 raw 0x000100000002 means 2 actual timeouts with
-    // higher words carrying threshold-bucketed variants. A plain counter that
-    // fits in 16 bits must pass through untouched.
+  it("unpacks the packed 188 raw ONLY on Seagate; 187/189 stay verbatim", () => {
+    // Seagate packs 188 as 16-bit sub-counters; the low 16 bits are the count.
     expect(unpackSeagateCounter(0)).toBe(0);
     expect(unpackSeagateCounter(7)).toBe(7);
     expect(unpackSeagateCounter(0x000100000002)).toBe(2);
 
-    const info = parseSmartctlJson({
+    const seagate = parseSmartctlJson({
       model_name: "ST12000NM0007",
       smart_status: { passed: true },
       ata_smart_attributes: {
-        table: [{ id: 188, name: "Command_Timeout", raw: { value: 0x000100000002 } }],
+        table: [
+          { id: 188, name: "Command_Timeout", raw: { value: 0x000100000002 } },
+          // 187/189 are NOT packed even on Seagate: must pass through verbatim,
+          // never truncated by a magnitude heuristic.
+          { id: 187, name: "Reported_Uncorrect", raw: { value: 0x000100000002 } },
+          { id: 189, name: "High_Fly_Writes", raw: { value: 70000 } },
+        ],
       },
     }, "/dev/sdc")!;
-    expect(info.command_timeout).toBe(2);
+    expect(seagate.command_timeout).toBe(2);
+    expect(seagate.reported_uncorrectable).toBe(0x000100000002);
+    expect(seagate.high_fly_writes).toBe(70000);
+  });
+
+  it("leaves a non-Seagate 188 verbatim even above 65535 (no false truncation)", () => {
+    // A WD drive reporting a genuine large 188 must not be truncated: the
+    // >0xffff heuristic is Seagate-only, or a real count corrupts.
+    const wd = parseSmartctlJson({
+      model_name: "WDC WD40EFRX",
+      smart_status: { passed: true },
+      ata_smart_attributes: {
+        table: [{ id: 188, name: "Command_Timeout", raw: { value: 70000 } }],
+      },
+    }, "/dev/sdb")!;
+    expect(wd.command_timeout).toBe(70000);
+  });
+
+  it("does not read a SATA-SSD id-189 (SSD Health Flags) as high fly writes", () => {
+    // Seagate Nytro XF1230 SATA SSD reports id 189 as "SSD_Health_Flags", not
+    // head-flying. 189 is name-gated so a flags bitfield never feeds the
+    // high-fly-writes burst detector.
+    const ssd = parseSmartctlJson({
+      model_name: "XF1230-1A0480",
+      smart_status: { passed: true },
+      ata_smart_attributes: {
+        table: [{ id: 189, name: "SSD_Health_Flags", raw: { value: 8 } }],
+      },
+    }, "/dev/sdb")!;
+    expect(ssd.high_fly_writes).toBeUndefined();
   });
 
   it("summarizes the self-test log, keeping the newest failure separate", () => {
@@ -234,6 +267,25 @@ describe("parseSmartctlJson", () => {
       last_failed_lifetime_hours: 30157,
       error_count_total: 1,
     });
+  });
+
+  it("classifies a fatal self-test (nibble 3) as a failure even when smartctl omits `passed`", () => {
+    // smartmontools deliberately omits status.passed for nibble 3
+    // (fatal/unknown error). Failure detection must rely on the high nibble
+    // alone, or a fatal self-test failure is silently dropped.
+    const info = parseSmartctlJson({
+      model_name: "WDC WD100EFAX",
+      smart_status: { passed: true },
+      power_on_time: { hours: 500 },
+      ata_smart_self_test_log: {
+        standard: {
+          table: [
+            { type: { string: "Extended offline" }, status: { value: 0x30, string: "Completed: unknown failure or in progress" }, lifetime_hours: 480 },
+          ],
+        },
+      },
+    }, "/dev/sdf")!;
+    expect(info.self_test?.last_failed_lifetime_hours).toBe(480);
   });
 
   it("does not treat an aborted self-test as a failure", () => {
