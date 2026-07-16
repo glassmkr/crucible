@@ -136,6 +136,10 @@ export function parseSmartctlJson(data: Record<string, unknown> & {
     // that the regex above already catches. Skip anything that looks like a
     // temperature attribute.
     let ssdWearUsedPct: number | null = null;
+    // Seagate firmware packs multi-counters into some 48-bit raws; the unpack
+    // is applied ONLY to Seagate 188 (see below). Detect by model.
+    const modelStr = `${data.model_name ?? ""} ${data.model_family ?? ""}`.toLowerCase();
+    const isSeagate = /seagate|\bst\d{3,}/.test(modelStr);
     for (const attr of data.ata_smart_attributes.table) {
       if (attr.id === 5 || attr.name === "Reallocated_Sector_Ct") {
         info.reallocated_sectors = attr.raw?.value || 0;
@@ -146,19 +150,29 @@ export function parseSmartctlJson(data: Record<string, unknown> & {
       // Drive-health early-warning expansion (2026-07-16): the remaining
       // Backblaze-five markers (187/188/198) plus path (199), mechanical
       // (10, 189) and remap-event (196) counters. Raw values only; the
-      // dashboard owns threshold/trend interpretation. 187/188/189 go
-      // through the Seagate unpacker because Seagate firmware packs
-      // multiple 16-bit counters into the 48-bit raw (documented for 188:
-      // low 16 bits = actual timeouts); a verbatim raw would read as an
-      // absurd count on Exos/Barracuda drives.
+      // dashboard owns threshold/trend interpretation.
       if (attr.id === 187 || attr.name === "Reported_Uncorrect") {
-        info.reported_uncorrectable = unpackSeagateCounter(attr.raw?.value || 0);
+        // Verbatim: smartmontools treats 187 as a raw 48-bit value. Only
+        // Seagate 188 is a documented packed counter (see below), so do NOT
+        // truncate 187 (a magnitude heuristic would corrupt a legitimate
+        // count above 65535 on any vendor).
+        info.reported_uncorrectable = attr.raw?.value || 0;
       }
       if (attr.id === 188 || attr.name === "Command_Timeout") {
-        info.command_timeout = unpackSeagateCounter(attr.raw?.value || 0);
+        // Seagate packs 188 as three 16-bit counters in the 48-bit raw; the
+        // low 16 bits are the actual timeout count. Unpack ONLY on Seagate;
+        // every other vendor reports a plain raw that must pass through, or a
+        // genuine large count would be truncated.
+        const raw = attr.raw?.value || 0;
+        info.command_timeout = isSeagate ? unpackSeagateCounter(raw) : raw;
       }
-      if (attr.id === 189 || attr.name === "High_Fly_Writes") {
-        info.high_fly_writes = unpackSeagateCounter(attr.raw?.value || 0);
+      // 189: name-gated, NOT id-gated. ID 189 is High_Fly_Writes on rotating
+      // HDDs but "SSD Health Flags" (PLP/thermal state) on some SATA SSDs
+      // (e.g. Seagate Nytro XF1230), where an id-only match would feed a
+      // flags bitfield into the high-fly-writes burst detector as a false
+      // warning. The drivedb name is authoritative (the id-231 lesson).
+      if (attr.name === "High_Fly_Writes") {
+        info.high_fly_writes = attr.raw?.value || 0;
       }
       if (attr.id === 10 || attr.name === "Spin_Retry_Count") {
         info.spin_retries = attr.raw?.value || 0;
@@ -201,13 +215,15 @@ export function parseSmartctlJson(data: Record<string, unknown> & {
   const selftest = data.ata_smart_self_test_log?.standard;
   if (selftest?.table && selftest.table.length > 0) {
     const newest = selftest.table[0]!;
-    // Failure = status nibble 3..8 (fatal/unknown/electrical/servo/read/
-    // handling damage per ATA). Excludes aborted-by-host (1) and
-    // interrupted-by-reset (2), which some smartctl versions also mark
-    // passed=false; an abort is not a drive failure.
+    // Failure = status high nibble 3..8 (fatal/unknown/electrical/servo/read/
+    // handling damage per ATA), which already excludes aborted-by-host (1)
+    // and interrupted-by-reset (2). The nibble is the authoritative signal;
+    // we do NOT also require status.passed === false, because smartmontools
+    // omits `passed` for nibble 3 (fatal/unknown), so an AND would silently
+    // drop a fatal self-test failure.
     const failed = selftest.table.find((e) => {
       const nibble = (e.status?.value ?? 0) >> 4;
-      return e.status?.passed === false && nibble >= 3 && nibble <= 8;
+      return nibble >= 3 && nibble <= 8;
     });
     info.self_test = {
       last_type: newest.type?.string,
