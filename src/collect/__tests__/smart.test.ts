@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { parseSmartctlJson } from "../smart.js";
+import { parseSmartctlJson, unpackSeagateCounter } from "../smart.js";
 
 describe("parseSmartctlJson", () => {
   it("returns null when smartctl could not interrogate the device (no smart_status)", () => {
@@ -155,5 +155,125 @@ describe("parseSmartctlJson", () => {
       },
     }, "/dev/sda")!;
     expect(info.percentage_used).toBe(70);
+  });
+
+  it("parses the expanded early-warning attribute set on an HDD", () => {
+    const info = parseSmartctlJson({
+      model_name: "WDC WD40EFRX",
+      smart_status: { passed: true },
+      ata_smart_attributes: {
+        table: [
+          { id: 5, name: "Reallocated_Sector_Ct", raw: { value: 2 } },
+          { id: 10, name: "Spin_Retry_Count", raw: { value: 1 } },
+          { id: 187, name: "Reported_Uncorrect", raw: { value: 4 } },
+          { id: 188, name: "Command_Timeout", raw: { value: 7 } },
+          { id: 189, name: "High_Fly_Writes", raw: { value: 3 } },
+          { id: 196, name: "Reallocated_Event_Count", raw: { value: 2 } },
+          { id: 197, name: "Current_Pending_Sector", raw: { value: 8 } },
+          { id: 198, name: "Offline_Uncorrectable", raw: { value: 5 } },
+          { id: 199, name: "UDMA_CRC_Error_Count", raw: { value: 11 } },
+        ],
+      },
+    }, "/dev/sdb")!;
+    expect(info).toMatchObject({
+      reallocated_sectors: 2,
+      spin_retries: 1,
+      reported_uncorrectable: 4,
+      command_timeout: 7,
+      high_fly_writes: 3,
+      reallocation_events: 2,
+      pending_sectors: 8,
+      offline_uncorrectable: 5,
+      udma_crc_errors: 11,
+    });
+  });
+
+  it("unpacks Seagate multi-counter raws for 187/188/189 (low 16 bits)", () => {
+    // Real Seagate shape: 188 raw 0x000100000002 means 2 actual timeouts with
+    // higher words carrying threshold-bucketed variants. A plain counter that
+    // fits in 16 bits must pass through untouched.
+    expect(unpackSeagateCounter(0)).toBe(0);
+    expect(unpackSeagateCounter(7)).toBe(7);
+    expect(unpackSeagateCounter(0x000100000002)).toBe(2);
+
+    const info = parseSmartctlJson({
+      model_name: "ST12000NM0007",
+      smart_status: { passed: true },
+      ata_smart_attributes: {
+        table: [{ id: 188, name: "Command_Timeout", raw: { value: 0x000100000002 } }],
+      },
+    }, "/dev/sdc")!;
+    expect(info.command_timeout).toBe(2);
+  });
+
+  it("summarizes the self-test log, keeping the newest failure separate", () => {
+    // Newest entry is a later PASSING short test; the read failure two slots
+    // back must still surface via last_failed_* (with its LBA), or a routine
+    // short test would mask a genuine surface defect.
+    const info = parseSmartctlJson({
+      model_name: "TOSHIBA MG07ACA14TE",
+      smart_status: { passed: true },
+      power_on_time: { hours: 30200 },
+      ata_smart_self_test_log: {
+        standard: {
+          table: [
+            { type: { string: "Short offline" }, status: { value: 0, string: "Completed without error", passed: true }, lifetime_hours: 30190 },
+            { type: { string: "Extended offline" }, status: { value: 121, string: "Completed: read failure", passed: false }, lifetime_hours: 30157, lba: 234593524 },
+            { type: { string: "Short offline" }, status: { value: 0, string: "Completed without error", passed: true }, lifetime_hours: 29000 },
+          ],
+          error_count_total: 1,
+        },
+      },
+    }, "/dev/sdd")!;
+    expect(info.self_test).toEqual({
+      last_type: "Short offline",
+      last_status: "Completed without error",
+      last_passed: true,
+      last_lifetime_hours: 30190,
+      last_failed_lba: 234593524,
+      last_failed_lifetime_hours: 30157,
+      error_count_total: 1,
+    });
+  });
+
+  it("does not treat an aborted self-test as a failure", () => {
+    // Status nibble 1 = aborted by host. Some smartctl versions mark it
+    // passed=false; an abort is an interruption, not a drive failure.
+    const info = parseSmartctlJson({
+      model_name: "ST4000DM004",
+      smart_status: { passed: true },
+      ata_smart_self_test_log: {
+        standard: {
+          table: [
+            { type: { string: "Extended offline" }, status: { value: 25, string: "Aborted by host", passed: false }, lifetime_hours: 100 },
+          ],
+        },
+      },
+    }, "/dev/sde")!;
+    expect(info.self_test?.last_status).toBe("Aborted by host");
+    expect(info.self_test?.last_failed_lifetime_hours).toBeUndefined();
+    expect(info.self_test?.last_failed_lba).toBeUndefined();
+  });
+
+  it("omits self_test when the drive has no self-test log", () => {
+    const info = parseSmartctlJson({
+      model_name: "X",
+      smart_status: { passed: true },
+    }, "/dev/sda")!;
+    expect(info.self_test).toBeUndefined();
+  });
+
+  it("parses NVMe media_errors and num_err_log_entries", () => {
+    const info = parseSmartctlJson({
+      model_name: "Samsung PM9A3",
+      smart_status: { passed: true },
+      nvme_smart_health_information_log: {
+        percentage_used: 3,
+        media_errors: 2,
+        num_err_log_entries: 14,
+      },
+    }, "/dev/nvme0n1")!;
+    expect(info.media_errors).toBe(2);
+    expect(info.num_err_log_entries).toBe(14);
   });
 });

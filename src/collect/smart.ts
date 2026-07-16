@@ -54,8 +54,21 @@ export function parseSmartctlJson(data: Record<string, unknown> & {
     critical_warning?: number;
     available_spare?: number;
     available_spare_threshold?: number;
+    media_errors?: number;
+    num_err_log_entries?: number;
   };
   ata_smart_attributes?: { table?: Array<{ id?: number; name?: string; value?: number; raw?: { value?: number } }> };
+  ata_smart_self_test_log?: {
+    standard?: {
+      table?: Array<{
+        type?: { string?: string };
+        status?: { value?: number; string?: string; passed?: boolean };
+        lifetime_hours?: number;
+        lba?: number;
+      }>;
+      error_count_total?: number;
+    };
+  };
 }, device: string): SmartInfo | null {
   // No SMART surface at all: smartctl emitted JSON but could not interrogate
   // the device (USB bridge without a -d type, BMC virtual media, unsupported
@@ -94,6 +107,15 @@ export function parseSmartctlJson(data: Record<string, unknown> & {
     if (typeof nvme.available_spare_threshold === "number") {
       info.nvme_available_spare_threshold = nvme.available_spare_threshold;
     }
+    // Error counters from the same health log page: uncorrectable media
+    // errors and the error-information log entry count. Growth over time is
+    // the signal; the dashboard owns interpretation.
+    if (typeof nvme.media_errors === "number") {
+      info.media_errors = nvme.media_errors;
+    }
+    if (typeof nvme.num_err_log_entries === "number") {
+      info.num_err_log_entries = nvme.num_err_log_entries;
+    }
   }
 
   // SATA specific
@@ -121,6 +143,35 @@ export function parseSmartctlJson(data: Record<string, unknown> & {
       if (attr.id === 197 || attr.name === "Current_Pending_Sector") {
         info.pending_sectors = attr.raw?.value || 0;
       }
+      // Drive-health early-warning expansion (2026-07-16): the remaining
+      // Backblaze-five markers (187/188/198) plus path (199), mechanical
+      // (10, 189) and remap-event (196) counters. Raw values only; the
+      // dashboard owns threshold/trend interpretation. 187/188/189 go
+      // through the Seagate unpacker because Seagate firmware packs
+      // multiple 16-bit counters into the 48-bit raw (documented for 188:
+      // low 16 bits = actual timeouts); a verbatim raw would read as an
+      // absurd count on Exos/Barracuda drives.
+      if (attr.id === 187 || attr.name === "Reported_Uncorrect") {
+        info.reported_uncorrectable = unpackSeagateCounter(attr.raw?.value || 0);
+      }
+      if (attr.id === 188 || attr.name === "Command_Timeout") {
+        info.command_timeout = unpackSeagateCounter(attr.raw?.value || 0);
+      }
+      if (attr.id === 189 || attr.name === "High_Fly_Writes") {
+        info.high_fly_writes = unpackSeagateCounter(attr.raw?.value || 0);
+      }
+      if (attr.id === 10 || attr.name === "Spin_Retry_Count") {
+        info.spin_retries = attr.raw?.value || 0;
+      }
+      if (attr.id === 196 || attr.name === "Reallocated_Event_Count") {
+        info.reallocation_events = attr.raw?.value || 0;
+      }
+      if (attr.id === 198 || attr.name === "Offline_Uncorrectable") {
+        info.offline_uncorrectable = attr.raw?.value || 0;
+      }
+      if (attr.id === 199 || attr.name === "UDMA_CRC_Error_Count") {
+        info.udma_crc_errors = attr.raw?.value || 0;
+      }
       const name = (attr.name || "").toLowerCase();
       const isWearName = /wear.?level|wearout|life.?left|life.?time|percent.?life|ssd.?life|endurance/.test(name);
       const isWearId = attr.id === 202 || attr.id === 233 || attr.id === 177 || attr.id === 173;
@@ -140,7 +191,54 @@ export function parseSmartctlJson(data: Record<string, unknown> & {
     }
   }
 
+  // SMART self-test log (ATA; `--all` includes it, so this is parse-only).
+  // Emit a compact summary rather than the whole 21-slot table. last_failed_*
+  // tracks the newest FAILED entry separately from the newest entry: a later
+  // passing short test would otherwise mask a read failure. Log entries
+  // persist for the drive's life and lifetime_hours wraps mod 65536 (ATA
+  // spec), so consumers must recency-gate against power_on_hours before
+  // alerting on a failure.
+  const selftest = data.ata_smart_self_test_log?.standard;
+  if (selftest?.table && selftest.table.length > 0) {
+    const newest = selftest.table[0]!;
+    // Failure = status nibble 3..8 (fatal/unknown/electrical/servo/read/
+    // handling damage per ATA). Excludes aborted-by-host (1) and
+    // interrupted-by-reset (2), which some smartctl versions also mark
+    // passed=false; an abort is not a drive failure.
+    const failed = selftest.table.find((e) => {
+      const nibble = (e.status?.value ?? 0) >> 4;
+      return e.status?.passed === false && nibble >= 3 && nibble <= 8;
+    });
+    info.self_test = {
+      last_type: newest.type?.string,
+      last_status: newest.status?.string || "unknown",
+      last_passed: newest.status?.passed,
+      last_lifetime_hours: newest.lifetime_hours,
+    };
+    if (failed) {
+      info.self_test.last_failed_lifetime_hours = failed.lifetime_hours;
+      if (typeof failed.lba === "number") {
+        info.self_test.last_failed_lba = failed.lba;
+      }
+    }
+    if (typeof selftest.error_count_total === "number") {
+      info.self_test.error_count_total = selftest.error_count_total;
+    }
+  }
+
   return info;
+}
+
+/**
+ * Unpack a Seagate multi-counter SMART raw value. Seagate firmware packs up
+ * to three 16-bit counters into the 48-bit raw for some attributes (188
+ * Command_Timeout is the documented case: the low 16 bits are the actual
+ * timeout count, higher words are threshold-bucketed variants). Values that
+ * fit in 16 bits pass through unchanged, so plain counters on other vendors
+ * are unaffected.
+ */
+export function unpackSeagateCounter(raw: number): number {
+  return raw > 0xffff ? raw % 0x10000 : raw;
 }
 
 /**
