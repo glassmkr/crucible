@@ -7,6 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 Pre-1.0 convention: minor bumps may include breaking changes; we call them
 out under `### Breaking` so downstream consumers can audit.
 
+## [0.13.25] - 2026-07-16
+
+### Added
+
+- **Expanded SMART early-warning attribute set.** The agent now reports the
+  remaining Backblaze-five drive-failure markers plus their companions per
+  drive: reported uncorrectable errors (187), command timeouts (188), high
+  fly writes (189), spin retries (10), reallocation events (196), offline
+  uncorrectable sectors (198), and UDMA CRC errors (199, an
+  interface/cabling signal rather than a media one). Values come from the
+  same smartctl call the agent already makes, so no new privileged access
+  is needed. Seagate's packed multi-counter raw values for 187/188/189 are
+  normalized to true counts.
+- **SMART self-test results.** Each drive now carries a summary of its
+  self-test log: the newest test's outcome, plus the newest FAILED test
+  with its failing LBA kept separately so a later passing test cannot mask
+  a read failure. Aborted or interrupted tests are never reported as
+  failures.
+- **NVMe error counters.** `media_errors` and `num_err_log_entries` from
+  the NVMe health log, enabling growth-over-time early warnings.
+
 ## [0.13.24] - 2026-07-15
 
 ### Added
