@@ -7,6 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 Pre-1.0 convention: minor bumps may include breaking changes; we call them
 out under `### Breaking` so downstream consumers can audit.
 
+## [0.13.26] - 2026-07-16
+
+### Fixed
+
+- **Self-test failures are no longer missed when the drive reports a fatal
+  result.** The SMART self-test summary classified a failure only when both
+  the status code and an explicit pass/fail flag agreed, but smartmontools
+  omits that flag for a fatal or unknown self-test result, so those were
+  dropped. Failure is now read from the authoritative status code alone
+  (still excluding host-aborted and reset-interrupted tests, which are not
+  drive failures).
+- **Attribute 189 is read as high fly writes only when the drive names it
+  that way.** ID 189 is High Fly Writes on rotating drives but a health-flags
+  bitfield on some SATA SSDs; it is now matched by name so an SSD's flags are
+  never misread as a mechanical head-flying count.
+- **Vendor-specific counter unpacking is scoped to the one attribute that
+  needs it.** The Seagate packed-counter handling for command timeouts (188)
+  is now applied only on Seagate drives; reported-uncorrectable (187) and
+  high-fly-writes (189) counts pass through verbatim on every vendor, so a
+  legitimately large count is never truncated.
+
 ## [0.13.25] - 2026-07-16
 
 ### Added
