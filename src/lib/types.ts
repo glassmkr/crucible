@@ -737,6 +737,37 @@ export interface SmartInfo {
   };
   nvme_available_spare?: number;
   nvme_available_spare_threshold?: number;
+  // Drive-health early-warning expansion (2026-07-16). ATA raw counters,
+  // absent when the drive does not report the attribute. Field names match
+  // what the dashboard trend engine expects. 187/188/189 are Seagate-unpacked
+  // (low 16 bits of the packed raw) so they read as true counts fleet-wide.
+  reported_uncorrectable?: number; // 187
+  command_timeout?: number; // 188
+  high_fly_writes?: number; // 189
+  spin_retries?: number; // 10
+  reallocation_events?: number; // 196
+  offline_uncorrectable?: number; // 198
+  /** 199 UDMA CRC: interface/cabling errors, NOT media health. */
+  udma_crc_errors?: number;
+  // NVMe health-log error counters (growth over time is the signal).
+  media_errors?: number;
+  num_err_log_entries?: number;
+  /**
+   * Newest SMART self-test log state (ATA; smartctl --all carries the log).
+   * last_failed_* is the newest FAILED entry, kept separately because a later
+   * passing test would otherwise mask a read failure in the newest slot.
+   * lifetime_hours wraps mod 65536 per ATA spec; consumers must recency-gate
+   * a failure against power_on_hours before alerting.
+   */
+  self_test?: {
+    last_type?: string;
+    last_status: string;
+    last_passed?: boolean;
+    last_lifetime_hours?: number;
+    last_failed_lba?: number;
+    last_failed_lifetime_hours?: number;
+    error_count_total?: number;
+  };
 }
 
 export interface NetworkInfo {
