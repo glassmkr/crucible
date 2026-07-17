@@ -29,7 +29,7 @@ Single source of truth for cutting a Crucible release. Lives here (the release-t
    git push origin main
    git push origin vX.Y.Z
    ```
-   The tag push triggers `.github/workflows/publish.yml` (npm publish via Trusted Publishing / OIDC, `--provenance`; **no npm token needed**) and `docker.yml` (image build). There is no PR-level CI in this repo; local build+test in step 4 is the gate.
+   The tag push triggers `.github/workflows/publish.yml` (npm publish via Trusted Publishing / OIDC, `--provenance`; **no npm token needed**). There is no PR-level CI in this repo; local build+test in step 4 is the gate.
 
 7. **Verify the publish landed:**
    ```
