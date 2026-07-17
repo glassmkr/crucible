@@ -36,7 +36,66 @@ export async function collectSmart(): Promise<SmartInfo[]> {
     }
   }
 
-  return results;
+  // Physical drives behind a hardware RAID/HBA controller do not appear in
+  // /sys/block (only the controller's virtual disk does, and that reports SMART
+  // unavailable -> null above). smartctl self-enumerates them via --scan-open,
+  // which resolves the per-drive `-d TYPE` selector + device path; each is then
+  // read with `-d TYPE` and flows through the SAME parseSmartctlJson. Additive:
+  // bare-disk behavior above is unchanged. No storcli/vendor binary needed.
+  try {
+    const scan = await runPrivileged("smart-scan");
+    if (scan) {
+      for (const { path, type } of parseScanOpen(scan)) {
+        const out = await runPrivileged("smart", [path, type]);
+        if (!out) continue;
+        try {
+          // Synthetic device id: the backing path plus the selector, unique per
+          // physical drive (serial is the real join key everywhere downstream).
+          const info = parseSmartctlJson(JSON.parse(out), `${path}[${type}]`);
+          if (info) {
+            info.transport = type.split(",")[0]!.replace(/^sat\+/, "");
+            info.backing_device = path;
+            results.push(info);
+          }
+        } catch {
+          // Failed to parse this passthrough drive, skip it
+        }
+      }
+    }
+  } catch {
+    // --scan-open unavailable: fall back to the /sys/block results only
+  }
+
+  // Dedup by serial. An IT-mode/JBOD HBA can expose the same physical drive
+  // both directly (/dev/sdX, pushed first) and via --scan-open; keep the first.
+  // Serial-less entries are kept as-is (nothing to dedup on).
+  const seen = new Set<string>();
+  return results.filter((r) => {
+    if (!r.serial) return true;
+    if (seen.has(r.serial)) return false;
+    seen.add(r.serial);
+    return true;
+  });
+}
+
+/**
+ * Parse `smartctl --scan-open` output, keeping only controller-passthrough
+ * devices (physical drives behind a hardware RAID/HBA). Lines look like:
+ *   /dev/bus/0 -d sat+megaraid,8 # /dev/bus/0 [megaraid_disk_08] [SAT], ATA device
+ * Direct disks (`-d scsi`, `-d sat`, `-d nvme`) are skipped: they are already
+ * covered by the /sys/block enumeration. Pure/exported for unit testing.
+ */
+export function parseScanOpen(text: string): Array<{ path: string; type: string }> {
+  const out: Array<{ path: string; type: string }> = [];
+  for (const line of text.split("\n")) {
+    const m = line.match(/^(\S+)\s+-d\s+(\S+)/);
+    if (!m) continue;
+    const path = m[1]!;
+    const type = m[2]!;
+    if (!/^(sat\+)?(megaraid|cciss|3ware|aacraid|areca|marvell),/.test(type)) continue;
+    out.push({ path, type });
+  }
+  return out;
 }
 
 export function parseSmartctlJson(data: Record<string, unknown> & {

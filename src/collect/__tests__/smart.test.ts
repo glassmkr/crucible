@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
-import { parseSmartctlJson, unpackSeagateCounter } from "../smart.js";
+import { parseSmartctlJson, unpackSeagateCounter, parseScanOpen } from "../smart.js";
+import { isAllowedSmartType, isAllowedSmartDevice } from "../../lib/privileged.js";
 
 describe("parseSmartctlJson", () => {
   it("returns null when smartctl could not interrogate the device (no smart_status)", () => {
@@ -327,5 +328,93 @@ describe("parseSmartctlJson", () => {
     }, "/dev/nvme0n1")!;
     expect(info.media_errors).toBe(2);
     expect(info.num_err_log_entries).toBe(14);
+  });
+
+  it("parses a SATA drive read through a MegaRAID controller (sat+megaraid) unchanged", () => {
+    // Captured from val-hdd-destroy-2: HGST 4TB behind an LSI MegaRAID SAS-3
+    // 3108, read via `smartctl --json --all -d sat+megaraid,8 /dev/bus/0`. The
+    // JSON shape is identical to a direct SATA drive, so parseSmartctlJson must
+    // accept it with no special-casing.
+    const info = parseSmartctlJson({
+      model_name: "HGST HUS726T4TALE6L4",
+      serial_number: "V6G84TMR",
+      smart_status: { passed: true },
+      temperature: { current: 29 },
+      power_on_time: { hours: 53940 },
+      ata_smart_attributes: {
+        table: [
+          { id: 5, name: "Reallocated_Sector_Ct", raw: { value: 0 } },
+          { id: 197, name: "Current_Pending_Sector", raw: { value: 0 } },
+          { id: 199, name: "UDMA_CRC_Error_Count", raw: { value: 0 } },
+        ],
+      },
+    }, "/dev/bus/0[sat+megaraid,8]")!;
+    expect(info.device).toBe("/dev/bus/0[sat+megaraid,8]");
+    expect(info.serial).toBe("V6G84TMR");
+    expect(info.health).toBe("PASSED");
+    expect(info.power_on_hours).toBe(53940);
+  });
+});
+
+describe("parseScanOpen", () => {
+  const SCAN = [
+    "/dev/sda -d scsi # /dev/sda, SCSI device",
+    "/dev/bus/0 -d sat+megaraid,8 # /dev/bus/0 [megaraid_disk_08] [SAT], ATA device",
+    "/dev/bus/0 -d sat+megaraid,9 # /dev/bus/0 [megaraid_disk_09] [SAT], ATA device",
+    "/dev/bus/0 -d sat+megaraid,10 # /dev/bus/0 [megaraid_disk_10] [SAT], ATA device",
+    "/dev/bus/0 -d sat+megaraid,11 # /dev/bus/0 [megaraid_disk_11] [SAT], ATA device",
+  ].join("\n");
+
+  it("keeps only controller-passthrough devices, in order", () => {
+    expect(parseScanOpen(SCAN)).toEqual([
+      { path: "/dev/bus/0", type: "sat+megaraid,8" },
+      { path: "/dev/bus/0", type: "sat+megaraid,9" },
+      { path: "/dev/bus/0", type: "sat+megaraid,10" },
+      { path: "/dev/bus/0", type: "sat+megaraid,11" },
+    ]);
+  });
+
+  it("skips direct disks (-d scsi/sat/nvme) that /sys/block already covers", () => {
+    const direct = [
+      "/dev/sda -d scsi # /dev/sda, SCSI device",
+      "/dev/sdb -d sat # /dev/sdb [SAT], ATA device",
+      "/dev/nvme0 -d nvme # /dev/nvme0, NVMe device",
+    ].join("\n");
+    expect(parseScanOpen(direct)).toEqual([]);
+  });
+
+  it("handles other controller families and empty/garbage input", () => {
+    expect(parseScanOpen("/dev/bus/2 -d cciss,3 # x")).toEqual([{ path: "/dev/bus/2", type: "cciss,3" }]);
+    expect(parseScanOpen("")).toEqual([]);
+    expect(parseScanOpen("not a scan line\n\n")).toEqual([]);
+  });
+});
+
+describe("isAllowedSmartType (wrapper -d passthrough validation)", () => {
+  it("accepts the known controller-family selectors", () => {
+    for (const t of ["sat+megaraid,8", "megaraid,11", "cciss,0", "3ware,1", "aacraid,0,0,0", "areca,1/1"]) {
+      expect(isAllowedSmartType(t)).toBe(true);
+    }
+  });
+
+  it("rejects injection / unknown / malformed selectors", () => {
+    for (const t of [
+      "megaraid,8;reboot",      // command chars
+      "megaraid,8 /dev/sda",    // extra arg / space
+      "marvell,1/../../x",      // traversal
+      "scsi",                   // not a passthrough family
+      "sat",                    // bare
+      "megaraid,",              // trailing comma / no id
+      "-d megaraid,8",          // embedded flag
+      "megaraid,x",             // non-numeric id
+      "",
+    ]) {
+      expect(isAllowedSmartType(t)).toBe(false);
+    }
+  });
+
+  it("still accepts /dev/bus/N as a smart device path (passthrough backing)", () => {
+    expect(isAllowedSmartDevice("/dev/bus/0")).toBe(true);
+    expect(isAllowedSmartDevice("/dev/bus/0/../../etc/passwd")).toBe(false);
   });
 });
