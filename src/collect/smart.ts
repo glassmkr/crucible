@@ -1,4 +1,4 @@
-import { runPrivileged } from "../lib/privileged.js";
+import { runPrivileged, isAllowedSmartType } from "../lib/privileged.js";
 import { readdirSync, readFileSync } from "fs";
 import type { SmartInfo } from "../lib/types.js";
 
@@ -23,14 +23,14 @@ export async function collectSmart(): Promise<SmartInfo[]> {
     return [];
   }
 
-  const results: SmartInfo[] = [];
+  const direct: SmartInfo[] = [];
   for (const device of devices) {
     const output = await runPrivileged("smart", [device]);
     if (!output) continue;
 
     try {
       const info = parseSmartctlJson(JSON.parse(output), device);
-      if (info) results.push(info);
+      if (info) direct.push(info);
     } catch {
       // Failed to parse, skip this device
     }
@@ -42,6 +42,7 @@ export async function collectSmart(): Promise<SmartInfo[]> {
   // which resolves the per-drive `-d TYPE` selector + device path; each is then
   // read with `-d TYPE` and flows through the SAME parseSmartctlJson. Additive:
   // bare-disk behavior above is unchanged. No storcli/vendor binary needed.
+  const passthrough: SmartInfo[] = [];
   try {
     const scan = await runPrivileged("smart-scan");
     if (scan) {
@@ -55,7 +56,7 @@ export async function collectSmart(): Promise<SmartInfo[]> {
           if (info) {
             info.transport = type.split(",")[0]!.replace(/^sat\+/, "");
             info.backing_device = path;
-            results.push(info);
+            passthrough.push(info);
           }
         } catch {
           // Failed to parse this passthrough drive, skip it
@@ -66,16 +67,28 @@ export async function collectSmart(): Promise<SmartInfo[]> {
     // --scan-open unavailable: fall back to the /sys/block results only
   }
 
-  // Dedup by serial. An IT-mode/JBOD HBA can expose the same physical drive
-  // both directly (/dev/sdX, pushed first) and via --scan-open; keep the first.
-  // Serial-less entries are kept as-is (nothing to dedup on).
-  const seen = new Set<string>();
-  return results.filter((r) => {
-    if (!r.serial) return true;
-    if (seen.has(r.serial)) return false;
-    seen.add(r.serial);
-    return true;
-  });
+  return mergeDriveResults(direct, passthrough);
+}
+
+/**
+ * Merge direct-attached and controller-passthrough SMART results, deduping ONLY
+ * the one real duplication case: an IT-mode/JBOD HBA that exposes the same
+ * physical drive both directly (/dev/sdX) AND via --scan-open. A passthrough
+ * entry is dropped only when its serial already appeared among the DIRECT
+ * disks.
+ *
+ * Direct disks are NEVER deduped against each other: two distinct bare disks
+ * that happen to report the same placeholder serial (e.g. "000000000000",
+ * common on cheap/enclosure drives) are separate devices and must both stay, or
+ * a failing one would silently vanish with no smart_failing alert (Codex
+ * 2026-07-17). Serial-less entries are always kept. Pure/exported for testing.
+ */
+export function mergeDriveResults(direct: SmartInfo[], passthrough: SmartInfo[]): SmartInfo[] {
+  const directSerials = new Set(direct.map((r) => r.serial).filter(Boolean));
+  const dedupedPassthrough = passthrough.filter(
+    (r) => !r.serial || !directSerials.has(r.serial),
+  );
+  return [...direct, ...dedupedPassthrough];
 }
 
 /**
@@ -83,7 +96,10 @@ export async function collectSmart(): Promise<SmartInfo[]> {
  * devices (physical drives behind a hardware RAID/HBA). Lines look like:
  *   /dev/bus/0 -d sat+megaraid,8 # /dev/bus/0 [megaraid_disk_08] [SAT], ATA device
  * Direct disks (`-d scsi`, `-d sat`, `-d nvme`) are skipped: they are already
- * covered by the /sys/block enumeration. Pure/exported for unit testing.
+ * covered by the /sys/block enumeration. Only selectors that pass
+ * isAllowedSmartType (the same grammar the wrapper enforces) are forwarded, so
+ * the collector never attempts a selector the root wrapper will reject. Pure/
+ * exported for unit testing.
  */
 export function parseScanOpen(text: string): Array<{ path: string; type: string }> {
   const out: Array<{ path: string; type: string }> = [];
@@ -92,7 +108,7 @@ export function parseScanOpen(text: string): Array<{ path: string; type: string 
     if (!m) continue;
     const path = m[1]!;
     const type = m[2]!;
-    if (!/^(sat\+)?(megaraid|cciss|3ware|aacraid|areca|marvell),/.test(type)) continue;
+    if (!isAllowedSmartType(type)) continue;
     out.push({ path, type });
   }
   return out;
