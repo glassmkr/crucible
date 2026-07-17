@@ -7,6 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 Pre-1.0 convention: minor bumps may include breaking changes; we call them
 out under `### Breaking` so downstream consumers can audit.
 
+## [0.14.0] - 2026-07-16
+
+### Added
+
+- **Drive-health monitoring for disks behind hardware RAID/HBA controllers.**
+  A physical drive behind a MegaRAID / PERC / Smart Array / 3ware / Adaptec /
+  Areca controller does not appear as a normal block device: only the
+  controller's virtual disk does, and that reports no SMART, so such hosts
+  previously showed zero drives. The agent now discovers the physical drives
+  the same way smartctl does (`--scan-open`) and reads each one through the
+  controller, so their full SMART, early-warning attributes, and self-test
+  results are collected like any direct-attached drive. SATA drives behind the
+  controller this release; each drive is reported with its own serial and a
+  `transport` label naming the controller family. No third-party controller
+  tools (storcli/perccli) are required.
+
+### Upgrade note (action required)
+
+This release adds two privileged read actions, so hosts running the
+unprivileged service user need a one-time `glassmkr-crucible init` re-run (or
+wrapper refresh) after upgrading, or the new hardware-RAID reads are skipped.
+
 ## [0.13.26] - 2026-07-16
 
 ### Fixed
