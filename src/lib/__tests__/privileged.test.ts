@@ -13,14 +13,19 @@ import { setupPrivilegeSeparation, type InitDeps } from "../../init.js";
 type ExecImpl = (cmd: string, args: string[]) => { stdout: string; status: number | null };
 
 function mockDeps(execImpl: ExecImpl) {
-  const files = new Map<string, { data: string; mode: number }>();
+  const files = new Map<string, { data: string; mode: number; uid?: number; gid?: number; symlink?: boolean }>();
   const warns: string[] = [];
   const deps: InitDeps = {
     fs: {
       existsSync: (p) => files.has(p),
       mkdirSync: () => {},
-      writeFileSync: (p, data, o) => { files.set(p, { data, mode: o?.mode ?? 0o644 }); },
+      writeFileSync: (p, data, o) => { files.set(p, { data, mode: o?.mode ?? 0o644, uid: 0, gid: 0 }); },
       chmodSync: (p, mode) => { const f = files.get(p); if (f) f.mode = mode; },
+      chownSync: (p, uid, gid) => { const f = files.get(p); if (!f) throw new Error(`ENOENT: ${p}`); f.uid = uid; f.gid = gid; },
+      lstatSync: (p) => {
+        const f = files.get(p); if (!f) throw new Error(`ENOENT: ${p}`);
+        return { isSymbolicLink: !!f.symlink, uid: f.uid ?? 0, gid: f.gid ?? 0, mode: f.mode };
+      },
       renameSync: (from, to) => {
         const f = files.get(from); if (!f) throw new Error(`ENOENT: ${from}`);
         files.set(to, f); files.delete(from);

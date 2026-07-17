@@ -47,6 +47,8 @@ export interface InitDeps {
     mkdirSync: (p: string, opts?: { recursive?: boolean; mode?: number }) => void;
     writeFileSync: (p: string, data: string, opts?: { mode?: number }) => void;
     chmodSync: (p: string, mode: number) => void;
+    chownSync: (p: string, uid: number, gid: number) => void;
+    lstatSync: (p: string) => { isSymbolicLink: boolean; uid: number; gid: number; mode: number };
     renameSync: (from: string, to: string) => void;
   };
   exec: (cmd: string, args: string[]) => { stdout: string; status: number | null };
@@ -145,11 +147,29 @@ export function setupPrivilegeSeparation(deps: InitDeps, configPath: string): bo
     deps.log(`[init] created system user '${SERVICE_USER}'.`);
   }
 
-  // 2. The collection wrapper (root:root 0755; must NOT be writable by the
-  //    service user, or the sudo grant could be hijacked).
+  // 2. The collection wrapper. It must end up root-owned, 0755, and NOT a
+  //    symlink or writable by the service user, or the sudo grant could be
+  //    hijacked. A bare writeFileSync is unsafe: if WRAPPER_PATH already exists
+  //    (owned by `glassmkr`) or is a symlink, the write follows/preserves it, so
+  //    the file stays service-user-owned while the NOPASSWD sudoers rule below
+  //    still gets installed. The service account could then rewrite the wrapper
+  //    and run arbitrary code as root. Instead: build a FRESH root-owned temp
+  //    file, then atomically rename it into place. rename REPLACES a pre-existing
+  //    file or symlink (it does not follow the link), so ownership becomes root
+  //    regardless of what was there. Then lstat-verify the final path. The parent
+  //    dir (/usr/local/sbin) is root-owned and not service-user-writable, so the
+  //    temp path itself cannot be pre-planted. (Codex review 2026-07-17.)
+  const wrapperTmp = `${WRAPPER_PATH}.tmp`;
   try {
-    deps.fs.writeFileSync(WRAPPER_PATH, WRAPPER_SCRIPT, { mode: 0o755 });
-    deps.fs.chmodSync(WRAPPER_PATH, 0o755);
+    deps.fs.writeFileSync(wrapperTmp, WRAPPER_SCRIPT, { mode: 0o755 });
+    deps.fs.chmodSync(wrapperTmp, 0o755);
+    deps.fs.chownSync(wrapperTmp, 0, 0);
+    deps.fs.renameSync(wrapperTmp, WRAPPER_PATH);
+    const st = deps.fs.lstatSync(WRAPPER_PATH);
+    if (st.isSymbolicLink || st.uid !== 0 || st.gid !== 0 || (st.mode & 0o022) !== 0) {
+      deps.warn(`[init] wrapper ${WRAPPER_PATH} failed its post-install safety check (symlink=${st.isSymbolicLink}, uid=${st.uid}, gid=${st.gid}, mode=${(st.mode & 0o777).toString(8)}); staying on User=root.`);
+      return false;
+    }
   } catch (err: any) {
     deps.warn(`[init] could not install wrapper ${WRAPPER_PATH}: ${err?.message ?? err}; staying on User=root.`);
     return false;
@@ -395,6 +415,11 @@ export function defaultDeps(): InitDeps {
       mkdirSync: (p, opts) => { fsDefault.mkdirSync(p, opts); },
       writeFileSync: (p, data, opts) => { fsDefault.writeFileSync(p, data, opts); },
       chmodSync: fsDefault.chmodSync,
+      chownSync: fsDefault.chownSync,
+      lstatSync: (p) => {
+        const s = fsDefault.lstatSync(p);
+        return { isSymbolicLink: s.isSymbolicLink(), uid: s.uid, gid: s.gid, mode: s.mode };
+      },
       renameSync: fsDefault.renameSync,
     },
     exec: (cmd, args) => {

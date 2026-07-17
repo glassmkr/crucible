@@ -1,11 +1,12 @@
 import { describe, it, expect, beforeEach } from "vitest";
-import { runInit, isValidApiKey, buildCollectorYaml, buildSystemdUnit, type InitDeps, SYSTEMD_UNIT_PATH, DEFAULT_CONFIG_PATH, LEGACY_CONFIG_PATH } from "../init.js";
+import { runInit, isValidApiKey, buildCollectorYaml, buildSystemdUnit, setupPrivilegeSeparation, type InitDeps, SYSTEMD_UNIT_PATH, DEFAULT_CONFIG_PATH, LEGACY_CONFIG_PATH } from "../init.js";
+import { WRAPPER_PATH } from "../lib/privileged.js";
 
 const VALID_NEW_KEY = "gmk_cru_live_abcdefghijklmnopqrstuvwx_a1b2";
 const VALID_LEGACY_KEY = "col_abcdef0123456789abcdef0123456789ab";
 
 interface FakeFs {
-  files: Map<string, { data: string; mode: number }>;
+  files: Map<string, { data: string; mode: number; uid?: number; gid?: number; symlink?: boolean }>;
   dirs: Set<string>;
 }
 
@@ -30,10 +31,22 @@ function makeDeps(opts?: {
     fs: {
       existsSync: (p) => fs.files.has(p),
       mkdirSync: (p) => { fs.dirs.add(p); },
-      writeFileSync: (p, data, o) => { fs.files.set(p, { data, mode: o?.mode ?? 0o644 }); },
+      // A freshly written file is owned by the writing process (root, in the
+      // real install), so default uid/gid to 0.
+      writeFileSync: (p, data, o) => { fs.files.set(p, { data, mode: o?.mode ?? 0o644, uid: 0, gid: 0 }); },
       chmodSync: (p, mode) => {
         const f = fs.files.get(p);
         if (f) f.mode = mode;
+      },
+      chownSync: (p, uid, gid) => {
+        const f = fs.files.get(p);
+        if (!f) throw new Error(`ENOENT: ${p}`);
+        f.uid = uid; f.gid = gid;
+      },
+      lstatSync: (p) => {
+        const f = fs.files.get(p);
+        if (!f) throw new Error(`ENOENT: ${p}`);
+        return { isSymbolicLink: !!f.symlink, uid: f.uid ?? 0, gid: f.gid ?? 0, mode: f.mode };
       },
       renameSync: (from, to) => {
         const f = fs.files.get(from);
@@ -284,5 +297,61 @@ describe("runInit legacy config migration", () => {
     // Legacy still in place, untouched.
     expect(fs.files.get(LEGACY_CONFIG_PATH)?.data).toBe("# legacy content");
     expect(fs.files.has(customPath)).toBe(true);
+  });
+});
+
+describe("setupPrivilegeSeparation wrapper hardening (Codex #6)", () => {
+  it("installs the wrapper root-owned (0:0), mode 0755, and returns true on a clean host", () => {
+    const { deps, fs } = makeDeps();
+    const ok = setupPrivilegeSeparation(deps, DEFAULT_CONFIG_PATH);
+    expect(ok).toBe(true);
+    const w = fs.files.get(WRAPPER_PATH);
+    expect(w?.uid).toBe(0);
+    expect(w?.gid).toBe(0);
+    expect(w?.mode).toBe(0o755);
+    expect(w?.data).toContain("Glassmkr Crucible privileged-collection facade");
+    // The temp file was renamed away, not left behind.
+    expect(fs.files.has(`${WRAPPER_PATH}.tmp`)).toBe(false);
+  });
+
+  it("forces root ownership even when a service-user-owned wrapper pre-exists (privesc vector)", () => {
+    const { deps, fs } = makeDeps();
+    // Simulate the attack precondition: WRAPPER_PATH already exists owned by the
+    // unprivileged service user (uid 999). The old code writeFileSync'd over it,
+    // preserving that ownership, while still installing the NOPASSWD sudo rule.
+    fs.files.set(WRAPPER_PATH, { data: "#!/bin/sh\nmalicious\n", mode: 0o755, uid: 999, gid: 999 });
+    const ok = setupPrivilegeSeparation(deps, DEFAULT_CONFIG_PATH);
+    expect(ok).toBe(true);
+    const w = fs.files.get(WRAPPER_PATH);
+    expect(w?.uid).toBe(0); // ownership forced back to root by the rename
+    expect(w?.data).not.toContain("malicious");
+  });
+
+  it("stays on User=root (returns false) when the wrapper cannot be made root-owned", () => {
+    const { deps, warns } = makeDeps();
+    (deps.fs as { chownSync: (p: string, u: number, g: number) => void }).chownSync = () => {
+      throw new Error("EPERM"); // e.g. init not actually running as root
+    };
+    const ok = setupPrivilegeSeparation(deps, DEFAULT_CONFIG_PATH);
+    expect(ok).toBe(false);
+    expect(warns.some((w) => w.includes("could not install wrapper"))).toBe(true);
+  });
+
+  it("rejects a wrapper that verifies as a symlink (returns false)", () => {
+    const { deps, warns } = makeDeps();
+    (deps.fs as { lstatSync: (p: string) => { isSymbolicLink: boolean; uid: number; gid: number; mode: number } }).lstatSync =
+      () => ({ isSymbolicLink: true, uid: 0, gid: 0, mode: 0o755 });
+    const ok = setupPrivilegeSeparation(deps, DEFAULT_CONFIG_PATH);
+    expect(ok).toBe(false);
+    expect(warns.some((w) => w.includes("failed its post-install safety check"))).toBe(true);
+  });
+
+  it("rejects a group/world-writable wrapper (returns false)", () => {
+    const { deps, warns } = makeDeps();
+    (deps.fs as { lstatSync: (p: string) => { isSymbolicLink: boolean; uid: number; gid: number; mode: number } }).lstatSync =
+      () => ({ isSymbolicLink: false, uid: 0, gid: 0, mode: 0o777 });
+    const ok = setupPrivilegeSeparation(deps, DEFAULT_CONFIG_PATH);
+    expect(ok).toBe(false);
+    expect(warns.some((w) => w.includes("failed its post-install safety check"))).toBe(true);
   });
 });
