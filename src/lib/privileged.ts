@@ -92,7 +92,15 @@ export function isAllowedIface(name: string): boolean {
  *  prefix plus a comma-separated numeric tuple; no other chars, so nothing can
  *  inject an extra smartctl flag or a path. */
 export function isAllowedSmartType(type: string): boolean {
-  return /^(sat\+)?(megaraid|cciss|3ware|aacraid|areca|marvell),\d+([,/]\d+){0,2}$/.test(type);
+  // Canonical grammar: an optional `sat+` prefix, a known controller family, a
+  // comma, and a SINGLE numeric id. Deliberately narrow so the sh mirror
+  // (valid_smart_type) can be provably identical - a divergence between the two
+  // gates would either leak a broader value to the root smartctl exec or
+  // silently reject a real scan selector. This covers MegaRAID (our hardware)
+  // and the single-id form of the other families. Multi-field selectors
+  // (aacraid H,L,ID; areca N/E) are intentionally unsupported until we have
+  // that hardware + a tested tuple grammar on both sides.
+  return /^(sat\+)?(megaraid|cciss|3ware|aacraid|areca|marvell),\d+$/.test(type);
 }
 
 /**
@@ -214,19 +222,25 @@ valid_iface() {
   esac
 }
 valid_smart_type() {
-  # Mirror the anchored TS isAllowedSmartType. Controller-passthrough
-  # selectors like 'sat+megaraid,8' for reading a physical drive behind a
-  # hardware RAID/HBA. Reject '..', constrain to the safe charset, require a
-  # known family prefix, and forbid a trailing comma. Combined this admits
-  # only '[sat+]<family>,<digits>[,/<digits>]...' - no room for an injected
-  # smartctl flag or path.
-  case "$1" in *..*) return 1 ;; esac
-  case "$1" in *[!A-Za-z0-9,+/]*) return 1 ;; esac
-  case "$1" in *,) return 1 ;; esac
-  case "$1" in
-    sat+megaraid,*|megaraid,*|cciss,*|3ware,*|aacraid,*|areca,*|marvell,*) return 0 ;;
+  # Provably identical to the TS isAllowedSmartType regex
+  # ^(sat\\+)?(family),[0-9]+$ . Decompose rather than glob-match so the two
+  # gates cannot drift: strip an optional 'sat+' prefix, split on the single
+  # comma, check the family against the allowlist, and require the id to be
+  # non-empty all-digits. A single numeric id only - no multi-field tuples, no
+  # slashes, no extra separators - so nothing broader than the declared grammar
+  # can reach the root smartctl exec.
+  t="$1"
+  case "$t" in sat+*) t="\${t#sat+}" ;; esac
+  fam="\${t%%,*}"
+  id="\${t#*,}"
+  # Exactly one comma, and it is not at either end.
+  [ "$fam,$id" = "$t" ] || return 1
+  case "$fam" in
+    megaraid|cciss|3ware|aacraid|areca|marvell) ;;
     *) return 1 ;;
   esac
+  case "$id" in "" | *[!0-9]*) return 1 ;; esac
+  return 0
 }
 
 case "$action" in

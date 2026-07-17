@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
-import { parseSmartctlJson, unpackSeagateCounter, parseScanOpen } from "../smart.js";
+import { parseSmartctlJson, unpackSeagateCounter, parseScanOpen, mergeDriveResults } from "../smart.js";
+import type { SmartInfo } from "../../lib/types.js";
 import { isAllowedSmartType, isAllowedSmartDevice } from "../../lib/privileged.js";
 
 describe("parseSmartctlJson", () => {
@@ -391,22 +392,32 @@ describe("parseScanOpen", () => {
 });
 
 describe("isAllowedSmartType (wrapper -d passthrough validation)", () => {
-  it("accepts the known controller-family selectors", () => {
-    for (const t of ["sat+megaraid,8", "megaraid,11", "cciss,0", "3ware,1", "aacraid,0,0,0", "areca,1/1"]) {
+  // Canonical grammar: [sat+]<family>,<single numeric id>. The TS regex and the
+  // sh valid_smart_type MUST admit exactly this set (a divergence is a security
+  // finding: Codex 2026-07-17). sat+ composes with ANY family.
+  it("accepts [sat+]<family>,<numeric-id> for every known family", () => {
+    for (const t of [
+      "sat+megaraid,8", "megaraid,11", "sat+cciss,0", "cciss,0",
+      "3ware,1", "aacraid,0", "areca,1", "marvell,2", "megaraid,255",
+    ]) {
       expect(isAllowedSmartType(t)).toBe(true);
     }
   });
 
-  it("rejects injection / unknown / malformed selectors", () => {
+  it("rejects injection / unknown / malformed / multi-field selectors", () => {
     for (const t of [
       "megaraid,8;reboot",      // command chars
       "megaraid,8 /dev/sda",    // extra arg / space
       "marvell,1/../../x",      // traversal
-      "scsi",                   // not a passthrough family
-      "sat",                    // bare
+      "cciss,/etc/passwd",      // slash / path (sh charset used to admit this)
+      "megaraid,abc",           // non-numeric id (sh prefix-glob used to admit)
+      "megaraid,8garbage",      // trailing garbage (sh used to admit)
+      "aacraid,0,0,0",          // multi-field tuple: intentionally unsupported now
+      "areca,1/1",              // enclosure form: intentionally unsupported now
+      "megaraid,0,0,0,0",       // long tuple (sh used to admit)
+      "scsi", "sat",            // not a passthrough family / bare
       "megaraid,",              // trailing comma / no id
       "-d megaraid,8",          // embedded flag
-      "megaraid,x",             // non-numeric id
       "",
     ]) {
       expect(isAllowedSmartType(t)).toBe(false);
@@ -416,5 +427,35 @@ describe("isAllowedSmartType (wrapper -d passthrough validation)", () => {
   it("still accepts /dev/bus/N as a smart device path (passthrough backing)", () => {
     expect(isAllowedSmartDevice("/dev/bus/0")).toBe(true);
     expect(isAllowedSmartDevice("/dev/bus/0/../../etc/passwd")).toBe(false);
+  });
+});
+
+describe("mergeDriveResults (direct vs passthrough dedup)", () => {
+  const d = (device: string, serial?: string): SmartInfo =>
+    ({ device, model: "m", health: "PASSED", ...(serial ? { serial } : {}) }) as SmartInfo;
+
+  it("keeps two direct disks sharing a placeholder serial (never direct-vs-direct dedup)", () => {
+    // The Codex 2026-07-17 medium: /dev/sda and /dev/sdb both report
+    // "000000000000"; both must survive or a failing one vanishes silently.
+    const out = mergeDriveResults([d("/dev/sda", "000000000000"), d("/dev/sdb", "000000000000")], []);
+    expect(out.map((r) => r.device)).toEqual(["/dev/sda", "/dev/sdb"]);
+  });
+
+  it("drops a passthrough drive that duplicates a direct disk by serial (IT-mode HBA)", () => {
+    const out = mergeDriveResults(
+      [d("/dev/sda", "SN1")],
+      [d("/dev/bus/0[sat+megaraid,8]", "SN1")],
+    );
+    expect(out.map((r) => r.device)).toEqual(["/dev/sda"]);
+  });
+
+  it("keeps a passthrough drive whose serial is not among the direct disks", () => {
+    const out = mergeDriveResults([d("/dev/sda", "SN1")], [d("/dev/bus/0[sat+megaraid,8]", "SN2")]);
+    expect(out.map((r) => r.serial)).toEqual(["SN1", "SN2"]);
+  });
+
+  it("keeps serial-less entries on both sides", () => {
+    const out = mergeDriveResults([d("/dev/sda")], [d("/dev/bus/0[sat+megaraid,8]")]);
+    expect(out).toHaveLength(2);
   });
 });
