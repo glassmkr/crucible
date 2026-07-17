@@ -7,6 +7,50 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 Pre-1.0 convention: minor bumps may include breaking changes; we call them
 out under `### Breaking` so downstream consumers can audit.
 
+## [0.14.2] - 2026-07-17
+
+Remediation of an external (Codex) code review of 0.14.0/0.14.1.
+
+### Security
+
+- **The `init` installer now enforces root ownership of the privileged
+  collection wrapper.** It writes the wrapper through a root-owned temporary
+  file, sets `root:root`, atomically replaces any existing file or symlink at
+  that path, and verifies the result before the sudo grant is relied on.
+  Previously an existing wrapper owned by the service account was left as-is,
+  which could have let that account alter it. Fresh installs and `init` re-runs
+  are hardened; no action is needed on hosts installed normally.
+
+### Fixed
+
+- **Notifications track each failing resource separately.** Alert state was
+  keyed only by alert type, so once one disk, drive, RAID array, interface, or
+  sensor was alerting, a second one of the same type could go unnotified and
+  resolution was all-or-nothing. Each resource is now tracked and resolved on
+  its own.
+- **Software-interrupt "softnet" drop counters read the correct column.** The
+  agent was reporting the kernel's `time_squeeze` counter as dropped packets;
+  it now reports actual drops, so the drop signal is accurate and softirq
+  budget pressure is no longer misreported as packet loss.
+- **Disk IOPS are reported as a true per-second rate.** They were the raw
+  operation count over the whole collection interval (roughly 300x the real
+  rate at the default interval, and dependent on the configured interval).
+  Average I/O latency was already per-operation and is unchanged. If you built
+  external dashboards or alerts on the previous `read_iops`/`write_iops`
+  values, recalibrate them to per-second rates.
+- **Collection cycles no longer overlap.** A slow cycle could start before the
+  previous one finished; the agent now begins each cycle only after the prior
+  one completes, preventing out-of-order snapshots and skewed rate counters.
+
+### Removed
+
+- **The Docker Compose deployment has been removed.** Running the agent in a
+  container required a privileged, host-networked container running as root,
+  contrary to the unprivileged least-privilege model of the native install, and
+  it monitored the container rather than the host. Install natively with
+  `npm install -g @glassmkr/crucible` + `glassmkr-crucible init` (or the
+  one-line installer). The published container images are no longer maintained.
+
 ## [0.14.1] - 2026-07-17
 
 ### Fixed
