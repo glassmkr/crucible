@@ -1,19 +1,21 @@
 // /proc/net/softnet_stat per-CPU NET_RX softirq counters.
 //
-// Per-CPU rows (hex values). Columns observed in modern Linux:
+// Per-CPU rows (hex values). The kernel prints them in softnet_seq_show()
+// (net/core/net-procfs.c) as sd->processed, sd->dropped, sd->time_squeeze,
+// then per-version extensions. So the column order is:
 //   col 0: packets processed
-//   col 1: packets dropped due to NET_RX softirq budget exhaustion
-//          (time_squeeze; rarely the signal we want)
-//   col 2: packets dropped because the per-CPU input backlog filled
-//          (input_queue_dropped; the real "softnet drops" signal)
-//   col 3+: varies by kernel version (squeezed_count, received_rps,
-//          flow_limit_count, ...)
+//   col 1: packets dropped (backlog full / no receiving CPU): the real
+//          "softnet drops" signal, and what Dashboard's softnet_drops
+//          rule fires on
+//   col 2: time_squeeze (the NET_RX softirq exhausted its budget/time
+//          before draining the queue): a softirq-pressure signal, NOT a
+//          packet drop
+//   col 3+: varies by kernel version (received_rps, flow_limit_count, ...)
 //
-// Column 2 is what we surface as `dropped` per Dashboard's
-// softnet_drops rule. Different sources/blogs disagree on column
-// indexing; we anchor on the kernel source (net/core/dev.c
-// softnet_seq_show) where the order is: total processed, time_squeeze,
-// dropped (cpu_collision), then per-version extensions.
+// A prior version of this file had cols 1 and 2 swapped (surfacing
+// time_squeeze as `dropped`), which both missed real drops and reported
+// softirq budget exhaustion as packet loss. Corrected 2026-07-17 per Codex
+// review, anchored on the kernel source above.
 //
 // Per CC_SPEC_CRUCIBLE_C11_C18_FULL_BUNDLE_2026-05-19.md §1.4.
 
@@ -23,7 +25,7 @@ import { RateTracker } from "../lib/rate.js";
 export interface SoftnetSnapshot {
   available: boolean;
   reason?: string;
-  /** Sum of column-2 drops across CPUs, cumulative since boot. */
+  /** Sum of column-1 (sd->dropped) across CPUs, cumulative since boot. */
   total_dropped_cumulative: number;
   /** Per-CPU drops; index is CPU ordinal. Empty when unavailable. */
   per_cpu_dropped: number[];
@@ -34,8 +36,8 @@ export interface SoftnetSnapshot {
 
 const rates = new RateTracker();
 
-const TIME_SQUEEZE_COL = 1;
-const DROPPED_COL = 2;
+const DROPPED_COL = 1; // sd->dropped
+const TIME_SQUEEZE_COL = 2; // sd->time_squeeze
 
 export function collectSoftnet(): SoftnetSnapshot {
   const raw = readProcFile("/proc/net/softnet_stat");

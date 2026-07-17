@@ -170,8 +170,11 @@ describe("C16 softnet", () => {
     expect(typeof r.available).toBe("boolean");
   });
 
-  it("DROPPED_COL is column index 2 (per net/core/dev.c softnet_seq_show)", () => {
-    expect(softnetTest.DROPPED_COL).toBe(2);
+  it("column order matches kernel softnet_seq_show (processed, dropped, time_squeeze)", () => {
+    // net/core/net-procfs.c prints sd->processed (0), sd->dropped (1),
+    // sd->time_squeeze (2). `dropped` is the real drop signal we surface.
+    expect(softnetTest.DROPPED_COL).toBe(1);
+    expect(softnetTest.TIME_SQUEEZE_COL).toBe(2);
   });
 
   it("rate is null on first call (no prior counter to delta against)", () => {
