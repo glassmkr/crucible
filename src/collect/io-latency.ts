@@ -4,7 +4,10 @@ export interface IoLatencyInfo {
   device: string;
   avg_read_latency_ms: number | null;
   avg_write_latency_ms: number | null;
+  /** Completed read operations per SECOND over the interval (a rate, not the
+   *  raw interval count). 0 on the first cycle. See collectIoLatency. */
   read_iops: number;
+  /** Completed write operations per SECOND over the interval. 0 on first cycle. */
   write_iops: number;
 }
 
@@ -17,6 +20,11 @@ interface DiskstatsCounters {
 
 // Previous cumulative counters for delta computation
 const previousCounters = new Map<string, DiskstatsCounters>();
+
+// Wall-clock (ms) of the previous capture, to convert counter deltas into a
+// per-second rate. All devices are read in one synchronous pass, so a single
+// timestamp is correct for the whole cycle. null until the first cycle done.
+let lastCaptureMs: number | null = null;
 
 // Match physical block devices, not partitions or virtual devices
 function isPhysicalDevice(name: string): boolean {
@@ -58,6 +66,14 @@ function delta(current: number, previous: number): number {
 
 export function collectIoLatency(): IoLatencyInfo[] {
   const current = parseDiskstats();
+  const nowMs = Date.now();
+  // Seconds since the previous capture. IOPS are a per-second RATE, so the raw
+  // counter delta must be divided by elapsed time: reporting the bare delta
+  // overstated IOPS by roughly the interval length (~300x at the 300s default)
+  // and made the value interval-dependent. null on the first cycle or a bad
+  // clock delta. (Codex review 2026-07-17.)
+  const elapsedSec = lastCaptureMs != null ? (nowMs - lastCaptureMs) / 1000 : null;
+  const haveRate = elapsedSec != null && elapsedSec > 0;
   const results: IoLatencyInfo[] = [];
   const currentDevices = new Set<string>();
 
@@ -68,8 +84,8 @@ export function collectIoLatency(): IoLatencyInfo[] {
     // Store current for next cycle
     previousCounters.set(name, { ...counters });
 
-    if (!prev) {
-      // First cycle: no delta, report null latency
+    if (!prev || !haveRate) {
+      // First cycle for this device (or no usable elapsed time): no delta yet.
       results.push({
         device: name,
         avg_read_latency_ms: null,
@@ -87,10 +103,12 @@ export function collectIoLatency(): IoLatencyInfo[] {
 
     results.push({
       device: name,
+      // Average latency is per-operation (time delta / op delta), so it is
+      // already interval-independent and needs no elapsed-time division.
       avg_read_latency_ms: deltaReads > 0 ? Math.round((deltaReadTime / deltaReads) * 100) / 100 : null,
       avg_write_latency_ms: deltaWrites > 0 ? Math.round((deltaWriteTime / deltaWrites) * 100) / 100 : null,
-      read_iops: deltaReads,
-      write_iops: deltaWrites,
+      read_iops: Math.round((deltaReads / elapsedSec!) * 10) / 10,
+      write_iops: Math.round((deltaWrites / elapsedSec!) * 10) / 10,
     });
   }
 
@@ -99,5 +117,6 @@ export function collectIoLatency(): IoLatencyInfo[] {
     if (!currentDevices.has(name)) previousCounters.delete(name);
   }
 
+  lastCaptureMs = nowMs;
   return results;
 }
