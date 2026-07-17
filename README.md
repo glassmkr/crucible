@@ -50,35 +50,6 @@ optionally probes the ingest endpoint, writes config + systemd unit
 with the right binary path for your distro, and enables the service.
 Run `glassmkr-crucible init --help` for the full flag list.
 
-## Docker
-
-```bash
-# Create config directory
-sudo mkdir -p /etc/glassmkr
-
-# Create config (replace with your Dashboard credentials)
-sudo tee /etc/glassmkr/crucible.yaml << 'EOF'
-server_name: "web-01"
-collection:
-  interval_seconds: 60
-  ipmi: true
-  smart: true
-dashboard:
-  enabled: true
-  url: "https://app.glassmkr.com"
-  api_key: "gmk_cru_live_YOUR_KEY_HERE"
-EOF
-
-# Run with docker compose
-curl -O https://raw.githubusercontent.com/glassmkr/crucible/main/docker-compose.yml
-docker compose up -d
-
-# Check logs
-docker compose logs -f crucible
-```
-
-The image is published to [`docker.io/glassmkr/crucible`](https://hub.docker.com/r/glassmkr/crucible) (public; the compose file above pulls `:latest` from there) and mirrored to [`ghcr.io/glassmkr/crucible`](https://github.com/glassmkr/crucible/pkgs/container/crucible) (also public). Both pull without authentication. The container needs `--privileged` and `network_mode: host` for IPMI, SMART, and accurate host network monitoring. Details in the [compose file](./docker-compose.yml).
-
 ## Quick Start
 
 1. Create an API key in the Glassmkr Dashboard (Servers → Add server).
