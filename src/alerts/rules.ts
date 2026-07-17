@@ -78,6 +78,7 @@ export const allRules: AlertRule[] = [
     const threshold = t.disk_percent ?? 85;
     return snap.disks.filter(d => d.percent_used >= threshold).map(d => ({
       type: "disk_space_high", severity: d.percent_used >= 95 ? "critical" as const : "warning" as const,
+      instance: d.mount,
       title: `Disk ${d.mount} at ${d.percent_used}%`,
       message: `${d.device}: ${d.used_gb}GB of ${d.total_gb}GB used. ${d.available_gb}GB available.`,
       evidence: { device: d.device, mount: d.mount, percent_used: d.percent_used },
@@ -104,6 +105,7 @@ export const allRules: AlertRule[] = [
     if (!snap.smart) return [];
     return snap.smart.filter(d => d.health !== "PASSED" || (d.reallocated_sectors && d.reallocated_sectors > 0) || (d.pending_sectors && d.pending_sectors > 0))
       .map(d => ({ type: "smart_failing", severity: "critical" as const,
+        instance: d.device,
         title: `SMART failure: ${d.device}`, message: `${d.model}: drive showing signs of failure.`,
         evidence: { device: d.device, health: d.health, reallocated_sectors: d.reallocated_sectors, pending_sectors: d.pending_sectors },
         recommendation: `Back up data. Schedule replacement for ${d.device}.` }));
@@ -114,6 +116,7 @@ export const allRules: AlertRule[] = [
     const threshold = t.nvme_wear_percent ?? 85;
     return snap.smart.filter(d => d.percentage_used != null && d.percentage_used >= threshold)
       .map(d => ({ type: "nvme_wear_high", severity: d.percentage_used! >= 95 ? "critical" as const : "warning" as const,
+        instance: d.device,
         title: `NVMe ${d.device} wear at ${d.percentage_used}%`, message: `${d.model} at ${d.percentage_used}% lifetime wear.`,
         evidence: { device: d.device, percentage_used: d.percentage_used },
         recommendation: "Plan drive replacement." }));
@@ -123,6 +126,7 @@ export const allRules: AlertRule[] = [
     if (!snap.raid) return [];
     return snap.raid.filter(r => r.degraded || r.failed_disks.length > 0)
       .map(r => ({ type: "raid_degraded", severity: "critical" as const,
+        instance: r.device,
         title: `RAID ${r.device} degraded`, message: `${r.device} (${r.level}) degraded. Failed: ${r.failed_disks.join(", ") || "unknown"}.`,
         evidence: { device: r.device, failed_disks: r.failed_disks },
         recommendation: "Replace failed drive immediately." }));
@@ -155,6 +159,7 @@ export const allRules: AlertRule[] = [
       if (worst < thresh) continue;
       findings.push({
         type: "disk_latency_high", severity: "warning",
+        instance: entry.device,
         title: `Disk ${entry.device} latency ${worst.toFixed(1)}ms`,
         message: `Average I/O latency on ${entry.device} is high (read ${r ?? 0}ms, write ${w ?? 0}ms over interval).`,
         evidence: {
@@ -175,6 +180,7 @@ export const allRules: AlertRule[] = [
     if (!snap.network) return [];
     return snap.network.filter(i => (i.rx_errors + i.tx_errors + i.rx_drops + i.tx_drops) > 0)
       .map(i => ({ type: "interface_errors", severity: "warning" as const,
+        instance: i.interface,
         title: `${i.interface}: errors/drops detected`,
         message: `RX errors=${i.rx_errors}, TX errors=${i.tx_errors}, RX drops=${i.rx_drops}, TX drops=${i.tx_drops}.`,
         evidence: { interface: i.interface, rx_errors: i.rx_errors, tx_errors: i.tx_errors, rx_drops: i.rx_drops, tx_drops: i.tx_drops },
@@ -185,6 +191,7 @@ export const allRules: AlertRule[] = [
     if (!snap.network) return [];
     return snap.network.filter(i => i.speed_mbps > 0 && i.speed_mbps < 1000)
       .map(i => ({ type: "link_speed_mismatch", severity: "warning" as const,
+        instance: i.interface,
         title: `${i.interface} at ${i.speed_mbps} Mbps`,
         message: `Interface negotiated below 1 Gbps.`,
         evidence: { interface: i.interface, speed_mbps: i.speed_mbps },
@@ -202,6 +209,7 @@ export const allRules: AlertRule[] = [
       const maxBps = (i.speed_mbps * 1_000_000) / 8;
       const util = Math.max(i.rx_bytes_sec, i.tx_bytes_sec) / maxBps * 100;
       return { type: "interface_saturation", severity: "warning" as const,
+        instance: i.interface,
         title: `${i.interface} at ${util.toFixed(0)}% utilization`,
         message: `Interface ${i.interface} (${i.speed_mbps} Mbps) near saturation.`,
         evidence: { interface: i.interface, utilization_percent: Math.round(util * 10) / 10 },
@@ -223,6 +231,7 @@ export const allRules: AlertRule[] = [
         .map(r => ({
           type: "cpu_temperature_high",
           severity: r.value_celsius >= crit ? "critical" as const : "warning" as const,
+          instance: r.label,
           title: `${r.label}: ${r.value_celsius}°C`,
           message: `CPU temperature above warning threshold (${r.source} ${r.source_chip}).`,
           evidence: { sensor: r.label, value: r.value_celsius, source: r.source, chip: r.source_chip },
@@ -249,6 +258,7 @@ export const allRules: AlertRule[] = [
       const v = typeof s.value === "number" ? s.value : parseFloat(String(s.value));
       const sensorCrit = s.upper_critical ?? crit;
       return { type: "cpu_temperature_high", severity: v >= sensorCrit ? "critical" as const : "warning" as const,
+        instance: s.name,
         title: `${s.name}: ${v}${s.unit}`, message: `Temperature above warning threshold (IPMI sensor).`,
         evidence: { sensor: s.name, value: v, unit: s.unit, source: "ipmi" },
         recommendation: "Check cooling, fans, airflow." };

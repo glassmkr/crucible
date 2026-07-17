@@ -958,4 +958,13 @@ export interface AlertResult {
   message: string;
   evidence: Record<string, unknown>;
   recommendation: string;
+  /**
+   * Stable per-resource identifier for rules that emit one alert per disk,
+   * drive, RAID array, interface, or sensor (a device path, mount point,
+   * interface name, sensor label, etc.). The notify-state machine keys on
+   * `type` + `instance`, so a second failing drive is tracked and notified
+   * independently instead of collapsing into the first drive's `type` entry.
+   * Omit for singleton (one-per-host) alerts, where `type` alone is identity.
+   */
+  instance?: string;
 }

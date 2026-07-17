@@ -395,18 +395,39 @@ async function collect() {
 
 let firstRun = true;
 
-// Run immediately
-collect();
+// Single-flight collection loop: schedule the NEXT cycle only after the
+// current one settles, instead of a fixed setInterval. A cycle runs many
+// sequential subprocess calls with per-device timeouts, so at short intervals
+// it can exceed the configured period; with setInterval that would start a new
+// cycle before the previous one finished. Overlapping cycles can finish out of
+// order (an older/slower cycle overwrites the latest snapshot), corrupt the
+// module-level delta trackers (rate/IOPS baselines), and emit contradictory
+// alert transitions. Re-arming after `await collect()` makes overlap
+// impossible. (Codex review 2026-07-17.)
+const intervalMs = config.collection.interval_seconds * 1000;
+let loopTimer: ReturnType<typeof setTimeout> | null = null;
 
-// Then on interval
-setInterval(collect, config.collection.interval_seconds * 1000);
+async function runLoop(): Promise<void> {
+  try {
+    await collect();
+  } catch (err) {
+    console.error("[collector] collection cycle failed:", err);
+  } finally {
+    loopTimer = setTimeout(runLoop, intervalMs);
+  }
+}
+
+// Run immediately, then re-arm after each cycle settles.
+runLoop();
 
 process.on("SIGTERM", () => {
   console.log("[collector] Received SIGTERM, shutting down");
+  if (loopTimer) clearTimeout(loopTimer);
   process.exit(0);
 });
 
 process.on("SIGINT", () => {
   console.log("[collector] Received SIGINT, shutting down");
+  if (loopTimer) clearTimeout(loopTimer);
   process.exit(0);
 });
