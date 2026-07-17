@@ -712,6 +712,13 @@ export interface DiskInfo {
 
 export interface SmartInfo {
   device: string;
+  // How the drive was reached. Omitted/"direct" for a normal /dev/sdX|nvme
+  // block device; the controller family (e.g. "megaraid") for a physical
+  // drive read through a hardware RAID/HBA via smartctl `-d TYPE` passthrough.
+  transport?: string;
+  // For a passthrough drive, the backing device path smartctl was pointed at
+  // (e.g. "/dev/bus/0"); absent for direct disks.
+  backing_device?: string;
   model: string;
   // Drive identity for hardware RMA / provider-ticket workflows. smartctl
   // --json exposes both at the top level for SATA and NVMe; optional because

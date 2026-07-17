@@ -31,7 +31,7 @@ export const SUDOERS_PATH = "/etc/sudoers.d/glassmkr-crucible";
 // validated. Everything else takes no argument.
 export type PrivilegedAction =
   | "ipmi-sensor" | "ipmi-sel-info" | "ipmi-sel-elist" | "ipmi-fan"
-  | "smart" | "zpool"
+  | "smart" | "smart-scan" | "zpool"
   | "raid-perccli" | "raid-storcli" | "raid-ssacli" | "raid-arcconf"
   | "dmesg-errcrit" | "dmesg-io"
   | "iptables" | "nft" | "ufw" | "firewall-cmd" | "pve-firewall"
@@ -84,6 +84,17 @@ export function isAllowedIface(name: string): boolean {
   return name.length > 0 && name.length <= 15 && /^[A-Za-z0-9._:-]+$/.test(name);
 }
 
+/** smartctl `-d TYPE` passthrough selectors the wrapper accepts, for reading
+ *  physical drives behind a hardware RAID/HBA controller (e.g.
+ *  `sat+megaraid,8`). Mirrors the sh `valid_smart_type` case. The selector is
+ *  derived from `smartctl --scan-open` output, but is validated here anyway as
+ *  the last gate before a root exec. Restricted to a known controller-family
+ *  prefix plus a comma-separated numeric tuple; no other chars, so nothing can
+ *  inject an extra smartctl flag or a path. */
+export function isAllowedSmartType(type: string): boolean {
+  return /^(sat\+)?(megaraid|cciss|3ware|aacraid|areca|marvell),\d+([,/]\d+){0,2}$/.test(type);
+}
+
 /**
  * The real command each action maps to, mirroring WRAPPER_SCRIPT's `case`
  * statement below. Used only for the root fallback in runPrivileged; the
@@ -97,7 +108,18 @@ function directCommand(action: PrivilegedAction, args: string[]): { cmd: string;
     case "ipmi-sel-info": return { cmd: "ipmitool", args: ["sel", "info"] };
     case "ipmi-sel-elist": return { cmd: "ipmitool", args: ["sel", "elist"] };
     case "ipmi-fan": return { cmd: "ipmitool", args: ["sdr", "type", "Fan"] };
-    case "smart": return isAllowedSmartDevice(args[0] ?? "") ? { cmd: "smartctl", args: ["--json", "--all", args[0]] } : null;
+    case "smart-scan": return { cmd: "smartctl", args: ["--scan-open"] };
+    case "smart": {
+      const dev = args[0] ?? "";
+      if (!isAllowedSmartDevice(dev)) return null;
+      const type = args[1];
+      if (type != null && type !== "") {
+        return isAllowedSmartType(type)
+          ? { cmd: "smartctl", args: ["--json", "--all", "-d", type, dev] }
+          : null;
+      }
+      return { cmd: "smartctl", args: ["--json", "--all", dev] };
+    }
     case "zpool": return { cmd: "zpool", args: ["status"] };
     case "raid-perccli": return { cmd: "perccli", args: ["/c0", "show", "all", "J"] };
     case "raid-storcli": return { cmd: "storcli", args: ["/call", "show", "all", "J"] };
@@ -191,15 +213,36 @@ valid_iface() {
     *) [ "\${#1}" -le 15 ] ;;
   esac
 }
+valid_smart_type() {
+  # Mirror the anchored TS isAllowedSmartType. Controller-passthrough
+  # selectors like 'sat+megaraid,8' for reading a physical drive behind a
+  # hardware RAID/HBA. Reject '..', constrain to the safe charset, require a
+  # known family prefix, and forbid a trailing comma. Combined this admits
+  # only '[sat+]<family>,<digits>[,/<digits>]...' - no room for an injected
+  # smartctl flag or path.
+  case "$1" in *..*) return 1 ;; esac
+  case "$1" in *[!A-Za-z0-9,+/]*) return 1 ;; esac
+  case "$1" in *,) return 1 ;; esac
+  case "$1" in
+    sat+megaraid,*|megaraid,*|cciss,*|3ware,*|aacraid,*|areca,*|marvell,*) return 0 ;;
+    *) return 1 ;;
+  esac
+}
 
 case "$action" in
   ipmi-sensor)    exec ipmitool sensor ;;
   ipmi-sel-info)  exec ipmitool sel info ;;
   ipmi-sel-elist) exec ipmitool sel elist ;;
   ipmi-fan)       exec ipmitool sdr type Fan ;;
+  smart-scan)     exec smartctl --scan-open ;;
   smart)
     dev="\${1:-}"
+    typ="\${2:-}"
     valid_device "$dev" || { echo "crucible-collect: rejected device: $dev" >&2; exit 65; }
+    if [ -n "$typ" ]; then
+      valid_smart_type "$typ" || { echo "crucible-collect: rejected smart type: $typ" >&2; exit 65; }
+      exec smartctl --json --all -d "$typ" "$dev"
+    fi
     exec smartctl --json --all "$dev" ;;
   zpool)          exec zpool status ;;
   raid-perccli)   exec perccli /c0 show all J ;;
