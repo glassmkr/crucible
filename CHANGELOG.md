@@ -7,6 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 Pre-1.0 convention: minor bumps may include breaking changes; we call them
 out under `### Breaking` so downstream consumers can audit.
 
+## [0.14.1] - 2026-07-17
+
+### Fixed
+
+- **Hardened the hardware-RAID passthrough device-type check added in 0.14.0.**
+  The controller-type selector (e.g. `sat+megaraid,8`) is now validated against
+  a single canonical grammar that the TypeScript and shell gates enforce
+  identically, closing a gap where the shell allowlist accepted more shapes
+  than intended and rejected some valid ones. Behavior for real controllers is
+  unchanged; MegaRAID drives are read exactly as before.
+- **Two distinct drives that report the same placeholder serial are no longer
+  collapsed.** Result de-duplication is now scoped to the one real case (the
+  same physical drive seen both directly and through a controller), so two
+  separate bare disks that happen to share a blank/placeholder serial both
+  remain visible and can each raise a failure alert.
+
+### Upgrade note (action required)
+
+The privileged wrapper changed, so hosts running the unprivileged service user
+need a one-time `glassmkr-crucible init` re-run (or wrapper refresh) after
+upgrading, same as 0.14.0.
+
 ## [0.14.0] - 2026-07-16
 
 ### Added
