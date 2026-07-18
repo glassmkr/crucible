@@ -9,7 +9,7 @@ out under `### Breaking` so downstream consumers can audit.
 
 ## [0.14.5] - 2026-07-18
 
-Fourth-round Codex remediation: install-time privilege-separation robustness,
+Code-review remediation round: install-time privilege-separation robustness,
 hardware-RAID drive-visibility fixes, and steadier CPU-temperature alerting.
 
 ### Security
@@ -32,7 +32,7 @@ hardware-RAID drive-visibility fixes, and steadier CPU-temperature alerting.
 
 ## [0.14.4] - 2026-07-18
 
-Third-round Codex remediation (privilege-separation hardening, drive-identity
+Third code-review remediation round (privilege-separation hardening, drive-identity
 keys) plus a new SMART monitoring-coverage signal.
 
 ### Security
@@ -72,7 +72,7 @@ keys) plus a new SMART monitoring-coverage signal.
 
 ## [0.14.3] - 2026-07-18
 
-Second-round remediation of the Codex review (corrections to the 0.14.2 changes).
+Second-round remediation of the code review (corrections to the 0.14.2 changes).
 
 ### Security
 
@@ -101,7 +101,7 @@ Second-round remediation of the Codex review (corrections to the 0.14.2 changes)
 
 ## [0.14.2] - 2026-07-17
 
-Remediation of an external (Codex) code review of 0.14.0/0.14.1.
+Remediation of an external code review of 0.14.0/0.14.1.
 
 ### Security
 
@@ -1079,7 +1079,7 @@ then `sudo systemctl restart glassmkr-collector`.
 
 ## [0.8.1] - 2026-05-06
 
-Patch release closing P1 bugs Codex identified in 0.8.0. No new
+Patch release closing P1 bugs identified in a code review of 0.8.0. No new
 features, no schema changes. Recommended upgrade for anyone running
 0.8.0.
 
@@ -1123,7 +1123,7 @@ features, no schema changes. Recommended upgrade for anyone running
 
 ### Note on Forge integration
 
-The Codex review against 0.8.0 flagged that Forge's server-side
+A code review against 0.8.0 flagged that Forge's server-side
 evaluator doesn't yet read the new `snap.thermal`,
 `snap.ipmi.ecc_errors_from_sel`, `snap.ipmi.psu_redundancy_state`, or
 `snap.dmi` fields. **Collector-side rules (used for Telegram / Slack /
