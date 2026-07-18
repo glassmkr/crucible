@@ -6,6 +6,16 @@ export interface Snapshot {
   memory: MemoryInfo;
   disks: DiskInfo[];
   smart: SmartInfo[];
+  /** Fixed (non-removable) disks present in /sys/block for which SMART could
+   *  NOT be read: smartctl missing/failed, or the controller needs a `-d` type
+   *  the collector does not try (unsupported HBA/enclosure). Surfaces the
+   *  "disks present but SMART unreadable" blind spot so a monitored host with
+   *  unreadable drives is not indistinguishable from a diskless host. Excludes
+   *  0-byte BMC virtual media and removable USB/SD media by construction, and
+   *  is suppressed when the controller-passthrough path returned drives (the
+   *  unreadable /sys/block entry is then the controller's own virtual disk).
+   *  Omitted when empty. Crucible 0.14.4+. */
+  smart_unreadable?: SmartUnreadable[];
   network: NetworkInfo[];
   raid: RaidInfo[];
   ipmi: IpmiInfo;
@@ -775,6 +785,20 @@ export interface SmartInfo {
     last_failed_lifetime_hours?: number;
     error_count_total?: number;
   };
+}
+
+/** A fixed disk present in /sys/block whose SMART could not be read. See the
+ *  Snapshot.smart_unreadable doc comment for the blind-spot rationale. */
+export interface SmartUnreadable {
+  /** The /dev node, e.g. "/dev/sda". */
+  device: string;
+  /** Why SMART was unreadable; drives the dashboard remediation headline.
+   *  - no_smartctl_output: the privileged smartctl call produced nothing
+   *    (smartmontools not installed, or the invocation failed/timed out).
+   *  - no_smart_data: smartctl ran but exposed no SMART surface (controller
+   *    needs a `-d` type the collector does not try; unsupported HBA/enclosure).
+   *  - parse_error: smartctl output was present but could not be parsed. */
+  reason: "no_smartctl_output" | "no_smart_data" | "parse_error";
 }
 
 export interface NetworkInfo {

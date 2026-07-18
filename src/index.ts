@@ -251,12 +251,12 @@ async function collect() {
   }
   ipmiCheckCounter++;
 
-  const [system, cpu, memory, disks, smart, network, raid, ipmi, osAlerts] = await Promise.all([
+  const [system, cpu, memory, disks, smartResult, network, raid, ipmi, osAlerts] = await Promise.all([
     collectSystem(),
     collectCpu(),
     collectMemory(),
     collectDisks(),
-    config.collection.smart ? collectSmart() : Promise.resolve([]),
+    config.collection.smart ? collectSmart() : Promise.resolve({ smart: [], unreadable: [] }),
     collectNetwork(),
     collectRaid(),
     config.collection.ipmi ? collectIpmi(cachedDmi?.vendor ?? "generic", ipmiCapability) : Promise.resolve(emptyIpmi),
@@ -274,10 +274,14 @@ async function collect() {
   const snapshot: Snapshot = {
     collector_version: PKG_VERSION,
     timestamp: new Date().toISOString(),
-    system, cpu, memory, disks, smart, network, raid, ipmi, os_alerts: osAlerts,
+    system, cpu, memory, disks, smart: smartResult.smart, network, raid, ipmi, os_alerts: osAlerts,
     security: lastSecurityResult,
     dmi: cachedDmi,
   };
+  // Disks present but SMART-unreadable (blind spot: smartctl missing /
+  // unsupported controller). Omitted when empty so older dashboards + healthy
+  // hosts are unaffected. Dashboard drive_smart_unreadable rule reads this.
+  if (smartResult.unreadable.length > 0) snapshot.smart_unreadable = smartResult.unreadable;
 
   // Single-shot: the very first snapshot after a marked reboot carries
   // the flag, subsequent snapshots do not.
@@ -379,7 +383,7 @@ async function collect() {
     const ramPct = memory.total_mb > 0 ? ((memory.used_mb / memory.total_mb) * 100).toFixed(1) : "0";
     console.log(`RAM:    ${ramPct}% (${memory.used_mb} / ${memory.total_mb} MB)`);
     if (disks.length > 0) console.log(`Disk:   ${disks[0].percent_used}% (${disks[0].mount})`);
-    console.log(`SMART:  ${smart.length > 0 ? `${smart.length} drive(s) checked` : "not available"}`);
+    console.log(`SMART:  ${smartResult.smart.length > 0 ? `${smartResult.smart.length} drive(s) checked` : "not available"}${smartResult.unreadable.length > 0 ? `, ${smartResult.unreadable.length} unreadable` : ""}`);
     console.log(`Network: ${network.map((n) => n.interface).join(", ") || "none detected"}`);
     console.log(`IPMI:   ${ipmi.available ? "available" : "not available"}`);
     if (snapshot.thermal) {

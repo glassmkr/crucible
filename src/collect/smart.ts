@@ -1,38 +1,80 @@
 import { runPrivileged, isAllowedSmartType } from "../lib/privileged.js";
 import { readdirSync, readFileSync } from "fs";
-import type { SmartInfo } from "../lib/types.js";
+import type { SmartInfo, SmartUnreadable } from "../lib/types.js";
 
-export async function collectSmart(): Promise<SmartInfo[]> {
-  // Find block devices
-  const devices: string[] = [];
+export interface CollectSmartOptions {
+  /** Root of block-device discovery. Defaults to /sys/block. Injectable for tests. */
+  sysBlock?: string;
+  /** Read SMART JSON for a device (optionally with a `-d TYPE` selector).
+   *  Defaults to the privileged smartctl wrapper. Injectable for tests. */
+  probe?: (device: string, type?: string) => Promise<string | null>;
+  /** Run `smartctl --scan-open`. Defaults to the privileged wrapper. Injectable. */
+  scan?: () => Promise<string | null>;
+}
+
+export async function collectSmart(
+  opts: CollectSmartOptions = {},
+): Promise<{ smart: SmartInfo[]; unreadable: SmartUnreadable[] }> {
+  const sysBlock = opts.sysBlock ?? "/sys/block";
+  const probe = opts.probe ?? ((device: string, type?: string) =>
+    runPrivileged("smart", type ? [device, type] : [device]));
+  const scan = opts.scan ?? (() => runPrivileged("smart-scan"));
+
+  // Find block devices. `eligible` marks a device that may be reported as a
+  // SMART blind spot if unreadable: a FIXED (non-removable) disk with a known
+  // non-zero size. Removable media (USB sticks/SD: removable=1) and ambiguous
+  // (size-unreadable) devices are still probed for SMART but never flagged, so
+  // the marker stays free of the two obvious false-positive classes.
+  const devices: Array<{ path: string; eligible: boolean }> = [];
   try {
-    const entries = readdirSync("/sys/block");
+    const entries = readdirSync(sysBlock);
     for (const entry of entries) {
       if (!(entry.startsWith("sd") || entry.startsWith("nvme") || entry.startsWith("hd"))) continue;
       // Skip media-less virtual devices (BMC virtual media: "AMI Virtual
       // HDisk0" enumerates as a 0-byte USB /dev/sda on Supermicro/ASUS
       // boards). smartctl cannot interrogate them and they are not disks;
       // without this guard one produced a phantom "SMART failure on
-      // /dev/sda" (agentic-17, 2026-07-05).
+      // /dev/sda" (agentic-17, 2026-07-05). 0-byte devices are dropped here so
+      // they are never probed AND never flagged as a blind spot.
+      let sizeNonZero = false;
       try {
-        if (parseInt(readFileSync(`/sys/block/${entry}/size`, "utf-8").trim(), 10) === 0) continue;
-      } catch { /* unreadable size: let smartctl decide */ }
-      devices.push(`/dev/${entry}`);
+        const size = parseInt(readFileSync(`${sysBlock}/${entry}/size`, "utf-8").trim(), 10);
+        if (size === 0) continue;
+        sizeNonZero = size > 0;
+      } catch { /* unreadable size: let smartctl decide, but do not flag it */ }
+      let removable = false;
+      try {
+        removable = readFileSync(`${sysBlock}/${entry}/removable`, "utf-8").trim() === "1";
+      } catch { /* removable file absent: treat as fixed */ }
+      devices.push({ path: `/dev/${entry}`, eligible: sizeNonZero && !removable });
     }
   } catch {
-    return [];
+    return { smart: [], unreadable: [] };
   }
 
   const direct: SmartInfo[] = [];
-  for (const device of devices) {
-    const output = await runPrivileged("smart", [device]);
-    if (!output) continue;
-
+  const unreadable: SmartUnreadable[] = [];
+  for (const { path, eligible } of devices) {
+    const output = await probe(path);
+    if (!output) {
+      // smartctl produced nothing: not installed, or the call failed/timed out.
+      if (eligible) unreadable.push({ device: path, reason: "no_smartctl_output" });
+      continue;
+    }
+    let info: SmartInfo | null = null;
     try {
-      const info = parseSmartctlJson(JSON.parse(output), device);
-      if (info) direct.push(info);
+      info = parseSmartctlJson(JSON.parse(output), path);
     } catch {
-      // Failed to parse, skip this device
+      if (eligible) unreadable.push({ device: path, reason: "parse_error" });
+      continue;
+    }
+    if (info) {
+      direct.push(info);
+    } else if (eligible) {
+      // smartctl ran but exposed no SMART surface: the controller needs a `-d`
+      // type we do not try (unsupported HBA/enclosure). Distinct from 0-byte
+      // virtual media (skipped) and removable media (not eligible).
+      unreadable.push({ device: path, reason: "no_smart_data" });
     }
   }
 
@@ -44,10 +86,10 @@ export async function collectSmart(): Promise<SmartInfo[]> {
   // bare-disk behavior above is unchanged. No storcli/vendor binary needed.
   const passthrough: SmartInfo[] = [];
   try {
-    const scan = await runPrivileged("smart-scan");
-    if (scan) {
-      for (const { path, type } of parseScanOpen(scan)) {
-        const out = await runPrivileged("smart", [path, type]);
+    const scanOut = await scan();
+    if (scanOut) {
+      for (const { path, type } of parseScanOpen(scanOut)) {
+        const out = await probe(path, type);
         if (!out) continue;
         try {
           // Synthetic device id: the backing path plus the selector, unique per
@@ -67,7 +109,14 @@ export async function collectSmart(): Promise<SmartInfo[]> {
     // --scan-open unavailable: fall back to the /sys/block results only
   }
 
-  return mergeDriveResults(direct, passthrough);
+  // Blind-spot suppression: if the passthrough path produced drives, an
+  // unreadable direct device is almost certainly the controller's OWN virtual
+  // disk (which never reports SMART), not a blind spot: the physical drives'
+  // SMART is covered via passthrough. Suppress the marker in that case so a
+  // healthy HW-RAID box does not perpetually advise "SMART unreadable".
+  const finalUnreadable = passthrough.length > 0 ? [] : unreadable;
+
+  return { smart: mergeDriveResults(direct, passthrough), unreadable: finalUnreadable };
 }
 
 /**
