@@ -12,8 +12,9 @@
 # STRESS_SECONDS). Concurrent with collect_metrics.sh sampling at 5s.
 #
 # Output: CSV to stdout. Profile B additionally writes the control
-# CSV to a sibling path (stress/b-io-<hostname>-control.csv) — Simon
-# specifies the output dir via OUTPUT_DIR env var, default "stress/".
+# CSV to a private root-owned output directory. Override the default with
+# an absolute OUTPUT_DIR whose complete directory chain is root-owned and
+# not group- or world-writable.
 #
 # Per-host invocation:
 #   bash scripts/run_stress.sh a > stress/a-cpu-$(hostname).csv
@@ -21,12 +22,14 @@
 #   bash scripts/run_stress.sh c > stress/c-mem-$(hostname).csv
 
 set -u
+set -o noclobber
+umask 077
 
 PROFILE="${1:-}"
 STRESS_SECONDS="${STRESS_SECONDS:-600}"
 INTERVAL_S="${INTERVAL_S:-5}"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-OUTPUT_DIR="${OUTPUT_DIR:-stress}"
+OUTPUT_DIR="${OUTPUT_DIR:-/var/lib/glassmkr/measurements/stress}"
 HOST="$(hostname)"
 
 # glassmkr-crucible runs as root + Profile B needs systemctl stop/start;
@@ -50,9 +53,104 @@ Profiles:
 Env overrides:
   STRESS_SECONDS  default 600 (10 minutes)
   INTERVAL_S      default 5 (sample interval for collect_metrics.sh)
-  OUTPUT_DIR      default "stress" (for Profile B's control CSV)
+  OUTPUT_DIR      default /var/lib/glassmkr/measurements/stress
+                  Must be absolute with a root-owned, non-writable path chain.
 EOF
   exit 1
+}
+
+SERVICE_NEEDS_RESTORE=0
+sample_pid=""
+fio_pid=""
+stress_pid=""
+FIO_FILE=""
+FIO_FILE_CLEANUP=0
+
+cleanup() {
+  local status=$?
+  trap - EXIT INT TERM
+  local pid
+  for pid in "$sample_pid" "$fio_pid" "$stress_pid"; do
+    if [[ "$pid" =~ ^[0-9]+$ ]]; then
+      kill "$pid" 2>/dev/null || true
+      wait "$pid" 2>/dev/null || true
+    fi
+  done
+  if [ "$SERVICE_NEEDS_RESTORE" -eq 1 ]; then
+    if ! systemctl start glassmkr-crucible; then
+      echo "[run_stress] CRITICAL: failed to restore glassmkr-crucible" >&2
+      [ "$status" -ne 0 ] || status=5
+    fi
+  fi
+  if [ "$FIO_FILE_CLEANUP" -eq 1 ] && [ -n "$FIO_FILE" ]; then
+    rm -f -- "$FIO_FILE"
+  fi
+  exit "$status"
+}
+
+trap cleanup EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
+
+prepare_private_output_dir() {
+  if [ "$OUTPUT_DIR" = "/" ] || [[ "$OUTPUT_DIR" != /* ]] || [[ "$OUTPUT_DIR" == *"//"* ]] || [[ "$OUTPUT_DIR" == */ ]] || [[ "/$OUTPUT_DIR/" == *"/../"* ]] || [[ "/$OUTPUT_DIR/" == *"/./"* ]]; then
+    echo "[run_stress] OUTPUT_DIR must be a normalized absolute path" >&2
+    return 1
+  fi
+
+  local current=""
+  local component
+  local -a components=()
+  IFS='/' read -r -a components <<< "${OUTPUT_DIR#/}"
+  for component in "${components[@]}"; do
+    [ -n "$component" ] || continue
+    current="${current}/${component}"
+    if [ -L "$current" ]; then
+      echo "[run_stress] refusing symlink in output path: $current" >&2
+      return 1
+    fi
+    if [ -e "$current" ]; then
+      local existing_metadata existing_owner existing_group existing_mode existing_kind
+      existing_metadata="$(stat -c '%u %g %a %F' -- "$current")" || return 1
+      read -r existing_owner existing_group existing_mode existing_kind <<< "$existing_metadata"
+      if [ "$existing_kind" != "directory" ] || [ "$existing_owner" -ne 0 ] || [ "$existing_group" -ne 0 ] || (( (8#$existing_mode & 022) != 0 )); then
+        echo "[run_stress] refusing unsafe existing output path component: $current" >&2
+        return 1
+      fi
+    fi
+  done
+
+  install -d -o root -g root -m 0700 -- "$OUTPUT_DIR" || return 1
+  current=""
+  for component in "${components[@]}"; do
+    [ -n "$component" ] || continue
+    current="${current}/${component}"
+    if [ -L "$current" ]; then
+      echo "[run_stress] refusing symlink in output path: $current" >&2
+      return 1
+    fi
+    local metadata owner group mode kind
+    metadata="$(stat -c '%u %g %a %F' -- "$current")" || return 1
+    read -r owner group mode kind <<< "$metadata"
+    if [ "$kind" != "directory" ] || [ "$owner" -ne 0 ] || [ "$group" -ne 0 ] || (( (8#$mode & 022) != 0 )); then
+      echo "[run_stress] output path component is not a protected root-owned directory: $current" >&2
+      return 1
+    fi
+  done
+  metadata="$(stat -c '%u %g %a %F' -- "$OUTPUT_DIR")" || return 1
+  read -r owner group mode kind <<< "$metadata"
+  if (( (8#$mode & 077) != 0 )); then
+    echo "[run_stress] output directory must be private (0700): $OUTPUT_DIR" >&2
+    return 1
+  fi
+}
+
+require_new_output() {
+  local path="$1"
+  if [ -e "$path" ] || [ -L "$path" ]; then
+    echo "[run_stress] refusing to overwrite existing output: $path" >&2
+    return 1
+  fi
 }
 
 run_collector_background() {
@@ -79,6 +177,7 @@ case "$PROFILE" in
     DURATION_S="$STRESS_SECONDS" INTERVAL_S="$INTERVAL_S" \
       bash "$SCRIPT_DIR/collect_metrics.sh"
     wait "$stress_pid" 2>/dev/null || true
+    stress_pid=""
     ;;
 
   b)
@@ -87,7 +186,27 @@ case "$PROFILE" in
       exit 2
     }
 
-    FIO_FILE="/var/tmp/measurement.fio"
+    # Step 1: control run (agent stopped). Writes control CSV via a
+    # background tail of /dev/null (no agent so collect_metrics emits
+    # empty rows, which is useful to confirm the gap). Also captures fio
+    # throughput summary into a sibling .fio-throughput file.
+    >&2 echo "[run_stress] profile B (I/O) on ${HOST}"
+    >&2 echo "[run_stress] step 1/2: control run (agent STOPPED) for ${STRESS_SECONDS}s"
+    command -v systemctl >/dev/null 2>&1 || {
+      echo "[run_stress] systemctl is required for profile B" >&2
+      exit 3
+    }
+    systemctl is-active --quiet glassmkr-crucible || {
+      echo "[run_stress] glassmkr-crucible must be active before profile B" >&2
+      exit 3
+    }
+    prepare_private_output_dir || exit 3
+    [[ "$HOST" =~ ^[A-Za-z0-9._-]+$ ]] || {
+      echo "[run_stress] refusing unsafe hostname in output filename" >&2
+      exit 3
+    }
+    FIO_FILE="$(mktemp -- "${OUTPUT_DIR}/measurement-${HOST}.XXXXXXXX.fio")" || exit 3
+    FIO_FILE_CLEANUP=1
     FIO_ARGS=(
       --name=measurement-io
       --filename="$FIO_FILE"
@@ -101,54 +220,58 @@ case "$PROFILE" in
       --group_reporting
       --output-format=normal
     )
-
-    # Step 1: control run (agent stopped). Writes control CSV via a
-    # background tail of /dev/null (no agent so collect_metrics emits
-    # empty rows — useful to confirm the gap). Also captures fio
-    # throughput summary into a sibling .fio-throughput file.
-    >&2 echo "[run_stress] profile B (I/O) on ${HOST}"
-    >&2 echo "[run_stress] step 1/2: control run (agent STOPPED) for ${STRESS_SECONDS}s"
-    if command -v systemctl >/dev/null 2>&1; then
-      sudo systemctl stop glassmkr-crucible || {
-        echo "[run_stress] could not stop glassmkr-crucible; aborting" >&2
-        exit 3
-      }
-    fi
-
     CONTROL_CSV="${OUTPUT_DIR}/b-io-${HOST}-control.csv"
     CONTROL_FIO_OUT="${OUTPUT_DIR}/b-io-${HOST}-control.fio.txt"
-    mkdir -p "$OUTPUT_DIR"
+    AGENT_FIO_OUT="${OUTPUT_DIR}/b-io-${HOST}.fio.txt"
+    require_new_output "$CONTROL_CSV" || exit 3
+    require_new_output "$CONTROL_FIO_OUT" || exit 3
+    require_new_output "$AGENT_FIO_OUT" || exit 3
+    SERVICE_NEEDS_RESTORE=1
+    systemctl stop glassmkr-crucible || {
+      echo "[run_stress] could not stop glassmkr-crucible; aborting" >&2
+      exit 3
+    }
+
     # Sampling during control (agent stopped; rows will be empty but
     # this proves the agent was down for the window).
     DURATION_S="$STRESS_SECONDS" INTERVAL_S="$INTERVAL_S" \
       bash "$SCRIPT_DIR/collect_metrics.sh" > "$CONTROL_CSV" &
     sample_pid=$!
-    fio "${FIO_ARGS[@]}" > "$CONTROL_FIO_OUT" 2>&1
+    if ! fio "${FIO_ARGS[@]}" > "$CONTROL_FIO_OUT" 2>&1; then
+      echo "[run_stress] control fio run failed" >&2
+      exit 3
+    fi
     wait "$sample_pid" 2>/dev/null || true
+    sample_pid=""
     >&2 echo "[run_stress] control fio summary written to $CONTROL_FIO_OUT"
 
     # Step 2: restart agent and run fio again with concurrent sampling.
-    if command -v systemctl >/dev/null 2>&1; then
-      sudo systemctl start glassmkr-crucible || {
-        echo "[run_stress] could not restart glassmkr-crucible; manual recovery needed" >&2
-        exit 4
-      }
-    fi
+    systemctl start glassmkr-crucible || {
+      echo "[run_stress] could not restart glassmkr-crucible; cleanup will retry" >&2
+      exit 4
+    }
+    SERVICE_NEEDS_RESTORE=0
     # Give the agent ~10s to settle before measuring.
     sleep 10
 
     >&2 echo "[run_stress] step 2/2: with-agent run for ${STRESS_SECONDS}s"
-    AGENT_FIO_OUT="${OUTPUT_DIR}/b-io-${HOST}.fio.txt"
     fio "${FIO_ARGS[@]}" > "$AGENT_FIO_OUT" 2>&1 &
     fio_pid=$!
     DURATION_S="$STRESS_SECONDS" INTERVAL_S="$INTERVAL_S" \
       bash "$SCRIPT_DIR/collect_metrics.sh"
-    wait "$fio_pid" 2>/dev/null || true
+    if ! wait "$fio_pid"; then
+      fio_pid=""
+      echo "[run_stress] with-agent fio run failed" >&2
+      exit 3
+    fi
+    fio_pid=""
     >&2 echo "[run_stress] with-agent fio summary written to $AGENT_FIO_OUT"
     >&2 echo "[run_stress] compare IOPS / bandwidth between the two .fio.txt files"
 
-    # Cleanup the test file (2GB).
-    rm -f "$FIO_FILE"
+    # Cleanup also runs from the EXIT/signal trap.
+    rm -f -- "$FIO_FILE"
+    FIO_FILE_CLEANUP=0
+    FIO_FILE=""
     ;;
 
   c)
@@ -165,6 +288,7 @@ case "$PROFILE" in
     DURATION_S="$STRESS_SECONDS" INTERVAL_S="$INTERVAL_S" \
       bash "$SCRIPT_DIR/collect_metrics.sh"
     wait "$stress_pid" 2>/dev/null || true
+    stress_pid=""
     ;;
 
   *)
