@@ -935,6 +935,11 @@ export interface ThermalReading {
   value_celsius: number;
   source_chip: string;
   source: "hwmon" | "thermal_zone";
+  /** Stable per-device identifier (the hwmon device's PCI path, or the hwmonN
+   *  dir as a fallback). Distinguishes two sockets running the same driver that
+   *  report an identical label (e.g. dual "k10temp Tctl"), so per-sensor alert
+   *  state keys on the socket, not just the label. Omitted on older agents. */
+  chip_id?: string;
 }
 
 export interface ThermalInfo {

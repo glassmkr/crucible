@@ -157,8 +157,10 @@ export function setupPrivilegeSeparation(deps: InitDeps, configPath: string): bo
   //    file, then atomically rename it into place. rename REPLACES a pre-existing
   //    file or symlink (it does not follow the link), so ownership becomes root
   //    regardless of what was there. Then lstat-verify the final path. The parent
-  //    dir (/usr/local/sbin) is root-owned and not service-user-writable, so the
-  //    temp path itself cannot be pre-planted. (Codex review 2026-07-17.)
+  //    directory must ALSO be trustworthy (step 2b verifies it is root-owned and
+  //    not writable by the service user) or the temp path could be pre-planted
+  //    and the installed wrapper later swapped. (Codex review 2026-07-17; parent-
+  //    dir check 2026-07-18.)
   const wrapperTmp = `${WRAPPER_PATH}.tmp`;
   try {
     deps.fs.writeFileSync(wrapperTmp, WRAPPER_SCRIPT, { mode: 0o755 });
@@ -172,6 +174,34 @@ export function setupPrivilegeSeparation(deps: InitDeps, configPath: string): bo
     }
   } catch (err: any) {
     deps.warn(`[init] could not install wrapper ${WRAPPER_PATH}: ${err?.message ?? err}; staying on User=root.`);
+    return false;
+  }
+
+  // 2b. Parent-directory trust boundary. The file-level checks above are moot if
+  //     the service user can replace the wrapper via write access to its
+  //     DIRECTORY. Debian ships /usr/local/sbin as 2775 root:staff, so a
+  //     `glassmkr` account in `staff` (or any group that owns the dir) could swap
+  //     the root-owned wrapper and run code as root through the NOPASSWD grant.
+  //     Default installs are safe (our useradd does not add `glassmkr` to a
+  //     dir-owning group), but verify rather than assume: refuse if the dir is
+  //     not root-owned, is world-writable, or is group-writable by a group the
+  //     service user belongs to. (Codex re-review 2026-07-18.)
+  try {
+    const wrapperDir = pathDefault.dirname(WRAPPER_PATH);
+    const dst = deps.fs.lstatSync(wrapperDir);
+    const worldWritable = (dst.mode & 0o002) !== 0;
+    let groupWritableByServiceUser = false;
+    if ((dst.mode & 0o020) !== 0) {
+      const g = deps.exec("id", ["-G", SERVICE_USER]);
+      const gids = g.stdout.trim().split(/\s+/).filter(Boolean).map(Number);
+      groupWritableByServiceUser = gids.includes(dst.gid);
+    }
+    if (dst.uid !== 0 || worldWritable || groupWritableByServiceUser) {
+      deps.warn(`[init] wrapper directory ${wrapperDir} is not trustworthy (uid=${dst.uid}, mode=${(dst.mode & 0o777).toString(8)}, service-user-writable=${worldWritable || groupWritableByServiceUser}); staying on User=root.`);
+      return false;
+    }
+  } catch (err: any) {
+    deps.warn(`[init] could not verify the wrapper directory: ${err?.message ?? err}; staying on User=root.`);
     return false;
   }
 
