@@ -1,4 +1,4 @@
-import { readFileSync } from "fs";
+import { lstatSync, readFileSync, type Stats } from "node:fs";
 import { parse } from "yaml";
 import { z } from "zod";
 
@@ -52,8 +52,24 @@ const ConfigSchema = z.object({
 
 export type Config = z.infer<typeof ConfigSchema>;
 
+export function assertSecureConfigStat(path: string, stat: Pick<Stats, "uid" | "mode"> & {
+  isFile: () => boolean;
+  isSymbolicLink: () => boolean;
+}): void {
+  if (stat.isSymbolicLink() || !stat.isFile()) {
+    throw new Error(`[config] Refusing non-regular config file at ${path}`);
+  }
+  if (stat.uid !== 0) {
+    throw new Error(`[config] Refusing config not owned by root at ${path} (uid=${stat.uid})`);
+  }
+  if ((stat.mode & 0o037) !== 0) {
+    throw new Error(`[config] Refusing writable or world-accessible config at ${path} (mode=${(stat.mode & 0o777).toString(8)})`);
+  }
+}
+
 export function loadConfig(path: string): Config {
   try {
+    assertSecureConfigStat(path, lstatSync(path));
     const raw = readFileSync(path, "utf-8");
     const parsed = parse(raw);
     return ConfigSchema.parse(parsed);

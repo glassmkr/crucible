@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { mkdtempSync, existsSync, writeFileSync, statSync, rmSync } from "node:fs";
+import { mkdtempSync, existsSync, readFileSync, writeFileSync, statSync, rmSync, symlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -61,14 +61,14 @@ describe("consumeRebootMarker", () => {
 });
 
 describe("writeRebootMarker", () => {
-  it("13. writes file at given path with correct TTL and reason, 0600 mode", () => {
+  it("13. writes file at given path with correct TTL and reason, 0640 mode", () => {
     const now = new Date("2026-04-21T22:00:00Z");
     const res = writeRebootMarker({ path, reason: "kernel update", ttlMs: 10 * 60_000, now });
     expect(res.path).toBe(path);
     expect(res.expires_at).toBe("2026-04-21T22:10:00.000Z");
     expect(existsSync(path)).toBe(true);
     const mode = statSync(path).mode & 0o777;
-    expect(mode).toBe(0o600);
+    expect(mode).toBe(0o640);
     const round = consumeRebootMarker(path, new Date("2026-04-21T22:05:00Z"));
     expect(round).toEqual({ expected: true, reason: "kernel update" });
   });
@@ -77,6 +77,15 @@ describe("writeRebootMarker", () => {
     const now = new Date("2026-04-21T22:00:00Z");
     const res = writeRebootMarker({ path, now });
     expect(res.expires_at).toBe("2026-04-21T22:10:00.000Z");
+  });
+
+  it("refuses a pre-planted marker symlink without modifying its target", () => {
+    const target = join(tmpDir, "target");
+    writeFileSync(target, "do not change", { mode: 0o600 });
+    symlinkSync(target, path);
+
+    expect(() => writeRebootMarker({ path })).toThrow();
+    expect(readFileSync(target, "utf8")).toBe("do not change");
   });
 });
 

@@ -10,7 +10,20 @@
 // (default 10 min) so a forgotten marker cannot silence a genuine
 // crash reboot weeks later.
 
-import { existsSync, readFileSync, unlinkSync, writeFileSync, mkdirSync, chmodSync } from "node:fs";
+import {
+  closeSync,
+  constants,
+  fchmodSync,
+  fstatSync,
+  ftruncateSync,
+  mkdirSync,
+  openSync,
+  readFileSync,
+  statSync,
+  unlinkSync,
+  writeFileSync,
+  existsSync,
+} from "node:fs";
 import { dirname } from "node:path";
 
 export const DEFAULT_MARKER_PATH = "/var/lib/crucible/reboot-expected";
@@ -54,8 +67,8 @@ export function consumeRebootMarker(
 /**
  * Write a planned-reboot marker. Used by the `mark-reboot` and `reboot`
  * CLI subcommands. `ttlMs` defaults to 10 minutes. Creates the parent
- * directory if needed. Chmod 600 so other users on the host can't read
- * or modify it.
+ * directory if needed. The marker is root-owned and group-readable so the
+ * unprivileged collector can consume it without being able to replace it.
  */
 export function writeRebootMarker(opts: {
   reason?: string;
@@ -69,9 +82,26 @@ export function writeRebootMarker(opts: {
   const expiresAt = new Date(now.getTime() + ttlMs);
   const body: RebootMarker = { expires_at: expiresAt.toISOString() };
   if (opts.reason) body.reason = opts.reason;
-  try { mkdirSync(dirname(path), { recursive: true, mode: 0o700 }); } catch {}
-  writeFileSync(path, JSON.stringify(body), { mode: 0o600 });
-  try { chmodSync(path, 0o600); } catch {}
+  const parent = dirname(path);
+  try { mkdirSync(parent, { recursive: true, mode: 0o2770 }); } catch {}
+
+  const parentStat = statSync(parent);
+  const expectedUid = typeof process.getuid === "function" ? process.getuid() : 0;
+  const expectedGid = parentStat.gid;
+  const flags = constants.O_CREAT | constants.O_WRONLY | constants.O_NOFOLLOW;
+  let fd: number | undefined;
+  try {
+    fd = openSync(path, flags, 0o640);
+    const st = fstatSync(fd);
+    if (!st.isFile() || st.nlink !== 1 || st.uid !== expectedUid || st.gid !== expectedGid) {
+      throw new Error(`refusing unsafe reboot marker ${path}`);
+    }
+    ftruncateSync(fd, 0);
+    fchmodSync(fd, 0o640);
+    writeFileSync(fd, JSON.stringify(body), "utf8");
+  } finally {
+    if (fd !== undefined) closeSync(fd);
+  }
   return { path, expires_at: body.expires_at };
 }
 
