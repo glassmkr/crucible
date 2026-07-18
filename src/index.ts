@@ -50,6 +50,8 @@ if (cliArgs.mode === "enroll") {
     noStart: flags.noStart,
     force: flags.force,
     noVerify: flags.noVerify,
+    allowInsecureEndpoint: flags.allowInsecureEndpoint,
+    allowedEndpointOrigins: flags.allowedEndpointOrigins,
   }, defaultEnrollDeps());
   process.exit(code);
 }
@@ -367,7 +369,10 @@ async function collect() {
 
   // Push to Dashboard (non-blocking)
   if (config.dashboard.enabled && config.dashboard.api_key) {
-    pushToDashboard(config.dashboard.url, config.dashboard.api_key, snapshot);
+    pushToDashboard(config.dashboard.url, config.dashboard.api_key, snapshot, {
+      allowInsecure: config.dashboard.allow_insecure_endpoint,
+      allowedOrigins: config.dashboard.allowed_origins,
+    });
   }
 
   // Check for updates (every 6 hours, non-blocking)

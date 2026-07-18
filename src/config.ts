@@ -1,6 +1,29 @@
 import { closeSync, constants, fstatSync, openSync, readFileSync, type Stats } from "node:fs";
 import { parse } from "yaml";
 import { z } from "zod";
+import { normalizeAllowedOrigins, validateEndpoint } from "./lib/endpoint-policy.js";
+
+const DashboardSchema = z.object({
+  enabled: z.boolean().default(false),
+  url: z.string().default("https://app.glassmkr.com"),
+  api_key: z.string().default(""),
+  tls_pin: z.string().default(""),
+  allow_insecure_endpoint: z.boolean().default(false),
+  allowed_origins: z.array(z.string()).default([]),
+}).superRefine((value, ctx) => {
+  try {
+    validateEndpoint(value.url, {
+      allowInsecure: value.allow_insecure_endpoint,
+      allowedOrigins: normalizeAllowedOrigins(value.allowed_origins),
+    });
+  } catch (err) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: err instanceof Error ? err.message : String(err),
+      path: ["url"],
+    });
+  }
+});
 
 const percentThreshold = z.number().finite().min(1).max(100);
 const ThresholdSchema = z.object({
@@ -48,12 +71,7 @@ const ConfigSchema = z.object({
     thermal: z.boolean().default(true),
     dmi: z.boolean().default(true),
   }).default({}),
-  dashboard: z.object({
-    enabled: z.boolean().default(false),
-    url: z.string().default("https://app.glassmkr.com"),
-    api_key: z.string().default(""),
-    tls_pin: z.string().default(""),
-  }).default({}),
+  dashboard: DashboardSchema.default({}),
   thresholds: ThresholdSchema.default({}),
   channels: z.object({
     telegram: z.object({
@@ -82,6 +100,11 @@ export type Config = z.infer<typeof ConfigSchema> & {
 };
 
 const warnedLegacyConfigPaths = new Set<string>();
+
+export function configLoadFailureMessage(path: string, error: unknown): string {
+  const detail = error instanceof Error ? error.message : String(error);
+  return `[config] Refusing to start: ${path} failed integrity or schema validation: ${detail}`;
+}
 
 export function assertSecureConfigStat(path: string, stat: Pick<Stats, "uid" | "mode"> & {
   isFile: () => boolean;

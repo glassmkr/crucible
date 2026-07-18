@@ -106,6 +106,8 @@ dashboard:
   enabled: true
   url: "https://app.glassmkr.com"
   api_key: "gmk_cru_live_<...>_<4>"
+  allow_insecure_endpoint: false
+  allowed_origins: []
 prometheus:
   enabled: false
   address: "127.0.0.1"
@@ -116,6 +118,13 @@ The opt-in Prometheus listener binds to loopback by default and has no built-in
 authentication. To scrape it remotely, keep the loopback bind and place an
 authenticated proxy or an equivalent host ACL in front of it. Set `address`
 explicitly only when that network boundary is already in place.
+
+Dashboard and enrollment endpoints require HTTPS and public DNS by default.
+For trusted self-hosting, set `allow_insecure_endpoint: true`, or add narrowly
+scoped origins such as `https://ingest.internal.example` to `allowed_origins`.
+Both `init` and `enroll` offer the equivalent `--allow-insecure-endpoint` and repeatable
+`--allow-endpoint-origin <ORIGIN>` flags. These exceptions permit credentials
+to reach the named endpoint, so keep them as narrow as possible.
 
 Hand-edit any time. The agent re-reads on restart. Run
 `glassmkr-crucible init --help` for the full flag list.

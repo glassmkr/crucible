@@ -130,6 +130,14 @@ describe("buildCollectorYaml", () => {
     const y = buildCollectorYaml('we"ird', "https://x", VALID_NEW_KEY);
     expect(y).toContain('server_name: "we\\"ird"');
   });
+  it("persists endpoint policy exceptions for runtime pushes", () => {
+    const y = buildCollectorYaml("h", "http://10.0.0.5/api/v1/ingest", VALID_NEW_KEY, {
+      allowInsecure: true,
+      allowedOrigins: ["https://ingest.internal.example"],
+    });
+    expect(y).toContain("allow_insecure_endpoint: true");
+    expect(y).toContain('- "https://ingest.internal.example"');
+  });
 });
 
 describe("buildSystemdUnit", () => {

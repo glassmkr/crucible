@@ -2,6 +2,16 @@ import https from "https";
 import tls from "tls";
 import crypto from "crypto";
 import type { Snapshot } from "../lib/types.js";
+import {
+  assertEndpointResolution,
+  fetchPinnedEndpoint,
+  normalizeAllowedOrigins,
+  validateEndpoint,
+  type EndpointPolicy,
+  type PinnedFetchResult,
+  type ResolvedEndpointAddress,
+  selectPinnedAddress,
+} from "../lib/endpoint-policy.js";
 
 let agent: https.Agent | undefined;
 export const MAX_PINNED_RESPONSE_BYTES = 64 * 1024;
@@ -70,38 +80,108 @@ export function initDashboardAgent(tlsPin?: string): void {
   });
 }
 
-export async function pushToDashboard(url: string, apiKey: string, snapshot: Snapshot): Promise<boolean> {
+export interface DashboardEndpointOptions {
+  allowInsecure?: boolean;
+  allowedOrigins?: string[];
+}
+
+export async function postDashboardWithPolicy(
+  rawUrl: string,
+  init: RequestInit,
+  policy: EndpointPolicy,
+  fetchImpl: typeof fetch = fetch,
+  resolveEndpoint: typeof assertEndpointResolution = assertEndpointResolution,
+): Promise<PinnedFetchResult> {
+  const initialOrigin = validateEndpoint(rawUrl, policy).origin;
+  let current = validateEndpoint(rawUrl, policy);
+  for (let redirectCount = 0; redirectCount <= 3; redirectCount++) {
+    const pinned = await fetchPinnedEndpoint(current, { ...init, redirect: "manual" }, policy, fetchImpl, resolveEndpoint);
+    const { response, dispatcher } = pinned;
+    if (response.status === 307 || response.status === 308) {
+      const location = response.headers.get("location");
+      await response.body?.cancel();
+      await dispatcher.close();
+      if (!location) throw new Error("dashboard redirect did not include a location");
+      current = validateEndpoint(new URL(location, current).toString(), policy, initialOrigin);
+      continue;
+    }
+    if (response.status >= 300 && response.status < 400) {
+      await response.body?.cancel();
+      await dispatcher.close();
+      throw new Error(`refusing dashboard redirect that does not preserve POST (HTTP ${response.status})`);
+    }
+    return pinned;
+  }
+  throw new Error("too many dashboard redirects");
+}
+
+export async function pushToDashboard(
+  url: string,
+  apiKey: string,
+  snapshot: Snapshot,
+  endpointOptions: DashboardEndpointOptions = {},
+): Promise<boolean> {
+  let target: URL;
+  let policy: EndpointPolicy;
+  let targetAddresses: ResolvedEndpointAddress[];
+  try {
+    policy = {
+      allowInsecure: endpointOptions.allowInsecure ?? false,
+      allowedOrigins: normalizeAllowedOrigins(endpointOptions.allowedOrigins),
+    };
+    target = validateEndpoint(`${url.replace(/\/+$/, "")}/api/v1/ingest`, policy);
+    targetAddresses = await assertEndpointResolution(target, policy);
+  } catch (err) {
+    console.error(`[dashboard] Refusing endpoint: ${err instanceof Error ? err.message : String(err)}`);
+    return false;
+  }
+
   // If TLS pinning is enabled, use https.request (fetch doesn't support custom agents)
   if (agent) {
-    return pushWithAgent(url, apiKey, snapshot);
+    if (target.protocol !== "https:") {
+      console.error("[dashboard] TLS pinning requires an HTTPS endpoint");
+      return false;
+    }
+    return pushWithAgent(target, apiKey, snapshot, targetAddresses, policy);
   }
 
   // Default: use fetch (no pinning)
   try {
     const controller = new AbortController();
-    const response = await fetch(`${url}/api/v1/ingest`, {
+    const { response, dispatcher } = await postDashboardWithPolicy(target.toString(), {
       method: "POST",
       headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
       body: JSON.stringify(snapshot),
       signal: AbortSignal.any([controller.signal, AbortSignal.timeout(10000)]),
-    });
-    if (response.ok) {
-      const data = await readDashboardResponse(response, () => controller.abort());
-      console.log(`[dashboard] Push successful. Active alerts: ${data.active_alerts ?? 0}`);
-    } else {
-      console.error(`[dashboard] Push failed: ${response.status} ${response.statusText}`);
+    }, policy);
+    try {
+      if (response.ok) {
+        const data = await readDashboardResponse(response, () => controller.abort());
+        console.log(`[dashboard] Push successful. Active alerts: ${data.active_alerts ?? 0}`);
+      } else {
+        await response.body?.cancel();
+        console.error(`[dashboard] Push failed: ${response.status} ${response.statusText}`);
+      }
+      return response.ok;
+    } finally {
+      await dispatcher.close();
     }
-    return response.ok;
   } catch (err) {
     console.error("[dashboard] Push failed, will retry next cycle");
     return false;
   }
 }
 
-function pushWithAgent(url: string, apiKey: string, snapshot: Snapshot): Promise<boolean> {
+function pushWithAgent(
+  parsed: URL,
+  apiKey: string,
+  snapshot: Snapshot,
+  validatedAddresses: ResolvedEndpointAddress[],
+  policy: EndpointPolicy,
+): Promise<boolean> {
   return new Promise((resolve) => {
-    const parsed = new URL(`${url}/api/v1/ingest`);
     const body = JSON.stringify(snapshot);
+    const selected = selectPinnedAddress(parsed, validatedAddresses, policy);
     let settled = false;
     let deadline: NodeJS.Timeout | undefined;
     const finish = (ok: boolean) => {
@@ -112,12 +192,15 @@ function pushWithAgent(url: string, apiKey: string, snapshot: Snapshot): Promise
     };
 
     const req = https.request({
-      hostname: parsed.hostname,
+      hostname: selected.address,
+      family: selected.family,
+      servername: parsed.hostname.replace(/^\[|\]$/g, ""),
       port: parsed.port ? parseInt(parsed.port) : 443,
       path: parsed.pathname,
       method: "POST",
       agent,
       headers: {
+        Host: parsed.host,
         Authorization: `Bearer ${apiKey}`,
         "Content-Type": "application/json",
         "Content-Length": Buffer.byteLength(body),

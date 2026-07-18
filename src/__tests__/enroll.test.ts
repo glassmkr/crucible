@@ -25,6 +25,7 @@ function makeDeps(opts?: {
   postJson?: any;
   postThrows?: boolean;
   stdin?: string;
+  resolveThrows?: boolean;
 }): Harness {
   const files = new Map<string, { data: string; mode: number; uid?: number; gid?: number; symlink?: boolean }>();
   for (const f of opts?.preExisting ?? []) files.set(f, { data: "stale", mode: 0o600 });
@@ -73,6 +74,9 @@ function makeDeps(opts?: {
       };
     },
     readMachineId: () => (opts?.machine === undefined ? MACHINE : opts.machine),
+    resolveEndpoint: async () => {
+      if (opts?.resolveThrows) throw new Error("resolved to a private address");
+    },
   };
   return { deps, files, logs, warns, errors, posts };
 }
@@ -177,5 +181,52 @@ describe("runEnroll", () => {
     const code = await runEnroll({ accountKey: "-" }, h.deps);
     expect(code).toBe(0);
     expect(h.posts[0].headers.Authorization).toBe(`Bearer ${ACCT_KEY}`);
+  });
+
+  it("rejects HTTP enrollment by default", async () => {
+    const h = makeDeps();
+    const code = await runEnroll({ accountKey: ACCT_KEY, dashboardUrl: "http://enroll.example.com" }, h.deps);
+    expect(code).toBe(14);
+    expect(h.posts).toHaveLength(0);
+  });
+
+  it("supports an explicit insecure self-hosting opt-in", async () => {
+    const h = makeDeps({
+      postJson: { server: { id: "srv_local", collector_key: COLLECTOR_KEY }, ingest_url: "http://10.0.0.5/api/v1/ingest" },
+    });
+    const code = await runEnroll({
+      accountKey: ACCT_KEY,
+      dashboardUrl: "http://10.0.0.5",
+      allowInsecureEndpoint: true,
+    }, h.deps);
+    expect(code).toBe(0);
+    expect(h.files.get(DEFAULT_CONFIG_PATH)?.data).toContain("allow_insecure_endpoint: true");
+  });
+
+  it("rejects a returned cross-origin ingest endpoint by default", async () => {
+    const h = makeDeps({
+      postJson: { server: { id: "srv_abc123", collector_key: COLLECTOR_KEY }, ingest_url: "https://ingest.example.com/api/v1/ingest" },
+    });
+    const code = await runEnroll({ accountKey: ACCT_KEY }, h.deps);
+    expect(code).toBe(12);
+    expect(h.files.has(DEFAULT_CONFIG_PATH)).toBe(false);
+  });
+
+  it("accepts a returned cross-origin ingest endpoint only when allowlisted", async () => {
+    const h = makeDeps({
+      postJson: { server: { id: "srv_abc123", collector_key: COLLECTOR_KEY }, ingest_url: "https://ingest.example.com/api/v1/ingest" },
+    });
+    const code = await runEnroll({
+      accountKey: ACCT_KEY,
+      allowedEndpointOrigins: ["https://ingest.example.com"],
+    }, h.deps);
+    expect(code).toBe(0);
+  });
+
+  it("fails closed when endpoint DNS validation fails", async () => {
+    const h = makeDeps({ resolveThrows: true });
+    const code = await runEnroll({ accountKey: ACCT_KEY }, h.deps);
+    expect(code).toBe(14);
+    expect(h.posts).toHaveLength(0);
   });
 });

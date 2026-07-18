@@ -172,3 +172,25 @@ describe("init subcommand parsing", () => {
     expect(output).toContain("--no-start");
   });
 });
+
+describe("enroll endpoint policy parsing", () => {
+  it("keeps insecure endpoints disabled by default", () => {
+    const { result } = parseCliArgs(["enroll", "--account-key", "fixture"], "0.14.5");
+    expect(result.enroll?.allowInsecureEndpoint).toBe(false);
+  });
+
+  it("captures explicit insecure and repeatable origin exceptions", () => {
+    const { result } = parseCliArgs([
+      "enroll",
+      "--account-key=fixture",
+      "--allow-insecure-endpoint",
+      "--allow-endpoint-origin", "https://ingest.example.com",
+      "--allow-endpoint-origin=https://backup.example.com",
+    ], "0.14.5");
+    expect(result.enroll?.allowInsecureEndpoint).toBe(true);
+    expect(result.enroll?.allowedEndpointOrigins).toEqual([
+      "https://ingest.example.com",
+      "https://backup.example.com",
+    ]);
+  });
+});

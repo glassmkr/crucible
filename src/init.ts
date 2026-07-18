@@ -30,6 +30,13 @@ import { buildSubprocessEnv } from "./lib/exec.js";
 import {
   SERVICE_USER, WRAPPER_PATH, WRAPPER_SCRIPT, SUDOERS_PATH, SUDOERS_CONTENT,
 } from "./lib/privileged.js";
+import {
+  assertEndpointResolution,
+  createPinnedDispatcher,
+  normalizeAllowedOrigins,
+  validateEndpoint,
+  type EndpointPolicy,
+} from "./lib/endpoint-policy.js";
 
 export const STATE_DIR = "/var/lib/glassmkr";
 export const REBOOT_MARKER_DIR = "/var/lib/crucible";
@@ -43,6 +50,8 @@ export interface InitOptions {
   force?: boolean;
   noVerify?: boolean; // skip the connectivity probe (default: probe)
   apiKeyFromArgv?: boolean;
+  allowInsecureEndpoint?: boolean;
+  allowedEndpointOrigins?: string[];
 }
 
 export interface InitDeps {
@@ -70,7 +79,8 @@ export interface InitDeps {
   log: (msg: string) => void;
   warn: (msg: string) => void;
   error: (msg: string) => void;
-  fetch: (url: string, init: { method: string; headers: Record<string, string>; signal?: AbortSignal }) => Promise<{ status: number }>;
+  fetch: typeof fetch;
+  resolveEndpoint: typeof assertEndpointResolution;
   readStdin: () => Promise<string>;
 }
 
@@ -89,7 +99,12 @@ export function isValidApiKey(key: string): boolean {
   return KEY_RE_NEW.test(key) || KEY_RE_LEGACY.test(key);
 }
 
-export function buildCollectorYaml(serverName: string, ingestUrl: string, apiKey: string): string {
+export function buildCollectorYaml(
+  serverName: string,
+  ingestUrl: string,
+  apiKey: string,
+  endpointPolicy: { allowInsecure?: boolean; allowedOrigins?: string[] } = {},
+): string {
   // Hand-written so the format is human-readable, deterministic, and
   // doesn't pull in a YAML serializer at install time. Mirrors the
   // existing /etc/glassmkr/crucible.yaml shape (the file was renamed
@@ -106,6 +121,10 @@ export function buildCollectorYaml(serverName: string, ingestUrl: string, apiKey
     `  enabled: true`,
     `  url: "${escapeDoubleQuoted(ingestUrl.replace(/\/api\/v1\/ingest$/, ""))}"`,
     `  api_key: "${apiKey}"`,
+    `  allow_insecure_endpoint: ${endpointPolicy.allowInsecure ?? false}`,
+    ...((endpointPolicy.allowedOrigins?.length ?? 0) > 0
+      ? [`  allowed_origins:`, ...endpointPolicy.allowedOrigins!.map((origin) => `    - "${escapeDoubleQuoted(origin)}"`)]
+      : [`  allowed_origins: []`]),
     ``,
   ].join("\n");
 }
@@ -362,7 +381,7 @@ export function setupPrivilegeSeparation(deps: InitDeps, configPath: string): bo
  * (0 = success). Pure orchestration; no side effects on `process`.
  */
 export async function runInit(opts: InitOptions, deps: InitDeps): Promise<number> {
-  const ingestUrl = opts.ingestUrl ?? DEFAULT_INGEST_URL;
+  const rawIngestUrl = opts.ingestUrl ?? DEFAULT_INGEST_URL;
   const configPath = opts.configPath ?? DEFAULT_CONFIG_PATH;
   const isCanonicalPath = configPath === DEFAULT_CONFIG_PATH;
   const repairMode = !opts.force && (
@@ -389,6 +408,23 @@ export async function runInit(opts: InitOptions, deps: InitDeps): Promise<number
   }
 
   const serverName = opts.name && opts.name.trim() ? opts.name.trim() : deps.hostname();
+  let endpointPolicy: EndpointPolicy;
+  let ingestEndpoint: URL | undefined;
+  let ingestUrl = rawIngestUrl;
+  try {
+    endpointPolicy = {
+      allowInsecure: opts.allowInsecureEndpoint ?? false,
+      allowedOrigins: normalizeAllowedOrigins(opts.allowedEndpointOrigins),
+    };
+    if (!repairMode) {
+      ingestEndpoint = validateEndpoint(rawIngestUrl, endpointPolicy);
+      await deps.resolveEndpoint(ingestEndpoint, endpointPolicy);
+      ingestUrl = ingestEndpoint.toString();
+    }
+  } catch (err: any) {
+    deps.error(`[init] refusing ingest endpoint: ${err?.message ?? err}. For a trusted self-hosted endpoint, pass --allow-insecure-endpoint or --allow-endpoint-origin.`);
+    return 14;
+  }
 
   try {
     assertSafeSystemdPath(configPath, "config path");
@@ -413,18 +449,54 @@ export async function runInit(opts: InitOptions, deps: InitDeps): Promise<number
   // 5xx / network errors → warn but continue (the host's network may
   // still be coming up during a fresh install).
   if (!repairMode && !opts.noVerify) {
-    deps.log(`[init] probing ${ingestUrl} ...`);
-    try {
-      const ctrl = new AbortController();
-      const timer = setTimeout(() => ctrl.abort(), 8000);
-      const resp = await deps.fetch(ingestUrl, {
-        method: "GET",
-        headers: { Authorization: `Bearer ${apiKey}` },
-        signal: ctrl.signal,
-      });
-      clearTimeout(timer);
+    const initialOrigin = ingestEndpoint!.origin;
+    let current = ingestEndpoint!;
+    let probeComplete = false;
+    deps.log(`[init] probing ${current} ...`);
+    for (let redirectCount = 0; redirectCount <= 3; redirectCount++) {
+      let addresses;
+      try {
+        addresses = await deps.resolveEndpoint(current, endpointPolicy);
+      } catch (err: any) {
+        deps.error(`[init] refusing ingest endpoint resolution: ${err?.message ?? err}`);
+        return 14;
+      }
+      const dispatcher = createPinnedDispatcher(current, addresses, endpointPolicy);
+      let resp: Response;
+      try {
+        resp = await deps.fetch(current, {
+          method: "GET",
+          headers: { Authorization: `Bearer ${apiKey}` },
+          redirect: "manual",
+          dispatcher,
+          signal: AbortSignal.timeout(8000),
+        } as RequestInit);
+      } catch (err: any) {
+        await dispatcher.close();
+        deps.warn(`[init] connectivity probe failed: ${err?.message ?? err}. Continuing; verify after install with 'journalctl -u glassmkr-crucible'.`);
+        probeComplete = true;
+        break;
+      }
+      if ([301, 302, 303, 307, 308].includes(resp.status)) {
+        const location = resp.headers.get("location");
+        await resp.body?.cancel();
+        await dispatcher.close();
+        if (!location) {
+          deps.error("[init] refusing ingest redirect without a location");
+          return 14;
+        }
+        try {
+          current = validateEndpoint(new URL(location, current).toString(), endpointPolicy, initialOrigin);
+        } catch (err: any) {
+          deps.error(`[init] refusing ingest redirect: ${err?.message ?? err}`);
+          return 14;
+        }
+        continue;
+      }
+      await resp.body?.cancel();
+      await dispatcher.close();
       if (resp.status === 401 || resp.status === 403) {
-        deps.error(`[init] api key rejected by ${ingestUrl} (HTTP ${resp.status}). Double-check the key in your Glassmkr dashboard.`);
+        deps.error(`[init] api key rejected by ${current} (HTTP ${resp.status}). Double-check the key in your Glassmkr dashboard.`);
         return 3;
       }
       if (resp.status >= 500) {
@@ -432,8 +504,12 @@ export async function runInit(opts: InitOptions, deps: InitDeps): Promise<number
       } else {
         deps.log(`[init] api key validated (HTTP ${resp.status}).`);
       }
-    } catch (err: any) {
-      deps.warn(`[init] connectivity probe failed: ${err?.message ?? err}. Continuing; verify after install with 'journalctl -u glassmkr-crucible'.`);
+      probeComplete = true;
+      break;
+    }
+    if (!probeComplete) {
+      deps.error("[init] refusing ingest endpoint after too many redirects");
+      return 14;
     }
   }
 
@@ -499,7 +575,10 @@ export async function runInit(opts: InitOptions, deps: InitDeps): Promise<number
   // is preserved verbatim. --force still re-generates from scratch by
   // overwriting unconditionally.
   if ((!justMigrated && !repairMode) || opts.force) {
-    const yaml = buildCollectorYaml(serverName, ingestUrl, apiKey);
+    const yaml = buildCollectorYaml(serverName, ingestUrl, apiKey, {
+      allowInsecure: opts.allowInsecureEndpoint,
+      allowedOrigins: opts.allowedEndpointOrigins,
+    });
     const configTmp = `${configPath}.tmp-${randomUUIDDefault()}`;
     try {
       deps.fs.writeSecureFileSync(configTmp, yaml, 0o600);
@@ -670,10 +749,8 @@ export function defaultDeps(): InitDeps {
     log: (m) => console.log(m),
     warn: (m) => console.warn(m),
     error: (m) => console.error(m),
-    fetch: async (url, init) => {
-      const r = await fetch(url, init as any);
-      return { status: r.status };
-    },
+    fetch,
+    resolveEndpoint: assertEndpointResolution,
     readStdin: () => new Promise<string>((resolve, reject) => {
       let buf = "";
       process.stdin.setEncoding("utf8");

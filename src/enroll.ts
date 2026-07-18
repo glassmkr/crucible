@@ -22,6 +22,13 @@ import {
   type InitDeps,
 } from "./init.js";
 import { readMachineId, type MachineId } from "./lib/machine-id.js";
+import {
+  assertEndpointResolution,
+  fetchPinnedEndpoint,
+  normalizeAllowedOrigins,
+  validateEndpoint,
+  type EndpointPolicy,
+} from "./lib/endpoint-policy.js";
 
 const DEFAULT_DASHBOARD_URL = "https://app.glassmkr.com";
 
@@ -39,6 +46,8 @@ export interface EnrollOptions {
   noStart?: boolean;
   force?: boolean;
   noVerify?: boolean;
+  allowInsecureEndpoint?: boolean;
+  allowedEndpointOrigins?: string[];
 }
 
 export interface EnrollDeps extends InitDeps {
@@ -48,14 +57,60 @@ export interface EnrollDeps extends InitDeps {
     url: string,
     body: unknown,
     headers: Record<string, string>,
+    policy: EndpointPolicy,
   ) => Promise<{ status: number; json: any }>;
   readMachineId: () => MachineId | null;
+  resolveEndpoint: typeof assertEndpointResolution;
 }
 
 // Strip a trailing slash and an accidental /api/v1/ingest suffix so callers
 // can pass either the dashboard base or the ingest URL they already know.
 export function normalizeDashboardBase(raw: string): string {
   return raw.replace(/\/+$/, "").replace(/\/api\/v1\/ingest$/, "");
+}
+
+export async function postJsonWithPolicy(
+  rawUrl: string,
+  body: unknown,
+  headers: Record<string, string>,
+  policy: EndpointPolicy,
+  fetchImpl: typeof fetch = fetch,
+  resolveEndpoint: typeof assertEndpointResolution = assertEndpointResolution,
+): Promise<{ status: number; json: any }> {
+  const enrollmentOrigin = validateEndpoint(rawUrl, policy).origin;
+  let current = validateEndpoint(rawUrl, policy);
+  for (let redirectCount = 0; redirectCount <= 3; redirectCount++) {
+    const { response, dispatcher } = await fetchPinnedEndpoint(current, {
+      method: "POST",
+      headers,
+      body: JSON.stringify(body),
+      redirect: "manual",
+      signal: AbortSignal.timeout(15000),
+    }, policy, fetchImpl, resolveEndpoint);
+    if ([307, 308].includes(response.status)) {
+      const location = response.headers.get("location");
+      await response.body?.cancel();
+      await dispatcher.close();
+      if (!location) throw new Error("enrollment redirect did not include a location");
+      current = validateEndpoint(new URL(location, current).toString(), policy, enrollmentOrigin);
+      continue;
+    }
+    if (response.status >= 300 && response.status < 400) {
+      await response.body?.cancel();
+      await dispatcher.close();
+      throw new Error(`refusing enrollment redirect that does not preserve POST (HTTP ${response.status})`);
+    }
+    let json: any = null;
+    try {
+      json = await response.json();
+    } catch {
+      json = null;
+    } finally {
+      await dispatcher.close();
+    }
+    return { status: response.status, json };
+  }
+  throw new Error("too many enrollment redirects");
 }
 
 export async function runEnroll(opts: EnrollOptions, deps: EnrollDeps): Promise<number> {
@@ -93,7 +148,20 @@ export async function runEnroll(opts: EnrollOptions, deps: EnrollDeps): Promise<
     deps.warn(`[enroll] no stable machine id (no readable product_uuid or /etc/machine-id); enrolling without dedup. A re-run may create a duplicate server.`);
   }
 
-  const base = normalizeDashboardBase(opts.dashboardUrl ?? DEFAULT_DASHBOARD_URL);
+  let policy: EndpointPolicy;
+  let baseUrl: URL;
+  try {
+    policy = {
+      allowInsecure: opts.allowInsecureEndpoint ?? false,
+      allowedOrigins: normalizeAllowedOrigins(opts.allowedEndpointOrigins),
+    };
+    baseUrl = validateEndpoint(normalizeDashboardBase(opts.dashboardUrl ?? DEFAULT_DASHBOARD_URL), policy);
+    await deps.resolveEndpoint(baseUrl, policy);
+  } catch (err: any) {
+    deps.error(`[enroll] refusing dashboard endpoint: ${err?.message ?? err}`);
+    return 14;
+  }
+  const base = baseUrl.toString().replace(/\/$/, "");
   const serversUrl = `${base}/api/v1/servers`;
   const headers: Record<string, string> = {
     Authorization: `Bearer ${accountKey}`,
@@ -111,7 +179,7 @@ export async function runEnroll(opts: EnrollOptions, deps: EnrollDeps): Promise<
   deps.log(`[enroll] registering with ${serversUrl} ...`);
   let resp: { status: number; json: any };
   try {
-    resp = await deps.postJson(serversUrl, body, headers);
+    resp = await deps.postJson(serversUrl, body, headers, policy);
   } catch (err: any) {
     deps.error(`[enroll] could not reach ${serversUrl}: ${err?.message ?? err}`);
     return 8;
@@ -139,9 +207,19 @@ export async function runEnroll(opts: EnrollOptions, deps: EnrollDeps): Promise<
   }
 
   const collectorKey: string | undefined = resp.json?.server?.collector_key ?? resp.json?.server?.api_key;
-  const ingestUrl: string = resp.json?.ingest_url ?? DEFAULT_INGEST_URL;
+  const rawIngestUrl: unknown = resp.json?.ingest_url ?? DEFAULT_INGEST_URL;
   if (!collectorKey) {
     deps.error(`[enroll] registration succeeded (HTTP ${resp.status}) but no collector key in the response.`);
+    return 12;
+  }
+  let ingestUrl: string;
+  try {
+    if (typeof rawIngestUrl !== "string") throw new Error("registration response contained a non-string ingest URL");
+    const parsedIngest = validateEndpoint(rawIngestUrl, policy, baseUrl.origin);
+    await deps.resolveEndpoint(parsedIngest, policy);
+    ingestUrl = parsedIngest.toString();
+  } catch (err: any) {
+    deps.error(`[enroll] refusing returned ingest endpoint: ${err?.message ?? err}`);
     return 12;
   }
   deps.log(
@@ -164,6 +242,8 @@ export async function runEnroll(opts: EnrollOptions, deps: EnrollDeps): Promise<
       force: opts.force,
       noVerify: opts.noVerify ?? true,
       apiKeyFromArgv: false,
+      allowInsecureEndpoint: opts.allowInsecureEndpoint,
+      allowedEndpointOrigins: policy.allowedOrigins,
     },
     deps,
   );
@@ -176,21 +256,8 @@ export async function runEnroll(opts: EnrollOptions, deps: EnrollDeps): Promise<
 export function defaultEnrollDeps(): EnrollDeps {
   return {
     ...defaultDeps(),
-    postJson: async (url, body, headers) => {
-      const r = await fetch(url, {
-        method: "POST",
-        headers,
-        body: JSON.stringify(body),
-        signal: AbortSignal.timeout(15000),
-      });
-      let json: any = null;
-      try {
-        json = await r.json();
-      } catch {
-        json = null;
-      }
-      return { status: r.status, json };
-    },
+    postJson: (url, body, headers, policy) => postJsonWithPolicy(url, body, headers, policy),
     readMachineId: () => readMachineId(),
+    resolveEndpoint: assertEndpointResolution,
   };
 }
