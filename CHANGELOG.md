@@ -7,6 +7,46 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 Pre-1.0 convention: minor bumps may include breaking changes; we call them
 out under `### Breaking` so downstream consumers can audit.
 
+## [0.14.4] - 2026-07-18
+
+Third-round Codex remediation (privilege-separation hardening, drive-identity
+keys) plus a new SMART monitoring-coverage signal.
+
+### Security
+
+- **Privilege-separation setup on install is redesigned to be tamper-safe.**
+  `init` now applies group memberships before it decides whether the wrapper
+  location is trustworthy, verifies both the wrapper directory and its parent
+  against the service user's final groups, writes the wrapper as root with an
+  exclusive-create temp file then atomically renames and re-verifies it, and
+  revokes the sudoers grant (and the wrapper) if any step is unsafe. The net
+  effect: a pre-existing or hostile wrapper path can no longer survive alongside
+  the NOPASSWD grant, and an upgrade closes a previously-open path rather than
+  leaving it. Default installs are unaffected.
+
+### Added
+
+- **The agent reports disks that are present but whose SMART it cannot read.**
+  When a fixed disk exists in `/sys/block` but SMART is unreadable (smartmontools
+  not installed, or the drive sits behind a controller that needs a device type
+  the agent does not try), it is now reported as a monitoring blind spot rather
+  than silently omitted. Previously such a host looked identical to a diskless
+  one, so a real drive failure could go unmonitored. Removable media and the
+  0-byte BMC virtual-media device are excluded, and the signal is suppressed on a
+  healthy hardware-RAID host (whose controller virtual disk legitimately reports
+  no SMART while its physical drives are read via passthrough).
+
+### Fixed
+
+- **Drive alerts key on a stable identifier without collapsing look-alike
+  drives.** The SMART/endurance alert key uses the drive serial only when it is
+  present and unique within the snapshot, otherwise the device path, so two
+  drives that share a placeholder serial (common on cheap or enclosure drives)
+  are no longer merged into one, and a failing one cannot be masked.
+- **Duplicate IPMI temperature-sensor names are disambiguated.** Hosts that
+  report several sensors with the same name (for example dual-socket boards) now
+  track each independently instead of collapsing them.
+
 ## [0.14.3] - 2026-07-18
 
 Second-round remediation of the Codex review (corrections to the 0.14.2 changes).
