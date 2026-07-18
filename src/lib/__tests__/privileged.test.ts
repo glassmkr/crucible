@@ -32,6 +32,7 @@ function mockDeps(execImpl: ExecImpl) {
         const f = files.get(from); if (!f) throw new Error(`ENOENT: ${from}`);
         files.set(to, f); files.delete(from);
       },
+      unlinkSync: (p) => { files.delete(p); },
     },
     exec: execImpl,
     hostname: () => "h", log: () => {}, warn: (m) => warns.push(m), error: () => {},
@@ -40,10 +41,12 @@ function mockDeps(execImpl: ExecImpl) {
   return { deps, files, warns };
 }
 
-// A fresh box: `id glassmkr` fails (user absent), everything else succeeds.
-const okExec: ExecImpl = (cmd) => cmd === "id"
-  ? { stdout: "", status: 1 }
-  : { stdout: "", status: 0 };
+// A fresh box: `id -u glassmkr` fails (user absent) so useradd runs; `id -G`
+// then succeeds (service user is in the root group only); everything else ok.
+const okExec: ExecImpl = (cmd, args) =>
+  cmd === "id" && args[0] === "-G" ? { stdout: "0", status: 0 } :
+  cmd === "id" ? { stdout: "", status: 1 } :
+  { stdout: "", status: 0 };
 
 describe("setupPrivilegeSeparation", () => {
   it("succeeds on a clean box: creates user, installs wrapper 0755 + sudoers 0440", () => {
@@ -105,6 +108,48 @@ describe("setupPrivilegeSeparation", () => {
     setDirStat(deps, { isSymbolicLink: false, uid: 0, gid: 50, mode: 0o2775 }); // /usr/local/sbin 2775 root:staff
     expect(setupPrivilegeSeparation(deps, "/etc/glassmkr/crucible.yaml")).toBe(true);
     expect(files.get(WRAPPER_PATH)?.uid).toBe(0);
+  });
+
+  it("also checks the grandparent directory (/usr/local)", () => {
+    const { deps } = mockDeps((cmd, args) =>
+      cmd === "id" && args[0] === "-G" ? { stdout: "0 50\n", status: 0 } :
+      cmd === "id" ? { stdout: "", status: 1 } :
+      { stdout: "", status: 0 });
+    // /usr/local/sbin is safe, but its parent /usr/local is group-writable by
+    // a group the service user is in (a writable grandparent lets the dir be
+    // replaced wholesale).
+    (deps.fs as { lstatSync: (p: string) => Stat }).lstatSync = (p) =>
+      p === "/usr/local"
+        ? { isSymbolicLink: false, uid: 0, gid: 50, mode: 0o2775 }
+        : { isSymbolicLink: false, uid: 0, gid: 0, mode: 0o755 };
+    expect(setupPrivilegeSeparation(deps, "/etc/glassmkr/crucible.yaml")).toBe(false);
+  });
+
+  it("checks the dir against POST-usermod groups (adm-owned writable dir caught)", () => {
+    // usermod adds glassmkr to adm (gid 4); the dir is group-writable by adm.
+    // The check runs after the group add, so id -G reflects adm and it is caught.
+    const { deps } = mockDeps((cmd, args) =>
+      cmd === "id" && args[0] === "-G" ? { stdout: "0 4\n", status: 0 } :
+      cmd === "id" ? { stdout: "", status: 1 } :
+      { stdout: "", status: 0 });
+    setDirStat(deps, { isSymbolicLink: false, uid: 0, gid: 4, mode: 0o2775 });
+    expect(setupPrivilegeSeparation(deps, "/etc/glassmkr/crucible.yaml")).toBe(false);
+  });
+
+  it("revokes an existing sudoers grant + wrapper when it falls back to root (upgrade path)", () => {
+    const { deps, files } = mockDeps((cmd, args) =>
+      cmd === "id" && args[0] === "-G" ? { stdout: "0 50\n", status: 0 } :
+      cmd === "id" ? { stdout: "", status: 1 } :
+      { stdout: "", status: 0 });
+    // A prior (0.14.2) install already installed the grant + wrapper.
+    files.set(SUDOERS_PATH, { data: "stale grant", mode: 0o440, uid: 0, gid: 0 });
+    files.set(WRAPPER_PATH, { data: "#!/bin/sh\n", mode: 0o755, uid: 0, gid: 0 });
+    // The wrapper dir is now unsafe (service user is in its owning group 50).
+    setDirStat(deps, { isSymbolicLink: false, uid: 0, gid: 50, mode: 0o2775 });
+    expect(setupPrivilegeSeparation(deps, "/etc/glassmkr/crucible.yaml")).toBe(false);
+    // Escalation path closed: both the grant and the wrapper are removed.
+    expect(files.has(SUDOERS_PATH)).toBe(false);
+    expect(files.has(WRAPPER_PATH)).toBe(false);
   });
 });
 

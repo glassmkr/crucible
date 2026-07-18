@@ -47,6 +47,7 @@ function makeDeps(opts?: {
         return { isSymbolicLink: !!f.symlink, uid: f.uid ?? 0, gid: f.gid ?? 0, mode: f.mode };
       },
       renameSync: (from, to) => { const f = files.get(from); if (f) { files.set(to, f); files.delete(from); } },
+      unlinkSync: (p) => { files.delete(p); },
     },
     exec: (cmd) => {
       if (cmd === "command" || cmd === "which") return { stdout: "/usr/local/bin/glassmkr-crucible\n", status: 0 };
