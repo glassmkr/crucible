@@ -1,5 +1,8 @@
-import { describe, it, expect } from "vitest";
-import { parseSmartctlJson, unpackSeagateCounter, parseScanOpen, mergeDriveResults } from "../smart.js";
+import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { promises as fs } from "node:fs";
+import { join } from "node:path";
+import { tmpdir } from "node:os";
+import { parseSmartctlJson, unpackSeagateCounter, parseScanOpen, mergeDriveResults, collectSmart } from "../smart.js";
 import type { SmartInfo } from "../../lib/types.js";
 import { isAllowedSmartType, isAllowedSmartDevice } from "../../lib/privileged.js";
 
@@ -457,5 +460,101 @@ describe("mergeDriveResults (direct vs passthrough dedup)", () => {
   it("keeps serial-less entries on both sides", () => {
     const out = mergeDriveResults([d("/dev/sda")], [d("/dev/bus/0[sat+megaraid,8]")]);
     expect(out).toHaveLength(2);
+  });
+});
+
+describe("collectSmart: smart_unreadable blind spot", () => {
+  let root: string;
+  beforeEach(async () => { root = await fs.mkdtemp(join(tmpdir(), "smart-block-")); });
+  afterEach(async () => { await fs.rm(root, { recursive: true, force: true }); });
+
+  // Create a fake /sys/block/<name> with size (512-byte sectors) + removable.
+  async function makeDisk(name: string, size: string, removable: string) {
+    const dir = join(root, name);
+    await fs.mkdir(dir, { recursive: true });
+    await fs.writeFile(join(dir, "size"), size);
+    await fs.writeFile(join(dir, "removable"), removable);
+  }
+
+  const SATA_1TB = "1953525168"; // realistic sector count
+  const HEALTHY = JSON.stringify({ model_name: "WD Red", smart_status: { passed: true } });
+  // smartctl ran but there is no SMART surface (unknown USB bridge / unsupported
+  // controller / the controller's own virtual disk): parseSmartctlJson -> null.
+  const NO_SURFACE = JSON.stringify({ smartctl: { exit_status: 1 }, device: { name: "x", type: "scsi" } });
+  const noScan = async () => null;
+
+  it("flags fixed disks as no_smartctl_output when smartctl produces nothing (destroy-1: smartmontools missing)", async () => {
+    await makeDisk("sda", SATA_1TB, "0");
+    await makeDisk("sdb", SATA_1TB, "0");
+    const res = await collectSmart({ sysBlock: root, probe: async () => null, scan: noScan });
+    expect(res.smart).toEqual([]);
+    expect(res.unreadable).toEqual([
+      { device: "/dev/sda", reason: "no_smartctl_output" },
+      { device: "/dev/sdb", reason: "no_smartctl_output" },
+    ]);
+  });
+
+  it("flags no_smart_data when smartctl runs but exposes no SMART surface (unsupported controller)", async () => {
+    await makeDisk("sda", SATA_1TB, "0");
+    const res = await collectSmart({ sysBlock: root, probe: async () => NO_SURFACE, scan: noScan });
+    expect(res.smart).toEqual([]);
+    expect(res.unreadable).toEqual([{ device: "/dev/sda", reason: "no_smart_data" }]);
+  });
+
+  it("does NOT flag a readable drive", async () => {
+    await makeDisk("sda", SATA_1TB, "0");
+    const res = await collectSmart({ sysBlock: root, probe: async () => HEALTHY, scan: noScan });
+    expect(res.unreadable).toEqual([]);
+    expect(res.smart).toHaveLength(1);
+    expect(res.smart[0]!.health).toBe("PASSED");
+  });
+
+  it("never flags 0-byte BMC virtual media (not probed, not a blind spot)", async () => {
+    await makeDisk("sda", "0", "0");        // AMI Virtual HDisk0
+    await makeDisk("sdb", SATA_1TB, "0");   // a real disk, smartctl missing
+    const probed: string[] = [];
+    const res = await collectSmart({
+      sysBlock: root,
+      probe: async (dev) => { probed.push(dev); return null; },
+      scan: noScan,
+    });
+    expect(probed).toEqual(["/dev/sdb"]);   // the 0-byte device is never probed
+    expect(res.unreadable).toEqual([{ device: "/dev/sdb", reason: "no_smartctl_output" }]);
+  });
+
+  it("never flags removable media (USB stick / SD card, removable=1)", async () => {
+    await makeDisk("sda", SATA_1TB, "0");   // fixed disk, readable
+    await makeDisk("sdc", "30273536", "1"); // USB stick: no SMART surface, but removable
+    const res = await collectSmart({
+      sysBlock: root,
+      probe: async (dev) => (dev === "/dev/sdc" ? NO_SURFACE : HEALTHY),
+      scan: noScan,
+    });
+    expect(res.unreadable).toEqual([]);
+    expect(res.smart.map((s) => s.device)).toContain("/dev/sda");
+  });
+
+  it("does not flag a size-unreadable device (conservative: may not be a real disk)", async () => {
+    // No size/removable files -> reads throw -> device is probed but not eligible.
+    await fs.mkdir(join(root, "sda"), { recursive: true });
+    const res = await collectSmart({ sysBlock: root, probe: async () => null, scan: noScan });
+    expect(res.unreadable).toEqual([]);
+  });
+
+  it("suppresses the marker on a healthy HW-RAID box (passthrough drives present => the unreadable /sys/block VD is not a blind spot)", async () => {
+    await makeDisk("sda", SATA_1TB, "0"); // the controller's virtual disk: unreadable directly
+    const scan = async () =>
+      "/dev/bus/0 -d sat+megaraid,8 # /dev/bus/0 [megaraid_disk_08] [SAT], ATA device\n";
+    const res = await collectSmart({
+      sysBlock: root,
+      probe: async (dev, type) => {
+        if (dev === "/dev/sda" && !type) return NO_SURFACE;                 // VD: no SMART
+        if (dev === "/dev/bus/0" && type === "sat+megaraid,8") return HEALTHY; // physical drive
+        return null;
+      },
+      scan,
+    });
+    expect(res.smart).toHaveLength(1);   // the passthrough physical drive
+    expect(res.unreadable).toEqual([]);  // suppressed
   });
 });
