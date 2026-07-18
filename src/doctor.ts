@@ -59,12 +59,12 @@ export function formatIpmiDoctor(cap: Awaited<ReturnType<typeof detectIpmiCapabi
       out.push("/etc/glassmkr/crucible.yaml (legacy installs: /etc/glassmkr/collector.yaml) to silence the snapshot field.");
       break;
     case "permission_denied":
-      out.push("Fix: Crucible needs root to access /dev/ipmi0.");
-      out.push("  systemctl status glassmkr-crucible    # confirm User=root in the unit file");
+      out.push("Fix: repair Crucible's narrow privileged collector wrapper.");
+      out.push("  sudo glassmkr-crucible init --api-key <KEY> --force");
+      out.push("  sudo -u glassmkr sudo -n /usr/local/sbin/crucible-collect ipmi-sensor");
       out.push("");
-      out.push("If you have customised the systemd unit to run as a non-root user,");
-      out.push("either revert to root or add `glassmkr` to the `kmem` (Debian) /");
-      out.push("`disk` (RHEL) group and adjust the udev rule on /dev/ipmi0.");
+      out.push("The service stays unprivileged when wrapper setup fails. Do not");
+      out.push("grant broad device groups or run the whole collector as root.");
       break;
     case "execution_failed":
       out.push("Fix: ipmitool ran but failed. Diagnose by hand:");

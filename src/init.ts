@@ -40,6 +40,9 @@ import {
 
 export const STATE_DIR = "/var/lib/glassmkr";
 export const REBOOT_MARKER_DIR = "/var/lib/crucible";
+export const ROOT_FALLBACK_ENV = "GLASSMKR_ALLOW_ROOT_FALLBACK";
+
+class PrivilegeSetupFatalError extends Error {}
 
 export interface InitOptions {
   apiKey?: string; // raw value, may be the literal "-" to mean "read from stdin"
@@ -82,6 +85,7 @@ export interface InitDeps {
   fetch: typeof fetch;
   resolveEndpoint: typeof assertEndpointResolution;
   readStdin: () => Promise<string>;
+  env: Readonly<Record<string, string | undefined>>;
 }
 
 export const DEFAULT_INGEST_URL = "https://app.glassmkr.com/api/v1/ingest";
@@ -133,7 +137,7 @@ function escapeDoubleQuoted(s: string): string {
   return s.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
 }
 
-export function buildSystemdUnit(binPath: string, configPath: string, user = "root"): string {
+export function buildSystemdUnit(binPath: string, configPath: string, user = SERVICE_USER): string {
   assertSafeSystemdPath(binPath, "binary path");
   assertSafeSystemdPath(configPath, "config path");
   if (!SYSTEMD_USER_RE.test(user)) throw new Error(`unsafe systemd user: ${user}`);
@@ -144,11 +148,17 @@ export function buildSystemdUnit(binPath: string, configPath: string, user = "ro
     ``,
     `[Service]`,
     `Type=simple`,
-    // §2.1: run unprivileged when privilege separation is in place; the
-    // agent escalates only through the sudo wrapper. Falls back to root
-    // when setup didn't complete, so collection never silently breaks.
+    // Run unprivileged by default. Root is emitted only after an operator
+    // explicitly accepts the fallback through ROOT_FALLBACK_ENV.
     `User=${user}`,
     `ExecStart=${binPath} ${configPath}`,
+    `ProtectHome=yes`,
+    `PrivateTmp=yes`,
+    `ProtectKernelTunables=yes`,
+    `ProtectControlGroups=yes`,
+    `LockPersonality=yes`,
+    `ProtectSystem=strict`,
+    `ReadWritePaths=${STATE_DIR} ${REBOOT_MARKER_DIR}`,
     `Restart=always`,
     `RestartSec=10`,
     ``,
@@ -262,9 +272,9 @@ function revokePrivilegeSeparation(deps: InitDeps): boolean {
  * that escalates only through the root-owned sudo wrapper. Idempotent; safe to
  * run on every install/upgrade. Returns true iff the box is fully ready to run
  * the service as `glassmkr`. On ANY hard failure it returns false, REVOKES any
- * partial/prior grant (so an unsafe state never leaves a live NOPASSWD rule), and
- * the caller keeps the unit on User=root, so an install that can't complete never
- * loses collection and never leaves an escalation path.
+ * partial/prior grant. The service remains unprivileged on ordinary wrapper
+ * failures. A failure that prevents the service user from running safely, or that
+ * leaves an escalation grant live, throws so init cannot install or start a unit.
  *
  * Order matters (Codex re-review 2026-07-18): group memberships are applied
  * FIRST, then the wrapper directory chain is trust-checked against the service
@@ -273,15 +283,13 @@ function revokePrivilegeSeparation(deps: InitDeps): boolean {
  * before writing the temp file also closes a symlink-preplant hole.
  */
 export function setupPrivilegeSeparation(deps: InitDeps, configPath: string): boolean {
-  const fail = (msg: string): false => {
+  const fail = (msg: string, fatal = false): false => {
     const revoked = revokePrivilegeSeparation(deps);
-    if (revoked) {
-      deps.warn(`[init] ${msg}; staying on User=root.`);
-    } else {
-      // The grant could not be removed. Do NOT report a clean fall-back: a
-      // NOPASSWD escalation path may still be live (Codex 2026-07-18 #1).
-      deps.error(`[init] ${msg}; staying on User=root, but could NOT remove the sudo grant at ${SUDOERS_PATH}. A NOPASSWD escalation path may remain; remove it by hand with 'sudo rm ${SUDOERS_PATH}'.`);
+    if (!revoked) {
+      throw new PrivilegeSetupFatalError(`${msg}; could not remove the sudo grant at ${SUDOERS_PATH}. An escalation path may remain; remove it by hand before retrying.`);
     }
+    if (fatal) throw new PrivilegeSetupFatalError(msg);
+    deps.warn(`[init] ${msg}; privileged wrapper disabled and service remains User=${SERVICE_USER}.`);
     return false;
   };
 
@@ -291,16 +299,25 @@ export function setupPrivilegeSeparation(deps: InitDeps, configPath: string): bo
     const ur = deps.exec("useradd", [
       "--system", "--no-create-home", "--shell", "/usr/sbin/nologin", SERVICE_USER,
     ]);
-    if (ur.status !== 0) return fail(`could not create '${SERVICE_USER}' user (status=${ur.status})`);
+    if (ur.status !== 0) return fail(`could not create '${SERVICE_USER}' user (status=${ur.status})`, true);
     deps.log(`[init] created system user '${SERVICE_USER}'.`);
   }
 
-  // 2. Group memberships FIRST, so the trust check below sees the FINAL group
-  //    set. adm lets several collectors read log-adjacent paths; best-effort, not
-  //    fatal. Applying it before the dir-trust check is essential: otherwise we
-  //    could approve a dir the user cannot write yet, then add it to a group that
-  //    owns that dir.
-  deps.exec("usermod", ["-aG", "adm", SERVICE_USER]);
+  // 2. Grant only journal access. Remove a legacy adm membership installed by
+  //    older Crucible releases without touching operator-managed groups.
+  const journalGroup = deps.exec("getent", ["group", "systemd-journal"]);
+  if (journalGroup.status === 0) {
+    const addJournal = deps.exec("usermod", ["-aG", "systemd-journal", SERVICE_USER]);
+    if (addJournal.status !== 0) deps.warn(`[init] could not add '${SERVICE_USER}' to systemd-journal; failed-unit excerpts may be unavailable.`);
+  } else {
+    deps.warn(`[init] systemd-journal group is absent; failed-unit excerpts may be unavailable.`);
+  }
+  const admGroup = deps.exec("getent", ["group", "adm"]);
+  const admMembers = admGroup.status === 0 ? (admGroup.stdout.split(":")[3] ?? "").trim().split(",") : [];
+  if (admMembers.includes(SERVICE_USER)) {
+    const removeAdm = deps.exec("gpasswd", ["-d", SERVICE_USER, "adm"]);
+    if (removeAdm.status !== 0) return fail(`could not remove broad adm membership from '${SERVICE_USER}'`, true);
+  }
 
   // 3. Trust every wrapper ancestor against the FINAL groups. A
   //    tamperable ancestor can replace the directory below it
@@ -327,7 +344,7 @@ export function setupPrivilegeSeparation(deps: InitDeps, configPath: string): bo
     if (problem) return fail(`wrapper directory chain is not trustworthy: ${problem}`);
   }
 
-  // 4. The collection wrapper. The dir is now known un-writable by the service
+  // 5. The collection wrapper. The dir is now known un-writable by the service
   //    user, so build a FRESH root-owned temp file (O_EXCL via flag "wx", so a
   //    pre-planted symlink is never followed), chown root, atomically rename into
   //    place (replacing any pre-existing file/symlink), then lstat-verify.
@@ -346,7 +363,7 @@ export function setupPrivilegeSeparation(deps: InitDeps, configPath: string): bo
     return fail(`could not install wrapper ${WRAPPER_PATH}: ${err?.message ?? err}`);
   }
 
-  // 5. Sudoers drop-in, validated with `visudo -cf` on a temp file BEFORE it goes
+  // 6. Sudoers drop-in, validated with `visudo -cf` on a temp file BEFORE it goes
   //    live (a malformed sudoers file breaks sudo host-wide).
   const sudoersTmp = `${SUDOERS_PATH}.tmp`;
   try {
@@ -630,9 +647,24 @@ export async function runInit(opts: InitOptions, deps: InitDeps): Promise<number
   // §2.1: establish the unprivileged-user + sudo-wrapper boundary. Runs
   // AFTER the config is written (so it can hand ownership to the service
   // user) and BEFORE the unit is written (so the escalation path exists
-  // before the unit flips to User=glassmkr). Fail-safe: on any hard failure
-  // this returns false and the unit stays on User=root.
-  const serviceUser = setupPrivilegeSeparation(deps, configPath) ? SERVICE_USER : "root";
+  // before the unit runs as User=glassmkr). Ordinary wrapper failures remain
+  // unprivileged. Root requires an exact, explicit operator opt-out.
+  let privilegeReady: boolean;
+  try {
+    privilegeReady = setupPrivilegeSeparation(deps, configPath);
+  } catch (err) {
+    deps.error(`[init] privilege setup failed closed: ${err instanceof Error ? err.message : String(err)}`);
+    return 10;
+  }
+  let serviceUser = SERVICE_USER;
+  if (!privilegeReady) {
+    if (deps.env[ROOT_FALLBACK_ENV] === "1") {
+      serviceUser = "root";
+      deps.warn(`[init] SECURITY OVERRIDE: ${ROOT_FALLBACK_ENV}=1 accepted; running the full collector as root because wrapper setup failed.`);
+    } else {
+      deps.error(`[init] privileged collectors are unavailable until wrapper setup is repaired. The core service will run as '${SERVICE_USER}'. Set ${ROOT_FALLBACK_ENV}=1 only to explicitly accept full root execution.`);
+    }
+  }
 
   // Write systemd unit (0644).
   try {
@@ -663,8 +695,8 @@ export async function runInit(opts: InitOptions, deps: InitDeps): Promise<number
 
   // enable (persist across boot) THEN restart. `enable --now` only STARTS the
   // unit, which is a no-op when the service is already running: on an upgrade
-  // that just rewrote User= (fell back to root after a failed privilege setup,
-  // or applied new supplementary groups) the already-running process would keep
+  // that just rewrote User= or applied new supplementary groups, the
+  // already-running process would keep
   // its old credentials, so privileged collectors return null until a manual
   // restart. restart applies the new unit unconditionally, and starts the unit
   // when it is stopped (fresh install), so it is correct in both cases.
@@ -758,6 +790,7 @@ export function defaultDeps(): InitDeps {
       process.stdin.on("end", () => resolve(buf));
       process.stdin.on("error", reject);
     }),
+    env: process.env,
   };
 }
 

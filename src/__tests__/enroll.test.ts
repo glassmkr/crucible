@@ -66,6 +66,7 @@ function makeDeps(opts?: {
     error: (m) => errors.push(m),
     fetch: async () => new Response(null, { status: 200 }),
     readStdin: async () => opts?.stdin ?? "",
+    env: {},
     postJson: async (url, body, headers) => {
       posts.push({ url, body, headers });
       if (opts?.postThrows) throw new Error("network down");

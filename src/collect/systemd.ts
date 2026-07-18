@@ -64,6 +64,10 @@ const DEFAULT_EXCLUDES = [
 ];
 
 const JOURNAL_LINES_PER_UNIT = 5;
+export const JOURNAL_MAX_LINE_CHARS = 512;
+export const JOURNAL_MAX_TOTAL_CHARS = 4096;
+const REDACTED = "[REDACTED]";
+const SENSITIVE_QUERY_KEY = /(?:pass(?:word|wd)?|pwd|api[_-]?key|access[_-]?token|refresh[_-]?token|auth(?:orization)?|credential|client[_-]?secret|secret|session|signature|sig|token)/i;
 
 const RESULT_VALUES: ReadonlySet<SystemdUnitResult> = new Set([
   "success",
@@ -121,8 +125,11 @@ export async function collectSystemd(extraExcludes: string[] = []): Promise<Syst
   // affected unit so the receiver knows we tried.
   const journal_excerpts: Record<string, string[]> = {};
   const failed_unit_details: Record<string, SystemdFailedUnit> = {};
+  let journalBudget = JOURNAL_MAX_TOTAL_CHARS;
   for (const unit of units) {
-    journal_excerpts[unit] = await readJournalExcerpt(unit);
+    const excerpt = journalBudget > 0 ? await readJournalExcerpt(unit, journalBudget) : [];
+    journal_excerpts[unit] = excerpt;
+    journalBudget -= excerpt.reduce((sum, line) => sum + line.length, 0);
     failed_unit_details[unit] = await readUnitDetails(unit);
   }
 
@@ -135,7 +142,7 @@ export async function collectSystemd(extraExcludes: string[] = []): Promise<Syst
   };
 }
 
-async function readJournalExcerpt(unit: string): Promise<string[]> {
+async function readJournalExcerpt(unit: string, budget: number): Promise<string[]> {
   // `--no-pager` so we don't block; `-n N` for the most recent N
   // lines; `-o cat` to drop the systemd-prefix metadata and keep
   // only the message body (cleaner display, less log volume on the
@@ -147,11 +154,65 @@ async function readJournalExcerpt(unit: string): Promise<string[]> {
     "-o", "cat",
   ]);
   if (!out) return [];
-  return out
+  const lines = out
     .split("\n")
     .map((l) => l.trim())
     .filter((l) => l.length > 0)
     .slice(-JOURNAL_LINES_PER_UNIT);
+  return sanitizeJournalLines(lines, budget);
+}
+
+function redactUrlSecrets(raw: string): string {
+  try {
+    const url = new URL(raw);
+    let changed = false;
+    const userinfo = url.username || url.password ? `${REDACTED}@` : "";
+    if (userinfo) changed = true;
+    for (const key of [...url.searchParams.keys()]) {
+      if (SENSITIVE_QUERY_KEY.test(key)) {
+        url.searchParams.set(key, REDACTED);
+        changed = true;
+      }
+    }
+    return changed
+      ? `${url.protocol}//${userinfo}${url.host}${url.pathname}${url.search}${url.hash}`
+      : raw;
+  } catch {
+    return raw;
+  }
+}
+
+export function redactJournalLine(raw: string): string {
+  return raw
+    .replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/g, "")
+    .replace(/\b[a-z][a-z0-9+.-]*:\/\/[^\s<>"']+/gi, (url) => redactUrlSecrets(url))
+    .replace(/\b(Bearer|Basic)(\s+)[A-Za-z0-9._~+/=-]+/gi, (_match, scheme, space) => `${scheme}${space}${REDACTED}`)
+    .replace(/(["']?(?:password|passwd|pwd|api[_-]?key|x[_-]?api[_-]?key|access[_-]?token|refresh[_-]?token|client[_-]?secret|authorization|secret|session[_-]?token)["']?\s*[:=]\s*)(?:"[^"]*"|'[^']*'|[^\s,;]+)/gi, (_match, prefix) => `${prefix}${REDACTED}`)
+    .replace(/\bgmk_(?:acct|cru)_live_[A-Za-z0-9_]+\b/g, REDACTED)
+    .replace(/\bcol_[A-Fa-f0-9]{16,}\b/g, REDACTED)
+    .replace(/\b(?:AKIA[0-9A-Z]{16}|gh[pousr]_[A-Za-z0-9]{20,}|sk-(?:proj-)?[A-Za-z0-9_-]{20,}|sk_(?:live|test)_[A-Za-z0-9]{16,}|AIza[0-9A-Za-z_-]{20,}|xox[baprs]-[A-Za-z0-9-]{10,})\b/g, REDACTED)
+    .replace(/\beyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\b/g, REDACTED);
+}
+
+function truncateJournalLine(line: string, limit: number): string {
+  if (line.length <= limit) return line;
+  const marker = "...[truncated]";
+  if (limit <= marker.length) return marker.slice(0, limit);
+  return `${line.slice(0, limit - marker.length)}${marker}`;
+}
+
+export function sanitizeJournalLines(lines: string[], totalBudget = JOURNAL_MAX_TOTAL_CHARS): string[] {
+  const result: string[] = [];
+  let remaining = Math.max(0, totalBudget);
+  for (const raw of lines.slice(-JOURNAL_LINES_PER_UNIT)) {
+    if (remaining === 0) break;
+    const redacted = redactJournalLine(raw.trim());
+    if (!redacted) continue;
+    const line = truncateJournalLine(redacted, Math.min(JOURNAL_MAX_LINE_CHARS, remaining));
+    result.push(line);
+    remaining -= line.length;
+  }
+  return result;
 }
 
 /**
@@ -204,4 +265,5 @@ function parseUnitDetailsOutput(unit: string, out: string): SystemdFailedUnit {
 export const __test_only = {
   RESULT_VALUES,
   parseUnitDetailsOutput,
+  redactUrlSecrets,
 };

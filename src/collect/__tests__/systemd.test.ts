@@ -15,7 +15,13 @@ vi.mock("../../lib/exec.js", () => ({
   runDetailed: (...args: unknown[]) => runDetailedMock(...args),
 }));
 
-const { collectSystemd } = await import("../systemd.js");
+const {
+  collectSystemd,
+  redactJournalLine,
+  sanitizeJournalLines,
+  JOURNAL_MAX_LINE_CHARS,
+  JOURNAL_MAX_TOTAL_CHARS,
+} = await import("../systemd.js");
 
 beforeEach(() => {
   runMock.mockReset();
@@ -115,5 +121,35 @@ describe("collectSystemd", () => {
     expect((await collectSystemd()).error).toContain("timed out");
     runDetailedMock.mockResolvedValueOnce({ installed: false, exitCode: null, stdout: null, stderr: "", timedOut: false });
     expect((await collectSystemd()).error).toContain("not installed");
+  });
+});
+
+describe("journal excerpt data boundary", () => {
+  it("redacts authorization, password, collector-key, and JWT shapes", () => {
+    const collectorKey = ["gmk", "cru", "live", "EXAMPLEEXAMPLE000000", "ex01"].join("_");
+    const jwt = `eyJ${"a".repeat(12)}.${"b".repeat(12)}.${"c".repeat(12)}`;
+    const raw = `Authorization: Bearer top.secret password=hunter2 api_key=${collectorKey} token=${jwt} authorization=opaque`;
+    const redacted = redactJournalLine(raw);
+    expect(redacted).not.toContain("top.secret");
+    expect(redacted).not.toContain("hunter2");
+    expect(redacted).not.toContain(collectorKey);
+    expect(redacted).not.toContain(jwt);
+    expect(redacted).not.toContain("opaque");
+    expect(redacted).toContain("[REDACTED]");
+  });
+
+  it("removes URL userinfo and sensitive query values", () => {
+    const redacted = redactJournalLine("failed postgresql://alice:swordfish@example.test/db?token=secret-value&page=1");
+    expect(redacted).not.toContain("alice");
+    expect(redacted).not.toContain("swordfish");
+    expect(redacted).not.toContain("secret-value");
+    expect(redacted).toContain("[REDACTED]");
+  });
+
+  it("caps each line and the aggregate excerpt budget", () => {
+    const lines = sanitizeJournalLines(Array(5).fill("x".repeat(2000)), 1000);
+    expect(lines.every((line) => line.length <= JOURNAL_MAX_LINE_CHARS)).toBe(true);
+    expect(lines.reduce((sum, line) => sum + line.length, 0)).toBeLessThanOrEqual(1000);
+    expect(JOURNAL_MAX_TOTAL_CHARS).toBe(4096);
   });
 });

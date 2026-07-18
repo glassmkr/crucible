@@ -211,37 +211,15 @@ above). For ops engineers writing config-management modules, `init`
 gives you a stable interface that's covered by the test suite; prefer
 it over hand-rolling the equivalent.
 
-If you need or want to do this by hand, the npm prefix differs across
-distros: Ubuntu's global npm puts binaries in `/usr/bin/`, while
-Debian's defaults to `/usr/local/bin/`. The systemd unit's
-`ExecStart` must point at wherever `glassmkr-crucible` actually landed
-on your host, so detect the path before writing the unit:
+Do not hand-write a root service unit. To let configuration management stage
+the reviewed unit without starting it, use the supported no-start flow:
 
 ```bash
-BIN_PATH=$(command -v glassmkr-crucible)
-if [ -z "$BIN_PATH" ]; then
-  echo "ERROR: glassmkr-crucible binary not found on PATH after npm install. Aborting." >&2
-  exit 1
-fi
-
-sudo tee /etc/systemd/system/glassmkr-crucible.service >/dev/null <<UNIT
-[Unit]
-Description=Glassmkr Crucible - Bare Metal Monitoring
-After=network.target
-
-[Service]
-Type=simple
-User=root
-ExecStart=$BIN_PATH /etc/glassmkr/crucible.yaml
-Restart=on-failure
-RestartSec=10
-
-[Install]
-WantedBy=multi-user.target
-UNIT
+sudo glassmkr-crucible init --api-key <K> --no-start
+sudo systemctl cat glassmkr-crucible
 ```
 
-Enable and start:
+After reviewing the generated config, wrapper, sudoers entry, and unit:
 
 ```bash
 sudo systemctl daemon-reload
@@ -249,10 +227,31 @@ sudo systemctl enable --now glassmkr-crucible
 sudo systemctl status glassmkr-crucible
 ```
 
-If you ever upgrade `@glassmkr/crucible` and the binary moves (rare, but
-possible on a distro change), re-run the `command -v` step and update the
-unit file. The bootstrap script at `https://glassmkr.com/install.sh` does
-this detection automatically; the manual flow above is just the equivalent.
+Re-run `init --force --no-start` after a distro or npm-prefix change so the
+generated unit follows the installed binary safely.
+
+## Security boundaries
+
+Crucible runs as the unprivileged `glassmkr` user. A root-owned, fixed-action
+wrapper grants only the hardware and kernel reads required by privileged
+collectors. If wrapper setup fails, the service stays unprivileged and those
+collectors report unavailable data instead of silently running the whole agent
+as root. An operator can explicitly accept the old behavior for recovery by
+setting `GLASSMKR_ALLOW_ROOT_FALLBACK=1` while running `init` or `enroll`; the
+installer emits a prominent security warning when it honors this override.
+
+The service user receives `systemd-journal` membership for failed-unit context.
+`init` removes the broader legacy `adm` membership when present. The generated
+unit enables `ProtectHome`, `PrivateTmp`, `ProtectKernelTunables`,
+`ProtectControlGroups`, `LockPersonality`, and `ProtectSystem=strict`, with
+write access limited to `/var/lib/glassmkr` and `/var/lib/crucible`.
+
+Failed-unit journal excerpts cross the host-to-dashboard data boundary. The
+feature remains enabled, but the agent exports at most five lines per unit,
+512 characters per line, and 4096 journal characters per snapshot. It redacts
+Bearer/Basic credentials, common password and API-key assignments, known key
+shapes, JWTs, URL userinfo, and sensitive URL query values. Redaction is
+best-effort, so applications should still avoid writing secrets to logs.
 
 ## What It Collects
 
@@ -272,7 +271,7 @@ this detection automatically; the manual flow above is just the equivalent.
 | I/O | Per-device latency, IOPS, dmesg I/O errors, structured dmesg events |
 | Conntrack | nf_conntrack table usage, insert_failed rate |
 | Network process | Per-process FD scan, LACP partner state, TCP retrans rate |
-| Systemd | Failed unit count, Result codes (oom-kill, watchdog, signal) |
+| Systemd | Failed unit count, Result codes, bounded and redacted journal excerpts |
 | NTP | Sync state and source |
 | File descriptors | System-wide allocation |
 | Reboot evidence | pstore / kdump / wtmp; expected-vs-unexpected reboot classification |
@@ -284,7 +283,7 @@ Dashboard evaluates 65 alert rules server-side across 9 categories (storage, zfs
 
 - Linux (any distribution: Ubuntu, Debian, RHEL, Rocky, Alma, Arch, Alpine)
 - Node.js 24+
-- Root access (for SMART, IPMI, dmesg, and `/proc` access)
+- Root access for installation of the narrow privileged wrapper; the daemon runs as `glassmkr`
 - Optional: `smartmontools` for SMART data, `ipmitool` for IPMI data, `zfsutils-linux` for ZFS pools
 
 ## Documentation

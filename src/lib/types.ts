@@ -546,9 +546,8 @@ export interface TcpStatsSnapshot {
 export interface SystemdData extends CollectorAvailability {
   failed_units: string[];
   failed_count: number | null;
-  /** Last 5 journal lines per failed unit, populated only when at
-   *  least one unit is failed. Keys match `failed_units`. Codex
-   *  experiment 2026-05-12. */
+  /** Redacted, bounded journal excerpts for failed units, populated only when
+   *  at least one unit is failed. Keys match `failed_units`. */
   journal_excerpts?: Record<string, string[]>;
 }
 

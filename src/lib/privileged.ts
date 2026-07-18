@@ -158,15 +158,10 @@ function directCommand(action: PrivilegedAction, args: string[]): { cmd: string;
  * treat null as "capability unavailable", so a missing tool degrades
  * gracefully rather than crashing.
  *
- * Root fallback: if the wrapper is NOT installed (e.g. an upgrade via
- * `npm i -g` without re-running `init`, or a host still on User=root that
- * never migrated) AND we are running as root, run the underlying command
- * directly. As root that is exactly what the wrapper would exec, so it
- * restores collection instead of silently returning null for every
- * hardware/security probe. This honors init.ts's documented "User=root
- * never loses collection" invariant, which the wrapper-only path (audit
- * §2.1) had regressed on wrapper-less root hosts. A non-root agent without
- * the wrapper still gets null (it cannot and must not escalate).
+ * Root compatibility: a legacy root unit, or an operator who explicitly
+ * accepted GLASSMKR_ALLOW_ROOT_FALLBACK during init, can run the same fixed
+ * commands directly when the wrapper is absent. The default unit is
+ * unprivileged, so wrapper failure returns null and cannot silently escalate.
  */
 export function runPrivileged(
   action: PrivilegedAction,

@@ -42,6 +42,7 @@ function mockDeps(execImpl: ExecImpl) {
     fetch: async () => new Response(null, { status: 200 }),
     resolveEndpoint: async () => [{ address: "203.0.113.10", family: 4 }],
     readStdin: async () => "",
+    env: {},
   };
   return { deps, files, warns };
 }
@@ -62,6 +63,22 @@ describe("setupPrivilegeSeparation", () => {
     expect(files.has(`${SUDOERS_PATH}.tmp`)).toBe(false); // renamed, not left behind
   });
 
+  it("uses systemd-journal and removes only a legacy adm membership", () => {
+    const calls: Array<[string, string[]]> = [];
+    const { deps } = mockDeps((cmd, args) => {
+      calls.push([cmd, args]);
+      if (cmd === "getent" && args[1] === "systemd-journal") return { stdout: "systemd-journal:x:190:\n", status: 0 };
+      if (cmd === "getent" && args[1] === "adm") return { stdout: "adm:x:4:syslog,glassmkr\n", status: 0 };
+      if (cmd === "id" && args[0] === "-G") return { stdout: "0 190", status: 0 };
+      if (cmd === "id") return { stdout: "999", status: 0 };
+      return { stdout: "", status: 0 };
+    });
+    expect(setupPrivilegeSeparation(deps, "/etc/glassmkr/crucible.yaml")).toBe(true);
+    expect(calls).toContainEqual(["usermod", ["-aG", "systemd-journal", SERVICE_USER]]);
+    expect(calls).toContainEqual(["gpasswd", ["-d", SERVICE_USER, "adm"]]);
+    expect(calls).not.toContainEqual(["usermod", ["-aG", "adm", SERVICE_USER]]);
+  });
+
   it("fail-safe: visudo rejection returns false and never installs the sudoers file", () => {
     const { deps, files } = mockDeps((cmd) =>
       cmd === "id" ? { stdout: "", status: 1 } :
@@ -71,12 +88,12 @@ describe("setupPrivilegeSeparation", () => {
     expect(files.has(SUDOERS_PATH)).toBe(false);
   });
 
-  it("fail-safe: useradd failure returns false (caller keeps User=root)", () => {
+  it("fails closed when the unprivileged service user cannot be created", () => {
     const { deps } = mockDeps((cmd) =>
       cmd === "id" ? { stdout: "", status: 1 } :
       cmd === "useradd" ? { stdout: "", status: 1 } :
       { stdout: "", status: 0 });
-    expect(setupPrivilegeSeparation(deps, "/etc/glassmkr/crucible.yaml")).toBe(false);
+    expect(() => setupPrivilegeSeparation(deps, "/etc/glassmkr/crucible.yaml")).toThrow("could not create");
   });
 
   // Codex re-review 2026-07-18: the wrapper's parent directory is part of the
@@ -93,13 +110,13 @@ describe("setupPrivilegeSeparation", () => {
           : original(p);
   };
 
-  it("stays on User=root when the wrapper directory is world-writable", () => {
+  it("stays unprivileged when the wrapper directory is world-writable", () => {
     const { deps } = mockDeps(okExec);
     setDirStat(deps, { isSymbolicLink: false, uid: 0, gid: 0, mode: 0o777 });
     expect(setupPrivilegeSeparation(deps, "/etc/glassmkr/crucible.yaml")).toBe(false);
   });
 
-  it("stays on User=root when the dir is group-writable by a group the service user is in", () => {
+  it("stays unprivileged when the dir is group-writable by a group the service user is in", () => {
     const { deps } = mockDeps((cmd, args) =>
       cmd === "id" && args[0] === "-G" ? { stdout: "0 50\n", status: 0 } : // service user in gid 50
       cmd === "id" ? { stdout: "", status: 1 } :
@@ -171,9 +188,8 @@ describe("setupPrivilegeSeparation", () => {
     expect(setupPrivilegeSeparation(deps, "/etc/glassmkr/crucible.yaml")).toBe(false);
   });
 
-  it("checks the dir against POST-usermod groups (adm-owned writable dir caught)", () => {
-    // usermod adds glassmkr to adm (gid 4); the dir is group-writable by adm.
-    // The check runs after the group add, so id -G reflects adm and it is caught.
+  it("checks the dir against post-usermod groups", () => {
+    // The check runs after the narrow journal group add, so final groups are used.
     const { deps } = mockDeps((cmd, args) =>
       cmd === "id" && args[0] === "-G" ? { stdout: "0 4\n", status: 0 } :
       cmd === "id" ? { stdout: "", status: 1 } :
@@ -182,7 +198,7 @@ describe("setupPrivilegeSeparation", () => {
     expect(setupPrivilegeSeparation(deps, "/etc/glassmkr/crucible.yaml")).toBe(false);
   });
 
-  it("revokes an existing sudoers grant + wrapper when it falls back to root (upgrade path)", () => {
+  it("revokes an existing sudoers grant and wrapper on an unprivileged fallback", () => {
     const { deps, files } = mockDeps((cmd, args) =>
       cmd === "id" && args[0] === "-G" ? { stdout: "0 50\n", status: 0 } :
       cmd === "id" ? { stdout: "", status: 1 } :
