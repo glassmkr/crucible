@@ -557,4 +557,42 @@ describe("collectSmart: smart_unreadable blind spot", () => {
     expect(res.smart).toHaveLength(1);   // the passthrough physical drive
     expect(res.unreadable).toEqual([]);  // suppressed
   });
+
+  it("flags an enumerated-but-unreadable passthrough member (Codex #3: MegaRAID member 9 unreadable)", async () => {
+    // root is empty -> no direct disks; the controller enumerates two members,
+    // one readable and one that returns nothing.
+    const scan = async () =>
+      "/dev/bus/0 -d sat+megaraid,8 # /dev/bus/0 [megaraid_disk_08] [SAT], ATA device\n" +
+      "/dev/bus/0 -d sat+megaraid,9 # /dev/bus/0 [megaraid_disk_09] [SAT], ATA device\n";
+    const res = await collectSmart({
+      sysBlock: root,
+      probe: async (_dev, type) => (type === "sat+megaraid,8" ? HEALTHY : null),
+      scan,
+    });
+    expect(res.smart).toHaveLength(1); // member 8
+    expect(res.unreadable).toEqual([
+      { device: "/dev/bus/0[sat+megaraid,9]", reason: "no_smartctl_output" },
+    ]);
+  });
+
+  it("keeps a genuinely dead DIRECT disk alongside a healthy array; suppresses only the VD (Codex #4)", async () => {
+    await makeDisk("sda", SATA_1TB, "0"); // the RAID VD: reports no SMART surface directly
+    await makeDisk("sdb", SATA_1TB, "0"); // a SEPARATE direct disk, smartctl returns nothing
+    const scan = async () =>
+      "/dev/bus/0 -d sat+megaraid,8 # /dev/bus/0 [megaraid_disk_08] [SAT], ATA device\n";
+    const res = await collectSmart({
+      sysBlock: root,
+      probe: async (dev, type) => {
+        if (dev === "/dev/bus/0" && type === "sat+megaraid,8") return HEALTHY; // array member
+        if (dev === "/dev/sda" && !type) return NO_SURFACE; // VD -> no_smart_data (suppressed)
+        if (dev === "/dev/sdb" && !type) return null;       // dead direct disk -> kept
+        return null;
+      },
+      scan,
+    });
+    expect(res.smart).toHaveLength(1); // the healthy array member
+    // The VD (sda, no_smart_data) is suppressed; the genuinely dead direct disk
+    // (sdb) survives instead of being blanket-suppressed by the array's presence.
+    expect(res.unreadable).toEqual([{ device: "/dev/sdb", reason: "no_smartctl_output" }]);
+  });
 });

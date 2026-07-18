@@ -146,13 +146,33 @@ function dirTrustFailure(deps: InitDeps, dir: string, serviceGids: number[]): st
  * Remove the sudo grant and the wrapper. Called on every fail-safe path so a box
  * that cannot be made safe (or an upgrade that detects an unsafe directory) never
  * leaves a NOPASSWD grant pointing at a service-user-tamperable wrapper.
+ *
+ * Returns true iff the escalation grant is provably gone. The sudoers drop-in is
+ * removed FIRST (it is the thing that enables escalation); if it cannot be
+ * unlinked (an immutable file, an I/O or permission error) we fall back to
+ * overwriting it with an inert comment so no NOPASSWD line survives. Only when
+ * BOTH the unlink AND the neutralizing overwrite fail do we return false, so the
+ * caller can surface a loud warning instead of assuming the path was closed.
+ * (Codex 2026-07-18 #1: a swallowed unlinkSync error previously left a live grant
+ * while the wrapper directory was still service-user-writable, so glassmkr could
+ * recreate the wrapper and escalate through the surviving rule.)
  */
-function revokePrivilegeSeparation(deps: InitDeps): void {
-  for (const p of [SUDOERS_PATH, WRAPPER_PATH]) {
+function revokePrivilegeSeparation(deps: InitDeps): boolean {
+  let grantGone = false;
+  try {
+    if (deps.fs.existsSync(SUDOERS_PATH)) deps.fs.unlinkSync(SUDOERS_PATH);
+    grantGone = true;
+  } catch {
     try {
-      if (deps.fs.existsSync(p)) deps.fs.unlinkSync(p);
-    } catch { /* best effort */ }
+      deps.fs.writeFileSync(SUDOERS_PATH, "# glassmkr privilege separation revoked\n", { mode: 0o440 });
+      grantGone = true; // the NOPASSWD line is gone even though the inode remains
+    } catch { grantGone = false; }
   }
+  // The wrapper is inert once the grant is gone, but remove it for hygiene.
+  try {
+    if (deps.fs.existsSync(WRAPPER_PATH)) deps.fs.unlinkSync(WRAPPER_PATH);
+  } catch { /* best effort: harmless without the grant, which is handled above */ }
+  return grantGone;
 }
 
 /**
@@ -172,8 +192,14 @@ function revokePrivilegeSeparation(deps: InitDeps): void {
  */
 export function setupPrivilegeSeparation(deps: InitDeps, configPath: string): boolean {
   const fail = (msg: string): false => {
-    deps.warn(`[init] ${msg}; staying on User=root.`);
-    revokePrivilegeSeparation(deps);
+    const revoked = revokePrivilegeSeparation(deps);
+    if (revoked) {
+      deps.warn(`[init] ${msg}; staying on User=root.`);
+    } else {
+      // The grant could not be removed. Do NOT report a clean fall-back: a
+      // NOPASSWD escalation path may still be live (Codex 2026-07-18 #1).
+      deps.error(`[init] ${msg}; staying on User=root, but could NOT remove the sudo grant at ${SUDOERS_PATH}. A NOPASSWD escalation path may remain; remove it by hand with 'sudo rm ${SUDOERS_PATH}'.`);
+    }
     return false;
   };
 
@@ -424,15 +450,27 @@ export async function runInit(opts: InitOptions, deps: InitDeps): Promise<number
     return 0;
   }
 
+  // enable (persist across boot) THEN restart. `enable --now` only STARTS the
+  // unit, which is a no-op when the service is already running: on an upgrade
+  // that just rewrote User= (fell back to root after a failed privilege setup,
+  // or applied new supplementary groups) the already-running process would keep
+  // its old credentials, so privileged collectors return null until a manual
+  // restart. restart applies the new unit unconditionally, and starts the unit
+  // when it is stopped (fresh install), so it is correct in both cases.
+  // (Codex 2026-07-18 #2.)
   try {
-    const r = deps.exec("systemctl", ["enable", "--now", "glassmkr-crucible"]);
+    const en = deps.exec("systemctl", ["enable", "glassmkr-crucible"]);
+    if (en.status !== 0) {
+      deps.warn(`[init] systemctl enable returned ${en.status}; continuing to (re)start.`);
+    }
+    const r = deps.exec("systemctl", ["restart", "glassmkr-crucible"]);
     if (r.status !== 0) {
-      deps.error(`[init] systemctl enable --now glassmkr-crucible failed (status=${r.status}). Inspect with: 'systemctl status glassmkr-crucible --no-pager' and 'journalctl -u glassmkr-crucible -n 50 --no-pager'`);
+      deps.error(`[init] systemctl restart glassmkr-crucible failed (status=${r.status}). Inspect with: 'systemctl status glassmkr-crucible --no-pager' and 'journalctl -u glassmkr-crucible -n 50 --no-pager'`);
       return 9;
     }
-    deps.log(`[init] service enabled and started.`);
+    deps.log(`[init] service enabled and (re)started.`);
   } catch (err: any) {
-    deps.error(`[init] failed to enable/start service: ${err?.message ?? err}`);
+    deps.error(`[init] failed to enable/restart service: ${err?.message ?? err}`);
     return 9;
   }
 
