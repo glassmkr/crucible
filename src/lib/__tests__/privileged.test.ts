@@ -23,7 +23,9 @@ function mockDeps(execImpl: ExecImpl) {
       chmodSync: (p, mode) => { const f = files.get(p); if (f) f.mode = mode; },
       chownSync: (p, uid, gid) => { const f = files.get(p); if (!f) throw new Error(`ENOENT: ${p}`); f.uid = uid; f.gid = gid; },
       lstatSync: (p) => {
-        const f = files.get(p); if (!f) throw new Error(`ENOENT: ${p}`);
+        const f = files.get(p);
+        // Untracked path (e.g. the wrapper's parent dir): a normal root-owned 0755 dir.
+        if (!f) return { isSymbolicLink: false, uid: 0, gid: 0, mode: 0o755 };
         return { isSymbolicLink: !!f.symlink, uid: f.uid ?? 0, gid: f.gid ?? 0, mode: f.mode };
       },
       renameSync: (from, to) => {
@@ -67,6 +69,42 @@ describe("setupPrivilegeSeparation", () => {
       cmd === "useradd" ? { stdout: "", status: 1 } :
       { stdout: "", status: 0 });
     expect(setupPrivilegeSeparation(deps, "/etc/glassmkr/crucible.yaml")).toBe(false);
+  });
+
+  // Codex re-review 2026-07-18: the wrapper's parent directory is part of the
+  // trust boundary. A root-owned wrapper is still swappable if its DIR is
+  // writable by the service user (Debian /usr/local/sbin is 2775 root:staff).
+  type Stat = { isSymbolicLink: boolean; uid: number; gid: number; mode: number };
+  const setDirStat = (deps: InitDeps, dir: Stat) => {
+    (deps.fs as { lstatSync: (p: string) => Stat }).lstatSync = (p) =>
+      p.endsWith("/crucible-collect")
+        ? { isSymbolicLink: false, uid: 0, gid: 0, mode: 0o755 } // the wrapper file: fine
+        : dir; // its parent directory
+  };
+
+  it("stays on User=root when the wrapper directory is world-writable", () => {
+    const { deps } = mockDeps(okExec);
+    setDirStat(deps, { isSymbolicLink: false, uid: 0, gid: 0, mode: 0o777 });
+    expect(setupPrivilegeSeparation(deps, "/etc/glassmkr/crucible.yaml")).toBe(false);
+  });
+
+  it("stays on User=root when the dir is group-writable by a group the service user is in", () => {
+    const { deps } = mockDeps((cmd, args) =>
+      cmd === "id" && args[0] === "-G" ? { stdout: "0 50\n", status: 0 } : // service user in gid 50
+      cmd === "id" ? { stdout: "", status: 1 } :
+      { stdout: "", status: 0 });
+    setDirStat(deps, { isSymbolicLink: false, uid: 0, gid: 50, mode: 0o2775 });
+    expect(setupPrivilegeSeparation(deps, "/etc/glassmkr/crucible.yaml")).toBe(false);
+  });
+
+  it("proceeds when the dir is group-writable but the service user is NOT in that group (Debian default)", () => {
+    const { deps, files } = mockDeps((cmd, args) =>
+      cmd === "id" && args[0] === "-G" ? { stdout: "0 4\n", status: 0 } : // user in 0,4 - not 50 (staff)
+      cmd === "id" ? { stdout: "", status: 1 } :
+      { stdout: "", status: 0 });
+    setDirStat(deps, { isSymbolicLink: false, uid: 0, gid: 50, mode: 0o2775 }); // /usr/local/sbin 2775 root:staff
+    expect(setupPrivilegeSeparation(deps, "/etc/glassmkr/crucible.yaml")).toBe(true);
+    expect(files.get(WRAPPER_PATH)?.uid).toBe(0);
   });
 });
 

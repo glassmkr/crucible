@@ -102,6 +102,13 @@ export async function collectFromHwmon(root: string = HWMON_ROOT): Promise<{ cpu
     const files = await listDir(chipDir);
     if (!files) continue;
 
+    // Stable per-device id so two sockets running the same driver (e.g. dual
+    // k10temp both reporting "k10temp Tctl") get distinct alert-state keys. The
+    // `device` symlink resolves to the PCI address, which is stable across
+    // reboots; fall back to the hwmon dir name when it is absent.
+    const devLink = await fs.readlink(join(chipDir, "device")).catch(() => null);
+    const chipId = devLink ? (devLink.split("/").filter(Boolean).pop() ?? entry) : entry;
+
     // Find tempN_input files. Skip threshold files (max, crit, max_hyst, min, etc.)
     const tempInputs = files.filter(f => /^temp\d+_input$/.test(f));
     const isCpu = isCpuChip(chipName);
@@ -129,6 +136,7 @@ export async function collectFromHwmon(root: string = HWMON_ROOT): Promise<{ cpu
         value_celsius: Math.round(celsius * 10) / 10,
         source_chip: chipName,
         source: "hwmon",
+        chip_id: chipId,
       };
 
       if (!isCpu) {

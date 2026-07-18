@@ -395,25 +395,30 @@ async function collect() {
 
 let firstRun = true;
 
-// Single-flight collection loop: schedule the NEXT cycle only after the
-// current one settles, instead of a fixed setInterval. A cycle runs many
-// sequential subprocess calls with per-device timeouts, so at short intervals
-// it can exceed the configured period; with setInterval that would start a new
-// cycle before the previous one finished. Overlapping cycles can finish out of
-// order (an older/slower cycle overwrites the latest snapshot), corrupt the
-// module-level delta trackers (rate/IOPS baselines), and emit contradictory
-// alert transitions. Re-arming after `await collect()` makes overlap
-// impossible. (Codex review 2026-07-17.)
+// Single-flight collection loop: the next cycle is scheduled only after the
+// current one settles, so cycles never overlap (a fixed setInterval would start
+// a new cycle before a slow one finished, corrupting the module-level delta
+// trackers and emitting out-of-order snapshots).
+//
+// We target a fixed START-to-start cadence of ~intervalMs by subtracting the
+// time this cycle took. Scheduling a full intervalMs AFTER completion would make
+// the period `collect + interval`; on a slow box that can exceed the dashboard's
+// 2x-interval unreachable threshold and false-fire server_unreachable. If a
+// cycle runs longer than the interval, the next one starts immediately (still
+// single-flight, just catching up). (Codex review 2026-07-17; cadence fix
+// 2026-07-18.)
 const intervalMs = config.collection.interval_seconds * 1000;
 let loopTimer: ReturnType<typeof setTimeout> | null = null;
 
 async function runLoop(): Promise<void> {
+  const startedAt = Date.now();
   try {
     await collect();
   } catch (err) {
     console.error("[collector] collection cycle failed:", err);
   } finally {
-    loopTimer = setTimeout(runLoop, intervalMs);
+    const elapsed = Date.now() - startedAt;
+    loopTimer = setTimeout(runLoop, Math.max(0, intervalMs - elapsed));
   }
 }
 

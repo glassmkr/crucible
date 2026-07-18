@@ -105,10 +105,12 @@ export const allRules: AlertRule[] = [
     if (!snap.smart) return [];
     return snap.smart.filter(d => d.health !== "PASSED" || (d.reallocated_sectors && d.reallocated_sectors > 0) || (d.pending_sectors && d.pending_sectors > 0))
       .map(d => ({ type: "smart_failing", severity: "critical" as const,
-        instance: d.device,
-        title: `SMART failure: ${d.device}`, message: `${d.model}: drive showing signs of failure.`,
-        evidence: { device: d.device, health: d.health, reallocated_sectors: d.reallocated_sectors, pending_sectors: d.pending_sectors },
-        recommendation: `Back up data. Schedule replacement for ${d.device}.` }));
+        // Key by the stable serial: /dev/sdX letters move across reboots, which
+        // would resolve + re-page the same failing drive on re-enumeration.
+        instance: d.serial ?? d.device,
+        title: `SMART failure: ${d.device}${d.serial ? ` (serial ${d.serial})` : ""}`, message: `${d.model}: drive showing signs of failure.`,
+        evidence: { device: d.device, serial: d.serial, health: d.health, reallocated_sectors: d.reallocated_sectors, pending_sectors: d.pending_sectors },
+        recommendation: `Back up data. Schedule replacement for ${d.device}${d.serial ? ` (serial ${d.serial})` : ""}.` }));
   }},
   // 7. NVMe wear
   { type: "nvme_wear_high", evaluate(snap, t) {
@@ -116,9 +118,9 @@ export const allRules: AlertRule[] = [
     const threshold = t.nvme_wear_percent ?? 85;
     return snap.smart.filter(d => d.percentage_used != null && d.percentage_used >= threshold)
       .map(d => ({ type: "nvme_wear_high", severity: d.percentage_used! >= 95 ? "critical" as const : "warning" as const,
-        instance: d.device,
-        title: `NVMe ${d.device} wear at ${d.percentage_used}%`, message: `${d.model} at ${d.percentage_used}% lifetime wear.`,
-        evidence: { device: d.device, percentage_used: d.percentage_used },
+        instance: d.serial ?? d.device,
+        title: `NVMe ${d.device}${d.serial ? ` (serial ${d.serial})` : ""} wear at ${d.percentage_used}%`, message: `${d.model} at ${d.percentage_used}% lifetime wear.`,
+        evidence: { device: d.device, serial: d.serial, percentage_used: d.percentage_used },
         recommendation: "Plan drive replacement." }));
   }},
   // 8. RAID degraded
@@ -231,10 +233,12 @@ export const allRules: AlertRule[] = [
         .map(r => ({
           type: "cpu_temperature_high",
           severity: r.value_celsius >= crit ? "critical" as const : "warning" as const,
-          instance: r.label,
+          // Include the per-device id: two sockets can report an identical label
+          // (dual "k10temp Tctl"), and label alone would collapse them to one key.
+          instance: r.chip_id ? `${r.chip_id} ${r.label}` : r.label,
           title: `${r.label}: ${r.value_celsius}°C`,
           message: `CPU temperature above warning threshold (${r.source} ${r.source_chip}).`,
-          evidence: { sensor: r.label, value: r.value_celsius, source: r.source, chip: r.source_chip },
+          evidence: { sensor: r.label, value: r.value_celsius, source: r.source, chip: r.source_chip, chip_id: r.chip_id },
           recommendation: "Check cooling, fans, airflow.",
         }));
     }

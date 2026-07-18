@@ -41,7 +41,9 @@ function makeDeps(opts?: {
       chmodSync: (p, mode) => { const f = files.get(p); if (f) f.mode = mode; },
       chownSync: (p, uid, gid) => { const f = files.get(p); if (!f) throw new Error(`ENOENT: ${p}`); f.uid = uid; f.gid = gid; },
       lstatSync: (p) => {
-        const f = files.get(p); if (!f) throw new Error(`ENOENT: ${p}`);
+        const f = files.get(p);
+        // Untracked path (e.g. the wrapper's parent dir): a normal root-owned 0755 dir.
+        if (!f) return { isSymbolicLink: false, uid: 0, gid: 0, mode: 0o755 };
         return { isSymbolicLink: !!f.symlink, uid: f.uid ?? 0, gid: f.gid ?? 0, mode: f.mode };
       },
       renameSync: (from, to) => { const f = files.get(from); if (f) { files.set(to, f); files.delete(from); } },

@@ -45,7 +45,9 @@ function makeDeps(opts?: {
       },
       lstatSync: (p) => {
         const f = fs.files.get(p);
-        if (!f) throw new Error(`ENOENT: ${p}`);
+        // Untracked path (e.g. the wrapper's parent dir): model a normal
+        // root-owned 0755 directory so the parent-dir trust check passes.
+        if (!f) return { isSymbolicLink: false, uid: 0, gid: 0, mode: 0o755 };
         return { isSymbolicLink: !!f.symlink, uid: f.uid ?? 0, gid: f.gid ?? 0, mode: f.mode };
       },
       renameSync: (from, to) => {
