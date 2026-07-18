@@ -1,5 +1,32 @@
 import { describe, it, expect } from "vitest";
-import { run, runDetailed, looksLikeFieldRenameError, which, isUnitActive } from "../exec.js";
+import { buildSubprocessEnv, run, runDetailed, looksLikeFieldRenameError, which, isUnitActive } from "../exec.js";
+
+describe("buildSubprocessEnv", () => {
+  it("does not inherit unrelated daemon secrets", () => {
+    const previous = process.env.GLASSMKR_TEST_SECRET;
+    process.env.GLASSMKR_TEST_SECRET = "must-not-leak";
+    try {
+      const env = buildSubprocessEnv();
+      expect(env.PATH).toBeTruthy();
+      expect(env.LANG).toBeTruthy();
+      expect(env.LC_ALL).toBeTruthy();
+      expect(env.GLASSMKR_TEST_SECRET).toBeUndefined();
+    } finally {
+      if (previous === undefined) delete process.env.GLASSMKR_TEST_SECRET;
+      else process.env.GLASSMKR_TEST_SECRET = previous;
+    }
+  });
+
+  it("passes only an explicitly requested tool secret", async () => {
+    const result = await runDetailed(
+      process.execPath,
+      ["-e", "process.stdout.write(process.env.ALLOWED_SECRET || '')"],
+      5000,
+      { ALLOWED_SECRET: "tool-only" },
+    );
+    expect(result.stdout).toBe("tool-only");
+  });
+});
 
 describe("looksLikeFieldRenameError", () => {
   // Real-world fixtures from the two Crucible bugs that motivated this

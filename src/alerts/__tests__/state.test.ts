@@ -1,5 +1,8 @@
-import { describe, it, expect, beforeEach } from "vitest";
-import { updateAlertState, __test_only } from "../state.js";
+import { mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
+import { loadAlertStateFile, saveAlertStateFile, updateAlertState, __test_only, type AlertState } from "../state.js";
 import type { AlertResult } from "../../lib/types.js";
 
 function alert(type: string, instance?: string): AlertResult {
@@ -64,5 +67,44 @@ describe("updateAlertState per-resource keying", () => {
     expect(new Set(r.resolvedAlerts.map((a) => a.instance))).toEqual(
       new Set(["eth0", "eth1"]),
     );
+  });
+});
+
+describe("alert state persistence", () => {
+  let dir: string;
+  let path: string;
+
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), "crucible-alert-state-"));
+    path = join(dir, "alert-state.json");
+  });
+  afterEach(() => rmSync(dir, { recursive: true, force: true }));
+
+  function value(lastSeen: string): Map<string, AlertState> {
+    return new Map([["disk_space_high", {
+      type: "disk_space_high",
+      first_seen: "2026-01-01T00:00:00.000Z",
+      last_seen: lastSeen,
+      notified: false,
+    }]]);
+  }
+
+  it("writes mode 0600 through a temporary file and atomically replaces state", () => {
+    saveAlertStateFile(path, value("first"));
+    saveAlertStateFile(path, value("second"));
+    expect(statSync(path).mode & 0o777).toBe(0o600);
+    expect(JSON.parse(readFileSync(path, "utf8")).disk_space_high.last_seen).toBe("second");
+    expect(readdirSync(dir).filter((name) => name.includes(".tmp-"))).toEqual([]);
+  });
+
+  it("preserves a corrupt state file instead of silently discarding it", () => {
+    writeFileSync(path, "{broken", { mode: 0o600 });
+    const error = vi.spyOn(console, "error").mockImplementation(() => {});
+    expect(loadAlertStateFile(path).size).toBe(0);
+    const backup = readdirSync(dir).find((name) => name.includes(".corrupt-"));
+    expect(backup).toBeTruthy();
+    expect(readFileSync(join(dir, backup!), "utf8")).toBe("{broken");
+    expect(error).toHaveBeenCalled();
+    error.mockRestore();
   });
 });

@@ -4,6 +4,16 @@ import crypto from "crypto";
 import type { Snapshot } from "../lib/types.js";
 
 let agent: https.Agent | undefined;
+export const MAX_PINNED_RESPONSE_BYTES = 64 * 1024;
+export const PINNED_RESPONSE_DEADLINE_MS = 10_000;
+
+export function addResponseChunkSize(current: number, chunk: Buffer | string): number {
+  const next = current + (Buffer.isBuffer(chunk) ? chunk.length : Buffer.byteLength(chunk));
+  if (next > MAX_PINNED_RESPONSE_BYTES) {
+    throw new Error(`Dashboard response exceeded ${MAX_PINNED_RESPONSE_BYTES} bytes`);
+  }
+  return next;
+}
 
 export function initDashboardAgent(tlsPin?: string): void {
   if (!tlsPin) {
@@ -65,6 +75,14 @@ function pushWithAgent(url: string, apiKey: string, snapshot: Snapshot): Promise
   return new Promise((resolve) => {
     const parsed = new URL(`${url}/api/v1/ingest`);
     const body = JSON.stringify(snapshot);
+    let settled = false;
+    let deadline: NodeJS.Timeout | undefined;
+    const finish = (ok: boolean) => {
+      if (settled) return;
+      settled = true;
+      if (deadline) clearTimeout(deadline);
+      resolve(ok);
+    };
 
     const req = https.request({
       hostname: parsed.hostname,
@@ -77,32 +95,49 @@ function pushWithAgent(url: string, apiKey: string, snapshot: Snapshot): Promise
         "Content-Type": "application/json",
         "Content-Length": Buffer.byteLength(body),
       },
-      timeout: 10000,
+      timeout: PINNED_RESPONSE_DEADLINE_MS,
     }, (res) => {
-      let data = "";
-      res.on("data", (chunk) => data += chunk);
+      const chunks: Buffer[] = [];
+      let responseBytes = 0;
+      res.on("data", (chunk: Buffer | string) => {
+        if (settled) return;
+        try {
+          responseBytes = addResponseChunkSize(responseBytes, chunk);
+          chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+        } catch (err) {
+          console.error(`[dashboard] Push failed (pinned): ${(err as Error).message}`);
+          res.destroy();
+          req.destroy();
+          finish(false);
+        }
+      });
       res.on("end", () => {
+        if (settled) return;
         if (res.statusCode && res.statusCode >= 200 && res.statusCode < 300) {
           try {
-            const parsed = JSON.parse(data);
+            const parsed = JSON.parse(Buffer.concat(chunks).toString("utf8"));
             console.log(`[dashboard] Push successful (pinned). Active alerts: ${parsed.active_alerts ?? 0}`);
           } catch { /* ignore parse errors */ }
-          resolve(true);
+          finish(true);
         } else {
           console.error(`[dashboard] Push failed (pinned): ${res.statusCode}`);
-          resolve(false);
+          finish(false);
         }
       });
     });
 
     req.on("error", (err) => {
       console.error(`[dashboard] Push failed (pinned): ${err.message}`);
-      resolve(false);
+      finish(false);
     });
     req.on("timeout", () => {
       req.destroy(new Error("Request timed out"));
-      resolve(false);
+      finish(false);
     });
+    deadline = setTimeout(() => {
+      req.destroy(new Error("Request deadline exceeded"));
+      finish(false);
+    }, PINNED_RESPONSE_DEADLINE_MS);
     req.write(body);
     req.end();
   });

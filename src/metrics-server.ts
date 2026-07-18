@@ -1,4 +1,4 @@
-import { createServer } from "http";
+import { createServer, type Server } from "node:http";
 import type { Snapshot } from "./lib/types.js";
 
 let latestSnapshot: Snapshot | null = null;
@@ -7,7 +7,25 @@ export function updateMetrics(snapshot: Snapshot) {
   latestSnapshot = snapshot;
 }
 
-export function startMetricsServer(port: number) {
+export function escapePrometheusLabel(value: string): string {
+  return value.replace(/\\/g, "\\\\").replace(/\n/g, "\\n").replace(/"/g, '\\"');
+}
+
+export function prometheusLabels(values: Record<string, string>): string {
+  return Object.entries(values)
+    .map(([key, value]) => `${key}="${escapePrometheusLabel(value)}"`)
+    .join(",");
+}
+
+export function startMetricsServer(
+  port: number,
+  address = "127.0.0.1",
+  onError: (err: Error) => void = (err) => console.error(`[metrics] Prometheus endpoint disabled: ${err.message}`),
+): Server | null {
+  if (!Number.isInteger(port) || port < 1 || port > 65535) {
+    onError(new Error(`invalid port ${port}; expected an integer from 1 to 65535`));
+    return null;
+  }
   const server = createServer((req, res) => {
     if (req.url === "/metrics" && req.method === "GET") {
       if (!latestSnapshot) {
@@ -26,12 +44,21 @@ export function startMetricsServer(port: number) {
     }
   });
 
-  server.listen(port, "0.0.0.0", () => {
-    console.log(`[metrics] Prometheus endpoint listening on :${port}/metrics`);
+  installMetricsServerErrorHandler(server, onError);
+  server.listen(port, address, () => {
+    console.log(`[metrics] Prometheus endpoint listening on ${address}:${port}/metrics`);
   });
+  return server;
 }
 
-function formatPrometheus(snap: Snapshot): string {
+export function installMetricsServerErrorHandler(
+  server: Pick<Server, "on">,
+  onError: (err: Error) => void,
+): void {
+  server.on("error", onError);
+}
+
+export function formatPrometheus(snap: Snapshot): string {
   const lines: string[] = [];
 
   // CPU
@@ -57,7 +84,7 @@ function formatPrometheus(snap: Snapshot): string {
   lines.push("# HELP glassmkr_disk_used_percent Disk usage percentage");
   lines.push("# TYPE glassmkr_disk_used_percent gauge");
   for (const disk of snap.disks) {
-    const labels = `mount="${disk.mount}",device="${disk.device}"`;
+    const labels = prometheusLabels({ mount: disk.mount, device: disk.device });
     lines.push(`glassmkr_disk_used_percent{${labels}} ${disk.percent_used}`);
     lines.push(`glassmkr_disk_total_gb{${labels}} ${disk.total_gb}`);
     lines.push(`glassmkr_disk_used_gb{${labels}} ${disk.used_gb}`);
@@ -67,7 +94,7 @@ function formatPrometheus(snap: Snapshot): string {
   lines.push("# HELP glassmkr_net_rx_bytes_sec Network receive bytes per second");
   lines.push("# TYPE glassmkr_net_rx_bytes_sec gauge");
   for (const iface of snap.network) {
-    const labels = `interface="${iface.interface}"`;
+    const labels = prometheusLabels({ interface: iface.interface });
     lines.push(`glassmkr_net_rx_bytes_sec{${labels}} ${iface.rx_bytes_sec}`);
     lines.push(`glassmkr_net_tx_bytes_sec{${labels}} ${iface.tx_bytes_sec}`);
     lines.push(`glassmkr_net_rx_errors{${labels}} ${iface.rx_errors}`);
@@ -77,7 +104,7 @@ function formatPrometheus(snap: Snapshot): string {
 
   // SMART
   for (const drive of snap.smart) {
-    const labels = `device="${drive.device}",model="${drive.model}"`;
+    const labels = prometheusLabels({ device: drive.device, model: drive.model });
     if (drive.temperature_c != null) lines.push(`glassmkr_smart_temperature_c{${labels}} ${drive.temperature_c}`);
     if (drive.percentage_used != null) lines.push(`glassmkr_smart_percentage_used{${labels}} ${drive.percentage_used}`);
     if (drive.reallocated_sectors != null) lines.push(`glassmkr_smart_reallocated_sectors{${labels}} ${drive.reallocated_sectors}`);
@@ -87,7 +114,8 @@ function formatPrometheus(snap: Snapshot): string {
   if (snap.ipmi?.available) {
     for (const sensor of snap.ipmi.sensors) {
       if (typeof sensor.value === "number") {
-        lines.push(`glassmkr_ipmi_sensor{sensor="${sensor.name}",unit="${sensor.unit}"} ${sensor.value}`);
+        const labels = prometheusLabels({ sensor: sensor.name, unit: sensor.unit });
+        lines.push(`glassmkr_ipmi_sensor{${labels}} ${sensor.value}`);
       }
     }
     // ecc_errors is null when IPMI couldn't be probed at all (no
@@ -101,7 +129,8 @@ function formatPrometheus(snap: Snapshot): string {
     // Fans
     if (snap.ipmi.fans) {
       for (const fan of snap.ipmi.fans) {
-        lines.push(`glassmkr_ipmi_fan_rpm{fan="${fan.name}",status="${fan.status}"} ${fan.rpm}`);
+        const labels = prometheusLabels({ fan: fan.name, status: fan.status });
+        lines.push(`glassmkr_ipmi_fan_rpm{${labels}} ${fan.rpm}`);
       }
     }
   }

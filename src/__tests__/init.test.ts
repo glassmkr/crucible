@@ -160,6 +160,18 @@ describe("runInit", () => {
     expect(errors[0]).toContain("invalid --api-key");
   });
 
+  it("warns when a literal API key is passed in argv", async () => {
+    const { deps, warns } = makeDeps();
+    await runInit({ apiKey: VALID_NEW_KEY, configPath, noVerify: true, noStart: true }, deps);
+    expect(warns.some((message) => message.includes("process listings") && message.includes("--api-key -"))).toBe(true);
+  });
+
+  it("does not emit the argv warning when the API key is read from stdin", async () => {
+    const { deps, warns } = makeDeps({ stdin: VALID_NEW_KEY });
+    await runInit({ apiKey: "-", configPath, noVerify: true, noStart: true }, deps);
+    expect(warns.some((message) => message.includes("process listings"))).toBe(false);
+  });
+
   it("happy path: writes root-owned config (0640) + systemd unit (0644), enables service", async () => {
     const { deps, fs, systemctlCalls } = makeDeps();
     const code = await runInit({ apiKey: VALID_NEW_KEY, configPath, noVerify: true }, deps);

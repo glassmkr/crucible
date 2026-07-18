@@ -26,6 +26,7 @@ import { execFileSync as execFileSyncDefault } from "node:child_process";
 import { randomUUID as randomUUIDDefault } from "node:crypto";
 import * as osDefault from "node:os";
 import * as pathDefault from "node:path";
+import { buildSubprocessEnv } from "./lib/exec.js";
 import {
   SERVICE_USER, WRAPPER_PATH, WRAPPER_SCRIPT, SUDOERS_PATH, SUDOERS_CONTENT,
 } from "./lib/privileged.js";
@@ -41,6 +42,7 @@ export interface InitOptions {
   noStart?: boolean;
   force?: boolean;
   noVerify?: boolean; // skip the connectivity probe (default: probe)
+  apiKeyFromArgv?: boolean;
 }
 
 export interface InitDeps {
@@ -370,6 +372,9 @@ export async function runInit(opts: InitOptions, deps: InitDeps): Promise<number
 
   // Resolve API key (stdin form supports `--api-key -`).
   let apiKey = opts.apiKey ?? "";
+  if (apiKey && apiKey !== "-" && (opts.apiKeyFromArgv ?? true)) {
+    deps.warn("[init] WARNING: literal --api-key values are visible in process listings and shell history. Prefer --api-key - and provide the key on stdin.");
+  }
   if (apiKey === "-") {
     try {
       apiKey = (await deps.readStdin()).replace(/\r?\n$/, "").trim();
@@ -655,7 +660,7 @@ export function defaultDeps(): InitDeps {
     },
     exec: (cmd, args) => {
       try {
-        const stdout = execFileSyncDefault(cmd, args, { encoding: "utf8" });
+        const stdout = execFileSyncDefault(cmd, args, { encoding: "utf8", env: buildSubprocessEnv() });
         return { stdout, status: 0 };
       } catch (err: any) {
         return { stdout: err?.stdout?.toString() ?? "", status: typeof err?.status === "number" ? err.status : null };

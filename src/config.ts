@@ -2,6 +2,44 @@ import { closeSync, constants, fstatSync, openSync, readFileSync, type Stats } f
 import { parse } from "yaml";
 import { z } from "zod";
 
+const percentThreshold = z.number().finite().min(1).max(100);
+const ThresholdSchema = z.object({
+  ram_percent: percentThreshold.default(90),
+  swap_alert: z.boolean().default(true),
+  disk_percent: percentThreshold.default(85),
+  iowait_percent: percentThreshold.default(20),
+  nvme_wear_percent: percentThreshold.default(85),
+  disk_latency_nvme_ms: z.number().finite().min(1).max(60_000).default(50),
+  disk_latency_hdd_ms: z.number().finite().min(1).max(60_000).default(200),
+  cpu_temp_warning_c: z.number().finite().min(-50).max(150).default(80),
+  cpu_temp_critical_c: z.number().finite().min(-50).max(150).default(90),
+  interface_utilization_percent: percentThreshold.default(90),
+  acknowledge_disabled_detection: z.boolean().default(false),
+}).superRefine((value, ctx) => {
+  if (value.cpu_temp_warning_c >= value.cpu_temp_critical_c) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, message: "cpu warning temperature must be below critical" });
+  }
+  if (value.acknowledge_disabled_detection) return;
+  const disabled = [
+    value.ram_percent,
+    value.disk_percent,
+    value.iowait_percent,
+    value.nvme_wear_percent,
+    value.interface_utilization_percent,
+  ].some((threshold) => threshold >= 100)
+    || !value.swap_alert
+    || value.disk_latency_nvme_ms > 10_000
+    || value.disk_latency_hdd_ms > 10_000
+    || value.cpu_temp_warning_c > 110
+    || value.cpu_temp_critical_c > 125;
+  if (disabled) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: "thresholds can disable practical detection; set acknowledge_disabled_detection: true to accept this risk",
+    });
+  }
+});
+
 const ConfigSchema = z.object({
   server_name: z.string().default("unnamed-server"),
   collection: z.object({
@@ -17,18 +55,7 @@ const ConfigSchema = z.object({
     api_key: z.string().default(""),
     tls_pin: z.string().default(""),
   }).default({}),
-  thresholds: z.object({
-    ram_percent: z.number().default(90),
-    swap_alert: z.boolean().default(true),
-    disk_percent: z.number().default(85),
-    iowait_percent: z.number().default(20),
-    nvme_wear_percent: z.number().default(85),
-    disk_latency_nvme_ms: z.number().default(50),
-    disk_latency_hdd_ms: z.number().default(200),
-    cpu_temp_warning_c: z.number().default(80),
-    cpu_temp_critical_c: z.number().default(90),
-    interface_utilization_percent: z.number().default(90),
-  }).default({}),
+  thresholds: ThresholdSchema.default({}),
   channels: z.object({
     telegram: z.object({
       enabled: z.boolean().default(false),
@@ -46,7 +73,8 @@ const ConfigSchema = z.object({
   }).default({}),
   prometheus: z.object({
     enabled: z.boolean().default(false),
-    port: z.number().default(9101),
+    address: z.string().min(1).max(253).regex(/^[A-Za-z0-9:._-]+$/).default("127.0.0.1"),
+    port: z.number().int().min(1).max(65535).default(9101),
   }).default({}),
 });
 

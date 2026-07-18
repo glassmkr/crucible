@@ -13,6 +13,7 @@ const baseThresholds = {
   cpu_temp_warning_c: 80,
   cpu_temp_critical_c: 90,
   interface_utilization_percent: 90,
+  acknowledge_disabled_detection: false,
 };
 
 function emptySnap(): Snapshot {

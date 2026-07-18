@@ -1,4 +1,5 @@
 import type { AlertResult } from "../lib/types.js";
+import { escapeTelegramHtml } from "./sanitize.js";
 
 const PRIORITY_MAP: Record<string, string> = {
   raid_degraded: "P1", smart_failing: "P1", ecc_errors: "P1", psu_redundancy_loss: "P1", ipmi_fan_failure: "P1",
@@ -38,14 +39,16 @@ export async function sendTelegram(
     for (const p of ["P1", "P2", "P3", "P4"]) {
       const alerts = byPriority[p];
       if (!alerts?.length) continue;
-      parts.push(`${PRIORITY_LABELS[p]} on <b>${serverName}</b>:\n`);
-      for (const a of alerts) parts.push(`  \u2022 <b>${a.title}</b>\n  ${a.recommendation}\n`);
+      parts.push(`${PRIORITY_LABELS[p]} on <b>${escapeTelegramHtml(serverName)}</b>:\n`);
+      for (const a of alerts.slice(0, 50)) {
+        parts.push(`  \u2022 <b>${escapeTelegramHtml(a.title)}</b>\n  ${escapeTelegramHtml(a.recommendation)}\n`);
+      }
     }
   }
 
   if (resolvedAlerts.length > 0) {
-    parts.push(`\u2705 <b>${resolvedAlerts.length} resolved</b> on <b>${serverName}</b>:\n`);
-    for (const a of resolvedAlerts) parts.push(`  \u2022 ${a.title}\n`);
+    parts.push(`\u2705 <b>${resolvedAlerts.length} resolved</b> on <b>${escapeTelegramHtml(serverName)}</b>:\n`);
+    for (const a of resolvedAlerts.slice(0, 50)) parts.push(`  \u2022 ${escapeTelegramHtml(a.title)}\n`);
   }
 
   if (parts.length === 0) return true;
@@ -54,7 +57,7 @@ export async function sendTelegram(
     const res = await fetch(`https://api.telegram.org/bot${botToken}/sendMessage`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ chat_id: chatId, text: parts.join("\n"), parse_mode: "HTML", disable_web_page_preview: true }),
+      body: JSON.stringify({ chat_id: chatId, text: parts.join("\n").slice(0, 12_000), parse_mode: "HTML", disable_web_page_preview: true }),
       signal: AbortSignal.timeout(10000),
     });
     return res.ok;
