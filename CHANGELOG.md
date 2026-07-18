@@ -7,6 +7,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 Pre-1.0 convention: minor bumps may include breaking changes; we call them
 out under `### Breaking` so downstream consumers can audit.
 
+## [0.14.5] - 2026-07-18
+
+Fourth-round Codex remediation: install-time privilege-separation robustness,
+hardware-RAID drive-visibility fixes, and steadier CPU-temperature alerting.
+
+### Security
+
+- **A failed privilege-separation setup now removes the sudo grant reliably.**
+  If the grant cannot be removed, `init` says so loudly rather than reporting a
+  clean fall-back, so a residual escalation path is never hidden. On upgrade,
+  `init` now restarts the running service, so a change to how the agent runs
+  takes effect immediately instead of waiting for the next manual restart.
+
+### Fixed
+
+- **Drives behind a hardware RAID/HBA controller that cannot be read are now
+  reported as a monitoring blind spot** instead of being silently skipped, and a
+  genuinely unreadable direct disk is no longer hidden by a healthy controller
+  array on the same host.
+- **CPU-temperature alerts from duplicate IPMI sensor names keep a stable
+  identity** as sibling sensors cross the threshold, so a hot sensor no longer
+  resolves and re-fires each time another sensor changes state.
+
 ## [0.14.4] - 2026-07-18
 
 Third-round Codex remediation (privilege-separation hardening, drive-identity
