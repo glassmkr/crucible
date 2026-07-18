@@ -7,6 +7,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 Pre-1.0 convention: minor bumps may include breaking changes; we call them
 out under `### Breaking` so downstream consumers can audit.
 
+## [0.14.3] - 2026-07-18
+
+Second-round remediation of the Codex review (corrections to the 0.14.2 changes).
+
+### Security
+
+- **`init` verifies the sudo wrapper's parent directory, not just the file.** On
+  distributions where `/usr/local/sbin` is group-writable (Debian ships it
+  `root:staff` 2775), a service account in that group could replace the
+  root-owned wrapper. `init` now keeps collection on the root user (rather than
+  the unprivileged service user) when the wrapper directory is writable by the
+  service user's groups. Default installs are unaffected.
+
+### Fixed
+
+- **Disk operation counts are reported per collection interval again.** 0.14.2
+  reported them as a per-second rate, which broke the dashboard's "busy vs. slow
+  drive" latency classification (stable only when the agent value and the
+  threshold use the same interval basis). Reverted to per-interval counts.
+- **Per-sensor CPU temperature alerts on dual-socket machines.** Two sockets
+  reporting the same sensor label (e.g. both `k10temp Tctl` on dual AMD) were
+  tracked as one; each socket is now keyed by its own device, so both notify.
+- **Drive alerts key on the drive serial, not the /dev/sdX letter.** A failing
+  drive that moved from `/dev/sda` to `/dev/sdb` after a reboot no longer emits
+  a false "resolved" followed by a fresh alert.
+- **Collection cadence holds steady on slow hosts.** The loop now targets a fixed
+  start-to-start interval, so a long-running cycle cannot stretch the gap between
+  reports far enough to trip a false "server unreachable".
+
 ## [0.14.2] - 2026-07-17
 
 Remediation of an external (Codex) code review of 0.14.0/0.14.1.
