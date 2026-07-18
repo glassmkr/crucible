@@ -85,23 +85,37 @@ export async function collectSmart(
   // read with `-d TYPE` and flows through the SAME parseSmartctlJson. Additive:
   // bare-disk behavior above is unchanged. No storcli/vendor binary needed.
   const passthrough: SmartInfo[] = [];
+  // A member that --scan-open enumerated (so it definitely EXISTS behind the
+  // controller) but whose per-drive probe returns nothing/unparseable is itself
+  // a blind spot and must be surfaced, not silently dropped (Codex 2026-07-18
+  // #3). Kept separate from direct unreadables so the VD suppression below never
+  // touches it.
+  const passthroughUnreadable: SmartUnreadable[] = [];
+  let scannedMembers = 0;
   try {
     const scanOut = await scan();
     if (scanOut) {
       for (const { path, type } of parseScanOpen(scanOut)) {
+        scannedMembers++;
+        // Synthetic device id: the backing path plus the selector, unique per
+        // physical drive (serial is the real join key everywhere downstream).
+        const dev = `${path}[${type}]`;
         const out = await probe(path, type);
-        if (!out) continue;
+        if (!out) {
+          passthroughUnreadable.push({ device: dev, reason: "no_smartctl_output" });
+          continue;
+        }
         try {
-          // Synthetic device id: the backing path plus the selector, unique per
-          // physical drive (serial is the real join key everywhere downstream).
-          const info = parseSmartctlJson(JSON.parse(out), `${path}[${type}]`);
+          const info = parseSmartctlJson(JSON.parse(out), dev);
           if (info) {
             info.transport = type.split(",")[0]!.replace(/^sat\+/, "");
             info.backing_device = path;
             passthrough.push(info);
+          } else {
+            passthroughUnreadable.push({ device: dev, reason: "no_smart_data" });
           }
         } catch {
-          // Failed to parse this passthrough drive, skip it
+          passthroughUnreadable.push({ device: dev, reason: "parse_error" });
         }
       }
     }
@@ -109,12 +123,21 @@ export async function collectSmart(
     // --scan-open unavailable: fall back to the /sys/block results only
   }
 
-  // Blind-spot suppression: if the passthrough path produced drives, an
-  // unreadable direct device is almost certainly the controller's OWN virtual
-  // disk (which never reports SMART), not a blind spot: the physical drives'
-  // SMART is covered via passthrough. Suppress the marker in that case so a
-  // healthy HW-RAID box does not perpetually advise "SMART unreadable".
-  const finalUnreadable = passthrough.length > 0 ? [] : unreadable;
+  // VD suppression, narrowed (Codex 2026-07-18 #4). On a controller box
+  // (--scan-open enumerated members), a DIRECT device that returned smartctl
+  // JSON with no SMART surface (reason "no_smart_data") is almost certainly the
+  // controller's OWN virtual disk (a RAID VD reports "SMART support: Unavailable"),
+  // whose physical members are already covered via passthrough: suppress just
+  // those. A direct device smartctl could not run against at all
+  // ("no_smartctl_output") or returned unparseable output ("parse_error") is a
+  // GENUINE blind spot regardless of the controller, so it is always kept: a real
+  // dead direct disk alongside a healthy array still surfaces (the previous
+  // blanket "any passthrough drive -> drop ALL direct markers" hid it). Every
+  // enumerated-but-unreadable passthrough member is always reported.
+  const directUnreadable = scannedMembers > 0
+    ? unreadable.filter((u) => u.reason !== "no_smart_data")
+    : unreadable;
+  const finalUnreadable = [...directUnreadable, ...passthroughUnreadable];
 
   return { smart: mergeDriveResults(direct, passthrough), unreadable: finalUnreadable };
 }

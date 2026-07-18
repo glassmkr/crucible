@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach } from "vitest";
 import { runInit, isValidApiKey, buildCollectorYaml, buildSystemdUnit, setupPrivilegeSeparation, type InitDeps, SYSTEMD_UNIT_PATH, DEFAULT_CONFIG_PATH, LEGACY_CONFIG_PATH } from "../init.js";
-import { WRAPPER_PATH } from "../lib/privileged.js";
+import { WRAPPER_PATH, SUDOERS_PATH } from "../lib/privileged.js";
 
 const VALID_NEW_KEY = "gmk_cru_live_abcdefghijklmnopqrstuvwx_a1b2";
 const VALID_LEGACY_KEY = "col_abcdef0123456789abcdef0123456789ab";
@@ -153,7 +153,12 @@ describe("runInit", () => {
     expect(unit?.mode).toBe(0o644);
     expect(unit?.data).toContain("ExecStart=/usr/local/bin/glassmkr-crucible /tmp/init-test-collector.yaml");
     expect(systemctlCalls).toContainEqual(["daemon-reload"]);
-    expect(systemctlCalls).toContainEqual(["enable", "--now", "glassmkr-crucible"]);
+    // enable persists across boot; a separate restart (not `enable --now`, which
+    // only starts a stopped unit) applies unit changes even when the service is
+    // already running (Codex 2026-07-18 #2).
+    expect(systemctlCalls).toContainEqual(["enable", "glassmkr-crucible"]);
+    expect(systemctlCalls).toContainEqual(["restart", "glassmkr-crucible"]);
+    expect(systemctlCalls).not.toContainEqual(["enable", "--now", "glassmkr-crucible"]);
   });
 
   it("--no-start: skips enable but still daemon-reloads", async () => {
@@ -231,11 +236,11 @@ describe("runInit", () => {
     expect(fs.files.get(configPath)?.data).toContain('url: "https://dashboard.example.com"');
   });
 
-  it("systemctl enable failure surfaces as exit code 9", async () => {
+  it("systemctl restart failure surfaces as exit code 9", async () => {
     const { deps, errors } = makeDeps({ systemctlExitCode: 1 });
     const code = await runInit({ apiKey: VALID_NEW_KEY, configPath, noVerify: true }, deps);
     expect(code).toBe(9);
-    expect(errors[errors.length - 1]).toContain("systemctl enable --now");
+    expect(errors[errors.length - 1]).toContain("systemctl restart");
   });
 });
 
@@ -360,5 +365,29 @@ describe("setupPrivilegeSeparation wrapper hardening (Codex #6)", () => {
     const ok = setupPrivilegeSeparation(deps, DEFAULT_CONFIG_PATH);
     expect(ok).toBe(false);
     expect(warns.some((w) => w.includes("failed its post-install safety check"))).toBe(true);
+  });
+
+  it("surfaces a loud error (not a clean warn) when the sudo grant cannot be revoked on a fail-safe (Codex #1)", () => {
+    const { deps, fs, errors } = makeDeps();
+    const WRAPPER_DIR = WRAPPER_PATH.replace(/\/[^/]+$/, "");
+    // Upgrade precondition: a prior install left a LIVE sudoers grant.
+    fs.files.set(SUDOERS_PATH, { data: "glassmkr ALL=(ALL) NOPASSWD: ...\n", mode: 0o440, uid: 0, gid: 0 });
+    // The wrapper directory has since become world-writable, so the trust check
+    // fails and forces the fail-safe revoke path.
+    const realLstat = deps.fs.lstatSync;
+    (deps.fs as { lstatSync: (p: string) => { isSymbolicLink: boolean; uid: number; gid: number; mode: number } }).lstatSync =
+      (p) => (p === WRAPPER_DIR ? { isSymbolicLink: false, uid: 0, gid: 0, mode: 0o777 } : realLstat(p));
+    // Both removal strategies fail (an immutable file: unlink AND overwrite error).
+    const realUnlink = deps.fs.unlinkSync;
+    (deps.fs as { unlinkSync: (p: string) => void }).unlinkSync =
+      (p) => { if (p === SUDOERS_PATH) throw new Error("EPERM immutable"); realUnlink(p); };
+    const realWrite = deps.fs.writeFileSync;
+    (deps.fs as { writeFileSync: (p: string, d: string, o?: { mode?: number; flag?: string }) => void }).writeFileSync =
+      (p, d, o) => { if (p === SUDOERS_PATH) throw new Error("EPERM immutable"); realWrite(p, d, o); };
+    const ok = setupPrivilegeSeparation(deps, DEFAULT_CONFIG_PATH);
+    expect(ok).toBe(false);
+    // The operator must be told the grant may still be live, not that we fell
+    // back cleanly to User=root.
+    expect(errors.some((e) => e.includes(SUDOERS_PATH) && e.includes("escalation path may remain"))).toBe(true);
   });
 });

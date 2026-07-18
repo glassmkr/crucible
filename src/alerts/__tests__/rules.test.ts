@@ -463,6 +463,36 @@ describe("cpu_temperature_high IPMI fallback unit gate (regression for 0.8.0 P1)
     const out = cpuTempRule.evaluate(snap, baseThresholds);
     expect(out).toHaveLength(2);
   });
+
+  it("keeps duplicate CPU sensor instance keys STABLE as siblings cross the threshold (Codex #5)", () => {
+    const mk = (v1: number, v2: number): Snapshot => {
+      const snap = emptySnap();
+      snap.ipmi = {
+        available: true,
+        sensors: [
+          { name: "CPU Temp", value: v1, unit: "degrees C", status: "ok" },
+          { name: "CPU Temp", value: v2, unit: "degrees C", status: "ok" },
+        ],
+        ecc_errors: { correctable: 0, uncorrectable: 0 },
+        sel_entries_count: 0, sel_events_recent: [], fans: [],
+      };
+      return snap;
+    };
+    // Both sockets hot: both fire with stable ordinals over the full candidate set.
+    const both = cpuTempRule.evaluate(mk(85, 86), baseThresholds);
+    expect(both.map(a => a.instance)).toEqual(["CPU Temp#1", "CPU Temp#2"]);
+    // Only socket 1 hot: it MUST keep the same key it had above ("CPU Temp#1"),
+    // not collapse to the bare "CPU Temp". The pre-fix code counted duplicates
+    // over only the hot sensors, so socket 1's key flipped as socket 2 came and
+    // went, resolving+reopening its alert every cycle.
+    const firstOnly = cpuTempRule.evaluate(mk(85, 70), baseThresholds);
+    expect(firstOnly).toHaveLength(1);
+    expect(firstOnly[0].instance).toBe("CPU Temp#1");
+    // Only socket 2 hot: stable "CPU Temp#2".
+    const secondOnly = cpuTempRule.evaluate(mk(70, 85), baseThresholds);
+    expect(secondOnly).toHaveLength(1);
+    expect(secondOnly[0].instance).toBe("CPU Temp#2");
+  });
 });
 
 describe("psu_redundancy_loss cr/nr discrete codes (regression for 0.8.0 P1)", () => {

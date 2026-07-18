@@ -265,34 +265,43 @@ export const allRules: AlertRule[] = [
     //      inlet, PCH, DIMM, PSU sensors that happen to read in °C.
     if (!snap.ipmi?.available || !snap.ipmi.sensors) return [];
     const exclusions = ["ambient", "system", "pch", "inlet", "outlet", "exhaust", "psu", "dimm", "memory"];
-    const matches = snap.ipmi.sensors.filter(s => {
+    // Candidate set = every CPU temperature sensor, INDEPENDENT of its current
+    // value. Instance keys are assigned over this full set (below) so a socket's
+    // key shape does not change when a sibling socket crosses or clears the
+    // threshold (Codex 2026-07-18 #5: counting duplicates over only the hot
+    // sensors made socket 1 flip between "CPU Temp" and "CPU Temp#1" as socket 2
+    // came and went, resolving+reopening its alert each time).
+    const candidates = snap.ipmi.sensors.filter(s => {
       if (!isTemperatureSensor(s)) return false;
       const n = s.name.toLowerCase();
       const isCpu = n.includes("cpu") || n.includes("processor");
       if (!isCpu) return false;
-      if (exclusions.some(w => n.includes(w))) return false;
-      const v = typeof s.value === "number" ? s.value : parseFloat(String(s.value));
-      return !isNaN(v) && v >= warn;
+      return !exclusions.some(w => n.includes(w));
     });
     // Disambiguate duplicate sensor names: some BMCs expose two sensors both
     // named e.g. "CPU Temp", which keyed on name alone would collapse to one
-    // alert (the second never notifying). Append a poll-stable ordinal for
-    // names that repeat within the matched set. (Codex re-review 2026-07-18.)
+    // alert (the second never notifying). Append an ordinal for names that repeat
+    // within the FULL candidate set, in enumeration order (SDR order, stable
+    // across polls), so the ordinal a hot sensor gets never depends on how many
+    // siblings are currently hot.
     const nameCounts = new Map<string, number>();
-    for (const s of matches) nameCounts.set(s.name, (nameCounts.get(s.name) ?? 0) + 1);
+    for (const s of candidates) nameCounts.set(s.name, (nameCounts.get(s.name) ?? 0) + 1);
     const nameSeen = new Map<string, number>();
-    return matches.map(s => {
-      const v = typeof s.value === "number" ? s.value : parseFloat(String(s.value));
-      const sensorCrit = s.upper_critical ?? crit;
+    const results: AlertResult[] = [];
+    for (const s of candidates) {
       const ord = (nameSeen.get(s.name) ?? 0) + 1;
-      nameSeen.set(s.name, ord);
+      nameSeen.set(s.name, ord); // advance for EVERY candidate, before the fire gate
+      const v = typeof s.value === "number" ? s.value : parseFloat(String(s.value));
+      if (isNaN(v) || v < warn) continue; // fire gate applied after key assignment
+      const sensorCrit = s.upper_critical ?? crit;
       const instance = (nameCounts.get(s.name) ?? 0) > 1 ? `${s.name}#${ord}` : s.name;
-      return { type: "cpu_temperature_high", severity: v >= sensorCrit ? "critical" as const : "warning" as const,
+      results.push({ type: "cpu_temperature_high", severity: v >= sensorCrit ? "critical" as const : "warning" as const,
         instance,
         title: `${s.name}: ${v}${s.unit}`, message: `Temperature above warning threshold (IPMI sensor).`,
         evidence: { sensor: s.name, value: v, unit: s.unit, source: "ipmi" },
-        recommendation: "Check cooling, fans, airflow." };
-    });
+        recommendation: "Check cooling, fans, airflow." });
+    }
+    return results;
   }},
   // 14. ECC errors
   // Reads max(named-sensor counts, SEL-derived counts). Dell iDRAC does
