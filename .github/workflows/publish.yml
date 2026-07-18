@@ -4,14 +4,42 @@ on:
   push:
     tags: ['v*']
 
-permissions:
-  contents: write
-  id-token: write
+permissions: {}
 
 jobs:
+  build:
+    name: Build verified package
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci --ignore-scripts
+      - run: npm run build
+      - run: npx vitest run
+      - name: Build package artifact
+        run: |
+          set -euo pipefail
+          mkdir -p package
+          npm pack --ignore-scripts --pack-destination package
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: npm-package
+          path: package/*.tgz
+          if-no-files-found: error
+          retention-days: 1
+
   publish:
     name: npm publish
+    needs: build
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      id-token: write
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
@@ -19,10 +47,12 @@ jobs:
           # Node 24 ships with npm 11.x which has working npm Trusted Publishing.
           node-version: 24
           registry-url: 'https://registry.npmjs.org'
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: npm-package
+          path: package
       - run: npm --version
-      - run: npm install
-      - run: npm run build
-      - run: npm publish --access public --provenance
+      - run: npm publish package/*.tgz --access public --provenance
 
       # Create the GitHub Release from the tag + its CHANGELOG section, so a
       # release object always exists for every published version. This used to
