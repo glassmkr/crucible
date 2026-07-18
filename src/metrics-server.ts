@@ -144,14 +144,16 @@ export function formatPrometheus(snap: Snapshot): string {
   lines.push(`glassmkr_zombie_processes ${snap.os_alerts.zombie_processes}`);
 
   // Security
-  if (snap.security) {
+  if (snap.security && snap.security.available !== false) {
     lines.push(`glassmkr_ssh_root_password_exposed ${snap.security.ssh?.rootPasswordExposed ? 1 : 0}`);
     lines.push(`glassmkr_ssh_config_unapplied ${snap.security.ssh?.configApplied === false ? 1 : 0}`);
-    lines.push(`glassmkr_firewall_active ${snap.security.firewall.active ? 1 : 0}`);
+    if (snap.security.firewall.available !== false && snap.security.firewall.active !== null) {
+      lines.push(`glassmkr_firewall_active ${snap.security.firewall.active ? 1 : 0}`);
+    }
     if (snap.security.pending_updates?.available) {
       lines.push(`glassmkr_pending_security_updates ${snap.security.pending_updates.pendingCount}`);
     }
-    const unmitigated = snap.security.kernel_vulns.filter(v => !v.mitigated).length;
+    const unmitigated = snap.security.kernel_vulns.filter(v => v.available !== false && !v.mitigated).length;
     lines.push(`glassmkr_kernel_vulns_unmitigated ${unmitigated}`);
     lines.push(`glassmkr_kernel_needs_reboot ${snap.security.kernel_reboot?.needsReboot ? 1 : 0}`);
     lines.push(`glassmkr_auto_updates_configured ${snap.security.auto_updates.configured ? 1 : 0}`);

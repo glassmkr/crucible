@@ -305,6 +305,7 @@ describe("C13 CVE: Ubuntu Pro JSON parser", () => {
       },
     });
     const r = parseUbuntuProJson(raw);
+    expect(r.available).toBe(true);
     expect(r.critical).toBe(1);
     expect(r.important).toBe(1);
     expect(r.kernel_cves.length).toBe(3);
@@ -312,8 +313,10 @@ describe("C13 CVE: Ubuntu Pro JSON parser", () => {
     expect(r.kernel_cves[0].severity).toBe("critical");
   });
 
-  it("returns empty result on malformed JSON", () => {
+  it("marks malformed JSON unavailable instead of reporting a confirmed empty set", () => {
     const r = parseUbuntuProJson("not json");
+    expect(r.available).toBe(false);
+    expect(r.error).toMatch(/malformed JSON/);
     expect(r.kernel_cves).toEqual([]);
     expect(r.critical).toBe(0);
   });

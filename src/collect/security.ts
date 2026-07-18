@@ -1,6 +1,7 @@
 import { run } from "../lib/exec.js";
 import { runPrivileged } from "../lib/privileged.js";
 import { readFileSync, existsSync, readdirSync, statSync } from "fs";
+import type { CollectorAvailability } from "../lib/availability.js";
 
 export interface SshSecurityStatus {
   permitRootLogin: string;
@@ -20,8 +21,8 @@ export interface SshSecurityStatus {
   configLoadedAt?: number | null;
 }
 
-export interface FirewallStatus {
-  active: boolean;
+export interface FirewallStatus extends CollectorAvailability {
+  active: boolean | null;
   source: string;
   details: string;
 }
@@ -36,6 +37,8 @@ export interface VulnerabilityStatus {
   name: string;
   status: string;
   mitigated: boolean;
+  available?: boolean;
+  error?: string;
 }
 
 export interface KernelRebootStatus {
@@ -50,7 +53,7 @@ export interface AutoUpdateStatus {
   details: string;
 }
 
-export interface SecurityData {
+export interface SecurityData extends CollectorAvailability {
   ssh: SshSecurityStatus | null;
   firewall: FirewallStatus;
   pending_updates: SecurityUpdateStatus | null;
@@ -97,7 +100,15 @@ export async function collectSecurity(): Promise<SecurityData> {
     checkAutoUpdates(),
   ]);
 
-  return { ssh, firewall, pending_updates: pendingUpdates, kernel_vulns: kernelVulns, kernel_reboot: kernelReboot, auto_updates: autoUpdates };
+  return {
+    available: true,
+    ssh,
+    firewall,
+    pending_updates: pendingUpdates,
+    kernel_vulns: kernelVulns,
+    kernel_reboot: kernelReboot,
+    auto_updates: autoUpdates,
+  };
 }
 
 /**
@@ -253,17 +264,17 @@ async function checkFirewall(): Promise<FirewallStatus> {
   const ufw = await runPrivileged("ufw", [], 5000);
   if (ufw && ufw.includes("Status:")) {
     const active = ufw.includes("Status: active");
-    return { active, source: "ufw", details: active ? "UFW is active" : "UFW is inactive" };
+    return { available: true, active, source: "ufw", details: active ? "UFW is active" : "UFW is inactive" };
   }
 
   // firewalld: if installed, its status is authoritative
   const fwd = await runPrivileged("firewall-cmd", [], 5000);
   if (fwd) {
     if (fwd.trim() === "running") {
-      return { active: true, source: "firewalld", details: "firewalld is running" };
+      return { available: true, active: true, source: "firewalld", details: "firewalld is running" };
     }
     if (fwd.includes("not running") || fwd.includes("dead")) {
-      return { active: false, source: "firewalld", details: "firewalld is not running" };
+      return { available: true, active: false, source: "firewalld", details: "firewalld is not running" };
     }
   }
 
@@ -284,6 +295,7 @@ async function checkFirewall(): Promise<FirewallStatus> {
       const [, fwState, svcState] = m;
       const active = fwState === "enabled" && svcState === "running";
       return {
+        available: true,
         active,
         source: "pve-firewall",
         details: `pve-firewall is ${fwState}/${svcState}`,
@@ -294,31 +306,56 @@ async function checkFirewall(): Promise<FirewallStatus> {
   // nftables (only if no managed firewall found)
   const nft = await runPrivileged("nft", [], 5000);
   if (nft) {
-    const ruleLines = nft.split("\n").filter((l) => l.trim().match(/^\s*(meta|ip |ip6 |tcp |udp |ct |drop|reject|accept)/));
-    if (ruleLines.length > 0) {
-      return { active: true, source: "nftables", details: `${ruleLines.length} nftables rules` };
-    }
+    const active = nftHasEffectiveIngressProtection(nft);
+    return {
+      available: true,
+      active,
+      source: "nftables",
+      details: active ? "Input hook has a drop/reject policy or verdict" : "No protective verdict on an input hook",
+    };
   }
 
   // iptables fallback: filter out Docker/container chains to avoid false positives
   const ipt = await runPrivileged("iptables", [], 5000);
   if (ipt) {
-    const lines = ipt.split("\n").filter((l) =>
-      l.trim() &&
-      !l.startsWith("Chain ") &&
-      !l.startsWith("target ") &&
-      !l.includes("DOCKER") &&
-      !l.includes("docker") &&
-      !l.includes("br-") &&
-      !l.includes("f2b-")
-    );
-    if (lines.length > 0) return { active: true, source: "iptables", details: `${lines.length} user iptables rules` };
-    if (ipt.includes("policy DROP") || ipt.includes("policy REJECT")) {
-      return { active: true, source: "iptables", details: "Default policy is DROP/REJECT" };
-    }
+    const active = iptablesHasEffectiveIngressProtection(ipt);
+    return {
+      available: true,
+      active,
+      source: "iptables",
+      details: active ? "INPUT chain has a drop/reject policy or verdict" : "INPUT chain has no protective verdict",
+    };
   }
 
-  return { active: false, source: "none", details: "No firewall detected (checked ufw, firewalld, nftables, iptables)" };
+  return {
+    available: false,
+    active: null,
+    source: "unknown",
+    details: "Could not establish effective ingress protection",
+    error: "firewall tools were unavailable or failed",
+  };
+}
+
+export function nftHasEffectiveIngressProtection(output: string): boolean {
+  for (const match of output.matchAll(/chain\s+[^\s{]+\s*\{([\s\S]*?)\}/g)) {
+    const body = match[1];
+    if (!/\bhook\s+input\b/.test(body)) continue;
+    if (/\bpolicy\s+(?:drop|reject)\s*;/.test(body)) return true;
+    if (body.split(/\r?\n/).some((line) => /(?:^|\s)(?:drop|reject)(?:\s|$)/.test(line.trim()))) return true;
+  }
+  return false;
+}
+
+export function iptablesHasEffectiveIngressProtection(output: string): boolean {
+  const lines = output.split(/\r?\n/);
+  const start = lines.findIndex((line) => line.startsWith("Chain INPUT "));
+  if (start < 0) return false;
+  const header = lines[start].match(/\(policy ([A-Z]+)\)/);
+  if (header?.[1] === "DROP" || header?.[1] === "REJECT") return true;
+  for (let index = start + 1; index < lines.length && !lines[index].startsWith("Chain "); index++) {
+    if (/^(?:DROP|REJECT)\s/.test(lines[index].trim())) return true;
+  }
+  return false;
 }
 
 // === Pending Security Updates ===
@@ -371,17 +408,22 @@ function checkKernelVulnerabilities(): VulnerabilityStatus[] {
 
   try {
     const files = readdirSync(vulnDir);
-    return files.map((file) => {
-      try {
-        const status = readFileSync(`${vulnDir}/${file}`, "utf-8").trim();
-        const mitigated = status.includes("Not affected") || status.includes("Mitigation:");
-        return { name: file, status, mitigated };
-      } catch {
-        return { name: file, status: "unknown", mitigated: true };
-      }
-    });
+    return files.map((file) => readKernelVulnerability(file));
   } catch {
-    return [];
+    return [{ name: "collection", status: "unknown", mitigated: false, available: false, error: "vulnerability directory read failed" }];
+  }
+}
+
+export function readKernelVulnerability(
+  name: string,
+  read: (path: string, encoding: BufferEncoding) => string = readFileSync,
+): VulnerabilityStatus {
+  try {
+    const status = read(`/sys/devices/system/cpu/vulnerabilities/${name}`, "utf-8").trim();
+    const mitigated = status.includes("Not affected") || status.includes("Mitigation:");
+    return { name, status, mitigated, available: true };
+  } catch {
+    return { name, status: "unknown", mitigated: false, available: false, error: "vulnerability status read failed" };
   }
 }
 
@@ -435,13 +477,12 @@ async function checkAutoUpdates(): Promise<AutoUpdateStatus> {
   // Debian/Ubuntu: unattended-upgrades
   const uuInstalled = await run("bash", ["-c", 'dpkg -l unattended-upgrades 2>/dev/null | grep "^ii"'], 5000);
   if (uuInstalled) {
-    // Check config file
-    const autoConf = "/etc/apt/apt.conf.d/20auto-upgrades";
-    let configEnabled = false;
-    if (existsSync(autoConf)) {
-      const content = readFileSync(autoConf, "utf-8");
-      configEnabled = content.includes('Update-Package-Lists "1"') && content.includes('Unattended-Upgrade "1"');
-    }
+    // apt-config emits the effective configuration after includes and comments
+    // have been resolved, so commented examples cannot enable detection.
+    const effectiveConfig = await run("apt-config", ["dump"], 5000);
+    const configEnabled = !!effectiveConfig
+      && /^APT::Periodic::Update-Package-Lists\s+"1";/m.test(effectiveConfig)
+      && /^APT::Periodic::Unattended-Upgrade\s+"1";/m.test(effectiveConfig);
 
     // Check systemd service state
     const serviceEnabled = (await run("bash", ["-c", "systemctl is-enabled unattended-upgrades 2>/dev/null"], 5000))?.trim() === "enabled";

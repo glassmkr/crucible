@@ -170,13 +170,31 @@ export const __test_only_c11 = { mapVendorToBmcVendor, parserQualityFor };
  * Used for vendors (notably Dell) that don't expose ECC counters as
  * named sensors. Returns cumulative counts since last SEL clear.
  */
-export async function collectSelEccCounts(): Promise<{ correctable: number; uncorrectable: number; newest_event_timestamp: string | null }> {
-  const output = await runPrivileged("ipmi-sel-elist");
-  if (!output) return { correctable: 0, uncorrectable: 0, newest_event_timestamp: null };
+export interface SelEccCounts {
+  available: boolean;
+  error?: string;
+  correctable: number | null;
+  uncorrectable: number | null;
+  newest_event_timestamp: string | null;
+}
+
+export async function collectSelEccCounts(
+  readSel: () => Promise<string | null> = () => runPrivileged("ipmi-sel-elist"),
+): Promise<SelEccCounts> {
+  const output = await readSel();
+  if (!output) {
+    return {
+      available: false,
+      error: "IPMI SEL ECC probe returned no data",
+      correctable: null,
+      uncorrectable: null,
+      newest_event_timestamp: null,
+    };
+  }
   return parseSelEccCounts(output);
 }
 
-export function parseSelEccCounts(output: string): { correctable: number; uncorrectable: number; newest_event_timestamp: string | null } {
+export function parseSelEccCounts(output: string): SelEccCounts {
   let correctable = 0;
   let uncorrectable = 0;
   let newest: string | null = null;
@@ -203,7 +221,7 @@ export function parseSelEccCounts(output: string): { correctable: number; uncorr
     const ts = parseSelTimestamp(date, time);
     if (!newest || ts > newest) newest = ts;
   }
-  return { correctable, uncorrectable, newest_event_timestamp: newest };
+  return { available: true, correctable, uncorrectable, newest_event_timestamp: newest };
 }
 
 async function collectSelEvents(): Promise<SelEvent[]> {

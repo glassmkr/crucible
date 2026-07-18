@@ -9,8 +9,9 @@
 //
 // Per CC_SPEC_CRUCIBLE_C11_C18_FULL_BUNDLE_2026-05-19.md §1.1.
 
-import { run } from "../lib/exec.js";
+import { run, runDetailed } from "../lib/exec.js";
 import { parseEqualsKeyValue } from "../lib/parse.js";
+import type { CollectorAvailability } from "../lib/availability.js";
 
 export type SystemdUnitResult =
   | "success"
@@ -42,9 +43,9 @@ export interface SystemdFailedUnit {
   n_restarts: number;
 }
 
-export interface SystemdData {
+export interface SystemdData extends CollectorAvailability {
   failed_units: string[];
-  failed_count: number;
+  failed_count: number | null;
   /** Last 5 journal lines per failed unit. Populated only when units
    *  are present so the happy path stays cheap. Keys match
    *  `failed_units`. Codex experiment 2026-05-12 P2; closes the
@@ -79,12 +80,28 @@ const RESULT_VALUES: ReadonlySet<SystemdUnitResult> = new Set([
 ]);
 
 export async function collectSystemd(extraExcludes: string[] = []): Promise<SystemdData> {
-  const output = await run("systemctl", [
+  const result = await runDetailed("systemctl", [
     "list-units", "--type=service", "--state=failed", "--no-legend", "--plain",
   ]);
+  if (!result.installed) {
+    return { available: false, error: "systemctl is not installed", failed_units: [], failed_count: null };
+  }
+  if (result.timedOut) {
+    return { available: false, error: "systemctl list-units timed out", failed_units: [], failed_count: null };
+  }
+  if (result.exitCode !== 0) {
+    const detail = result.stderr.trim();
+    return {
+      available: false,
+      error: `systemctl list-units failed${detail ? `: ${detail}` : ""}`,
+      failed_units: [],
+      failed_count: null,
+    };
+  }
+  const output = result.stdout ?? "";
 
-  if (!output || output.trim() === "") {
-    return { failed_units: [], failed_count: 0 };
+  if (output.trim() === "") {
+    return { available: true, failed_units: [], failed_count: 0 };
   }
 
   const excludes = new Set([...DEFAULT_EXCLUDES, ...extraExcludes]);
@@ -110,6 +127,7 @@ export async function collectSystemd(extraExcludes: string[] = []): Promise<Syst
   }
 
   return {
+    available: true,
     failed_units: units,
     failed_count: units.length,
     ...(units.length > 0 ? { journal_excerpts } : {}),

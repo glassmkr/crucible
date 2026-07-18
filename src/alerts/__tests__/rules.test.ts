@@ -376,6 +376,24 @@ describe("ssh_config_unapplied (config-vs-runtime false-negative guard)", () => 
   it("does not fire when there is no ssh block", () => {
     expect(sshConfigUnappliedRule.evaluate(emptySnap(), baseThresholds)).toEqual([]);
   });
+
+  it("does not evaluate stale security data as a fresh safe or unsafe result", () => {
+    const snap = snapWithSsh({ permitRootLogin: "yes", passwordAuthentication: "yes", rootPasswordExposed: true, configApplied: false });
+    (snap.security as any).available = false;
+    (snap.security as any).firewall = { available: true, active: false, source: "none", details: "" };
+    (snap.security as any).auto_updates = { configured: false, mechanism: "none", details: "" };
+    for (const rule of allRules.filter((item) => [
+      "ssh_root_password",
+      "ssh_config_unapplied",
+      "no_firewall",
+      "pending_security_updates",
+      "kernel_vulnerabilities",
+      "kernel_needs_reboot",
+      "unattended_upgrades_disabled",
+    ].includes(item.type))) {
+      expect(rule.evaluate(snap, baseThresholds)).toEqual([]);
+    }
+  });
 });
 
 describe("ALL_RULE_IDS export sync", () => {

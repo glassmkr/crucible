@@ -22,7 +22,13 @@ vi.mock("fs", () => ({
   readdirSync: () => [],
 }));
 
-const { collectSecurity, __resetSecurityCacheForTests } = await import("../security.js");
+const {
+  collectSecurity,
+  __resetSecurityCacheForTests,
+  iptablesHasEffectiveIngressProtection,
+  nftHasEffectiveIngressProtection,
+  readKernelVulnerability,
+} = await import("../security.js");
 
 beforeEach(() => {
   runMock.mockReset();
@@ -98,6 +104,63 @@ describe("collectSecurity cache shape (0.9.3 fix)", () => {
     await collectSecurity();
     const callsAfter = runMock.mock.calls.length;
     expect(callsAfter).toBeGreaterThan(callsBefore);
+  });
+});
+
+describe("fail-visible security probes", () => {
+  it("requires an input hook and protective nftables verdict", () => {
+    expect(nftHasEffectiveIngressProtection(`table inet filter {
+      chain input { type filter hook input priority 0; policy accept; tcp dport 22 accept }
+    }`)).toBe(false);
+    expect(nftHasEffectiveIngressProtection(`table inet filter {
+      chain input {
+        type filter hook input priority 0; policy accept;
+        ct state invalid drop
+      }
+    }`)).toBe(true);
+    expect(nftHasEffectiveIngressProtection("chain input { type filter hook input priority 0; policy drop; }")).toBe(true);
+    expect(nftHasEffectiveIngressProtection(`table inet filter {
+      chain input {
+        type filter hook input priority 0; policy drop;
+      }
+    }`)).toBe(true);
+  });
+
+  it("evaluates only the iptables INPUT policy and verdicts", () => {
+    const acceptOnly = "Chain INPUT (policy ACCEPT)\ntarget prot opt source destination\nACCEPT all -- 0.0.0.0/0 0.0.0.0/0\n\nChain DOCKER (policy ACCEPT)\nDROP all -- 0.0.0.0/0 0.0.0.0/0\n";
+    expect(iptablesHasEffectiveIngressProtection(acceptOnly)).toBe(false);
+    expect(iptablesHasEffectiveIngressProtection(acceptOnly.replace("policy ACCEPT", "policy DROP"))).toBe(true);
+  });
+
+  it("marks a failed kernel vulnerability read unknown and unavailable", () => {
+    const result = readKernelVulnerability("spectre_v2", () => { throw new Error("EACCES"); });
+    expect(result).toMatchObject({
+      status: "unknown",
+      mitigated: false,
+      available: false,
+    });
+  });
+
+  it("reports firewall state unknown when no probe can establish it", async () => {
+    runMock.mockResolvedValue(null);
+    const result = await collectSecurity();
+    expect(result.firewall).toMatchObject({ available: false, active: null, source: "unknown" });
+  });
+
+  it("ignores commented unattended-upgrades examples and accepts effective apt-config", async () => {
+    const configure = (effective: string) => runMock.mockImplementation((cmd: string, args: string[]) => {
+      const full = `${cmd} ${args.join(" ")}`;
+      if (full.includes("dpkg -l unattended-upgrades")) return Promise.resolve("ii unattended-upgrades");
+      if (cmd === "apt-config") return Promise.resolve(effective);
+      if (full.includes("is-enabled unattended-upgrades")) return Promise.resolve("enabled");
+      if (full.includes("is-active unattended-upgrades")) return Promise.resolve("active");
+      return Promise.resolve(null);
+    });
+
+    configure('// APT::Periodic::Update-Package-Lists "1";\n// APT::Periodic::Unattended-Upgrade "1";');
+    expect((await collectSecurity()).auto_updates.configured).toBe(false);
+    configure('APT::Periodic::Update-Package-Lists "1";\nAPT::Periodic::Unattended-Upgrade "1";');
+    expect((await collectSecurity()).auto_updates.configured).toBe(true);
   });
 });
 

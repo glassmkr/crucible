@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { classifySensor, deriveSelSeverity, parseSelTimestamp, parseFanStatus, parseSelEccCounts, collectIpmi } from "../ipmi.js";
+import { classifySensor, deriveSelSeverity, parseSelTimestamp, parseFanStatus, parseSelEccCounts, collectIpmi, collectSelEccCounts } from "../ipmi.js";
 
 describe("classifySensor", () => {
   it("recognizes memory sensors", () => {
@@ -141,7 +141,17 @@ describe("parseSelEccCounts (Dell-style SEL output)", () => {
   });
 
   it("handles empty input", () => {
-    expect(parseSelEccCounts("")).toEqual({ correctable: 0, uncorrectable: 0, newest_event_timestamp: null });
+    expect(parseSelEccCounts("")).toEqual({ available: true, correctable: 0, uncorrectable: 0, newest_event_timestamp: null });
+  });
+
+  it("uses nullable counters when the ECC sub-probe fails", async () => {
+    const result = await collectSelEccCounts(async () => null);
+    expect(result).toMatchObject({
+      available: false,
+      correctable: null,
+      uncorrectable: null,
+    });
+    expect(result.error).toContain("no data");
   });
 });
 

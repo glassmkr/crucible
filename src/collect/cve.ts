@@ -129,6 +129,18 @@ async function collectUbuntuPro(): Promise<CveSnapshot> {
     };
   }
   const parsed = parseUbuntuProJson(out);
+  if (!parsed.available) {
+    return {
+      available: false,
+      reason: parsed.error,
+      error: parsed.error,
+      distro: "ubuntu",
+      kernel_cves_pending: [],
+      total_critical_pending: 0,
+      total_important_pending: 0,
+      parser_quality: "fleet-tested",
+    };
+  }
   return {
     available: true,
     distro: "ubuntu",
@@ -144,9 +156,12 @@ async function collectUbuntuPro(): Promise<CveSnapshot> {
  * The full shape is large; we only need pending CVEs against the
  * running kernel + a severity histogram.
  *
- * Best-effort + defensive: malformed JSON yields zeros and no events.
+ * Defensive: malformed or structurally unexpected JSON is unavailable, not a
+ * confirmed empty advisory set.
  */
 export function parseUbuntuProJson(raw: string): {
+  available: boolean;
+  error?: string;
   kernel_cves: KernelCve[];
   critical: number;
   important: number;
@@ -155,7 +170,7 @@ export function parseUbuntuProJson(raw: string): {
   try {
     parsed = JSON.parse(raw);
   } catch {
-    return { kernel_cves: [], critical: 0, important: 0 };
+    return { available: false, error: "Ubuntu Pro returned malformed JSON", kernel_cves: [], critical: 0, important: 0 };
   }
   // Ubuntu Pro JSON shape (abbreviated; real output has many more fields):
   //   { "summary": { "kernel-cves": { "pending": [{ "cve": "CVE-2026-1234",
@@ -165,6 +180,9 @@ export function parseUbuntuProJson(raw: string): {
     summary?: { "kernel-cves"?: { pending?: unknown[] } };
     "kernel-cves"?: unknown[];
   };
+  if (!root || typeof root !== "object" || (!root.summary?.["kernel-cves"] && !Array.isArray(root["kernel-cves"]))) {
+    return { available: false, error: "Ubuntu Pro JSON did not contain kernel CVE data", kernel_cves: [], critical: 0, important: 0 };
+  }
   const pendingArr =
     root?.summary?.["kernel-cves"]?.pending ??
     (root?.["kernel-cves"] as unknown[]) ??
@@ -190,7 +208,7 @@ export function parseUbuntuProJson(raw: string): {
       else if (severity === "important") imp++;
     }
   }
-  return { kernel_cves: cves, critical: crit, important: imp };
+  return { available: true, kernel_cves: cves, critical: crit, important: imp };
 }
 
 // === dnf path (RHEL family) ===
