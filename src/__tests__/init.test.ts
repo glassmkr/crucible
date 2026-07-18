@@ -56,6 +56,7 @@ function makeDeps(opts?: {
         fs.files.set(to, f);
         fs.files.delete(from);
       },
+      unlinkSync: (p) => { fs.files.delete(p); },
     },
     exec: (cmd, args) => {
       if (cmd === "command" && args[0] === "-v" && args[1] === "glassmkr-crucible") {
@@ -348,10 +349,14 @@ describe("setupPrivilegeSeparation wrapper hardening (Codex #6)", () => {
     expect(warns.some((w) => w.includes("failed its post-install safety check"))).toBe(true);
   });
 
-  it("rejects a group/world-writable wrapper (returns false)", () => {
+  it("rejects a group/world-writable wrapper file (returns false)", () => {
     const { deps, warns } = makeDeps();
+    // Dirs safe; only the wrapper FILE is group/world-writable, so the file-mode
+    // check (not the parent-dir check) is what rejects it.
     (deps.fs as { lstatSync: (p: string) => { isSymbolicLink: boolean; uid: number; gid: number; mode: number } }).lstatSync =
-      () => ({ isSymbolicLink: false, uid: 0, gid: 0, mode: 0o777 });
+      (p) => p.endsWith("/crucible-collect")
+        ? { isSymbolicLink: false, uid: 0, gid: 0, mode: 0o777 }
+        : { isSymbolicLink: false, uid: 0, gid: 0, mode: 0o755 };
     const ok = setupPrivilegeSeparation(deps, DEFAULT_CONFIG_PATH);
     expect(ok).toBe(false);
     expect(warns.some((w) => w.includes("failed its post-install safety check"))).toBe(true);

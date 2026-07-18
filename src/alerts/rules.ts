@@ -8,9 +8,23 @@
 //   - RULE_AUDIT.md (one section per rule)
 //   - the count in this header comment
 
-import type { Snapshot, AlertResult } from "../lib/types.js";
+import type { Snapshot, AlertResult, SmartInfo } from "../lib/types.js";
 import type { Config } from "../config.js";
 import { isPsuSensor, classifyPsuSensorBitmask } from "../lib/vendor-sensors.js";
+
+/**
+ * Alert-state instance key for a drive. Prefers the stable serial, but ONLY when
+ * it is non-blank AND unique within this snapshot: a blank ("") serial or a
+ * duplicated placeholder (e.g. two drives both reporting "000000000000") would
+ * otherwise collapse distinct drives onto one key and mask the second failure.
+ * Falls back to the (less stable but unique) device path in those cases.
+ */
+function smartInstanceKey(all: SmartInfo[], d: SmartInfo): string {
+  const s = (d.serial ?? "").trim();
+  if (!s) return d.device;
+  const occurrences = all.reduce((n, x) => n + ((x.serial ?? "").trim() === s ? 1 : 0), 0);
+  return occurrences === 1 ? s : d.device;
+}
 
 /**
  * True iff a sensor reading is a temperature reading. Mirrors the
@@ -105,9 +119,10 @@ export const allRules: AlertRule[] = [
     if (!snap.smart) return [];
     return snap.smart.filter(d => d.health !== "PASSED" || (d.reallocated_sectors && d.reallocated_sectors > 0) || (d.pending_sectors && d.pending_sectors > 0))
       .map(d => ({ type: "smart_failing", severity: "critical" as const,
-        // Key by the stable serial: /dev/sdX letters move across reboots, which
-        // would resolve + re-page the same failing drive on re-enumeration.
-        instance: d.serial ?? d.device,
+        // Key by the stable serial (unique + non-blank), else the device path:
+        // /dev/sdX letters move across reboots, but a blank/duplicate serial
+        // would collapse distinct drives. See smartInstanceKey.
+        instance: smartInstanceKey(snap.smart!, d),
         title: `SMART failure: ${d.device}${d.serial ? ` (serial ${d.serial})` : ""}`, message: `${d.model}: drive showing signs of failure.`,
         evidence: { device: d.device, serial: d.serial, health: d.health, reallocated_sectors: d.reallocated_sectors, pending_sectors: d.pending_sectors },
         recommendation: `Back up data. Schedule replacement for ${d.device}${d.serial ? ` (serial ${d.serial})` : ""}.` }));
@@ -118,7 +133,7 @@ export const allRules: AlertRule[] = [
     const threshold = t.nvme_wear_percent ?? 85;
     return snap.smart.filter(d => d.percentage_used != null && d.percentage_used >= threshold)
       .map(d => ({ type: "nvme_wear_high", severity: d.percentage_used! >= 95 ? "critical" as const : "warning" as const,
-        instance: d.serial ?? d.device,
+        instance: smartInstanceKey(snap.smart!, d),
         title: `NVMe ${d.device}${d.serial ? ` (serial ${d.serial})` : ""} wear at ${d.percentage_used}%`, message: `${d.model} at ${d.percentage_used}% lifetime wear.`,
         evidence: { device: d.device, serial: d.serial, percentage_used: d.percentage_used },
         recommendation: "Plan drive replacement." }));
@@ -250,7 +265,7 @@ export const allRules: AlertRule[] = [
     //      inlet, PCH, DIMM, PSU sensors that happen to read in °C.
     if (!snap.ipmi?.available || !snap.ipmi.sensors) return [];
     const exclusions = ["ambient", "system", "pch", "inlet", "outlet", "exhaust", "psu", "dimm", "memory"];
-    return snap.ipmi.sensors.filter(s => {
+    const matches = snap.ipmi.sensors.filter(s => {
       if (!isTemperatureSensor(s)) return false;
       const n = s.name.toLowerCase();
       const isCpu = n.includes("cpu") || n.includes("processor");
@@ -258,11 +273,22 @@ export const allRules: AlertRule[] = [
       if (exclusions.some(w => n.includes(w))) return false;
       const v = typeof s.value === "number" ? s.value : parseFloat(String(s.value));
       return !isNaN(v) && v >= warn;
-    }).map(s => {
+    });
+    // Disambiguate duplicate sensor names: some BMCs expose two sensors both
+    // named e.g. "CPU Temp", which keyed on name alone would collapse to one
+    // alert (the second never notifying). Append a poll-stable ordinal for
+    // names that repeat within the matched set. (Codex re-review 2026-07-18.)
+    const nameCounts = new Map<string, number>();
+    for (const s of matches) nameCounts.set(s.name, (nameCounts.get(s.name) ?? 0) + 1);
+    const nameSeen = new Map<string, number>();
+    return matches.map(s => {
       const v = typeof s.value === "number" ? s.value : parseFloat(String(s.value));
       const sensorCrit = s.upper_critical ?? crit;
+      const ord = (nameSeen.get(s.name) ?? 0) + 1;
+      nameSeen.set(s.name, ord);
+      const instance = (nameCounts.get(s.name) ?? 0) > 1 ? `${s.name}#${ord}` : s.name;
       return { type: "cpu_temperature_high", severity: v >= sensorCrit ? "critical" as const : "warning" as const,
-        instance: s.name,
+        instance,
         title: `${s.name}: ${v}${s.unit}`, message: `Temperature above warning threshold (IPMI sensor).`,
         evidence: { sensor: s.name, value: v, unit: s.unit, source: "ipmi" },
         recommendation: "Check cooling, fans, airflow." };

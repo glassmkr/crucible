@@ -45,11 +45,12 @@ export interface InitDeps {
   fs: {
     existsSync: (p: string) => boolean;
     mkdirSync: (p: string, opts?: { recursive?: boolean; mode?: number }) => void;
-    writeFileSync: (p: string, data: string, opts?: { mode?: number }) => void;
+    writeFileSync: (p: string, data: string, opts?: { mode?: number; flag?: string }) => void;
     chmodSync: (p: string, mode: number) => void;
     chownSync: (p: string, uid: number, gid: number) => void;
     lstatSync: (p: string) => { isSymbolicLink: boolean; uid: number; gid: number; mode: number };
     renameSync: (from: string, to: string) => void;
+    unlinkSync: (p: string) => void;
   };
   exec: (cmd: string, args: string[]) => { stdout: string; status: number | null };
   hostname: () => string;
@@ -121,126 +122,133 @@ export function buildSystemdUnit(binPath: string, configPath: string, user = "ro
 }
 
 /**
- * Establish the §2.1 privilege boundary: an unprivileged `glassmkr` system
- * user that escalates only through the sudo wrapper. Idempotent; safe to run
- * on every install/upgrade. Returns true iff the box is fully ready to run
- * the service as `glassmkr` (user + wrapper + valid sudoers + writable state).
- * On ANY hard failure it returns false and the caller keeps the unit on
- * User=root, so an install where this can't complete never loses collection.
+ * A wrapper directory is trustworthy iff it is root-owned and NOT writable by
+ * the service user: not world-writable, and not group-writable by any group the
+ * service user belongs to. Returns a human-readable failure reason, or null when
+ * safe. `serviceGids` must be the service user's FINAL group set.
+ */
+function dirTrustFailure(deps: InitDeps, dir: string, serviceGids: number[]): string | null {
+  let st: { isSymbolicLink: boolean; uid: number; gid: number; mode: number };
+  try {
+    st = deps.fs.lstatSync(dir);
+  } catch (err: any) {
+    return `cannot stat ${dir}: ${err?.message ?? err}`;
+  }
+  if (st.uid !== 0) return `${dir} is not root-owned (uid=${st.uid})`;
+  if ((st.mode & 0o002) !== 0) return `${dir} is world-writable (mode=${(st.mode & 0o777).toString(8)})`;
+  if ((st.mode & 0o020) !== 0 && serviceGids.includes(st.gid)) {
+    return `${dir} is group-writable by a group '${SERVICE_USER}' belongs to (gid=${st.gid})`;
+  }
+  return null;
+}
+
+/**
+ * Remove the sudo grant and the wrapper. Called on every fail-safe path so a box
+ * that cannot be made safe (or an upgrade that detects an unsafe directory) never
+ * leaves a NOPASSWD grant pointing at a service-user-tamperable wrapper.
+ */
+function revokePrivilegeSeparation(deps: InitDeps): void {
+  for (const p of [SUDOERS_PATH, WRAPPER_PATH]) {
+    try {
+      if (deps.fs.existsSync(p)) deps.fs.unlinkSync(p);
+    } catch { /* best effort */ }
+  }
+}
+
+/**
+ * Establish the §2.1 privilege boundary: an unprivileged `glassmkr` system user
+ * that escalates only through the root-owned sudo wrapper. Idempotent; safe to
+ * run on every install/upgrade. Returns true iff the box is fully ready to run
+ * the service as `glassmkr`. On ANY hard failure it returns false, REVOKES any
+ * partial/prior grant (so an unsafe state never leaves a live NOPASSWD rule), and
+ * the caller keeps the unit on User=root, so an install that can't complete never
+ * loses collection and never leaves an escalation path.
  *
- * Ordering matters for the root->unprivileged migration: the wrapper and
- * sudoers are installed BEFORE the unit flips to User=glassmkr (done by the
- * caller), so there is never a window where the agent is unprivileged but the
- * escalation path is absent.
+ * Order matters (Codex re-review 2026-07-18): group memberships are applied
+ * FIRST, then the wrapper directory chain is trust-checked against the service
+ * user's FINAL groups, and only THEN is the wrapper written (into a
+ * known-untamperable dir) and the sudoers grant installed. Checking the dir
+ * before writing the temp file also closes a symlink-preplant hole.
  */
 export function setupPrivilegeSeparation(deps: InitDeps, configPath: string): boolean {
+  const fail = (msg: string): false => {
+    deps.warn(`[init] ${msg}; staying on User=root.`);
+    revokePrivilegeSeparation(deps);
+    return false;
+  };
+
   // 1. Service user (system, no login, no home).
   const idr = deps.exec("id", ["-u", SERVICE_USER]);
   if (idr.status !== 0) {
     const ur = deps.exec("useradd", [
       "--system", "--no-create-home", "--shell", "/usr/sbin/nologin", SERVICE_USER,
     ]);
-    if (ur.status !== 0) {
-      deps.warn(`[init] could not create '${SERVICE_USER}' user (status=${ur.status}); staying on User=root.`);
-      return false;
-    }
+    if (ur.status !== 0) return fail(`could not create '${SERVICE_USER}' user (status=${ur.status})`);
     deps.log(`[init] created system user '${SERVICE_USER}'.`);
   }
 
-  // 2. The collection wrapper. It must end up root-owned, 0755, and NOT a
-  //    symlink or writable by the service user, or the sudo grant could be
-  //    hijacked. A bare writeFileSync is unsafe: if WRAPPER_PATH already exists
-  //    (owned by `glassmkr`) or is a symlink, the write follows/preserves it, so
-  //    the file stays service-user-owned while the NOPASSWD sudoers rule below
-  //    still gets installed. The service account could then rewrite the wrapper
-  //    and run arbitrary code as root. Instead: build a FRESH root-owned temp
-  //    file, then atomically rename it into place. rename REPLACES a pre-existing
-  //    file or symlink (it does not follow the link), so ownership becomes root
-  //    regardless of what was there. Then lstat-verify the final path. The parent
-  //    directory must ALSO be trustworthy (step 2b verifies it is root-owned and
-  //    not writable by the service user) or the temp path could be pre-planted
-  //    and the installed wrapper later swapped. (Codex review 2026-07-17; parent-
-  //    dir check 2026-07-18.)
+  // 2. Group memberships FIRST, so the trust check below sees the FINAL group
+  //    set. adm lets several collectors read log-adjacent paths; best-effort, not
+  //    fatal. Applying it before the dir-trust check is essential: otherwise we
+  //    could approve a dir the user cannot write yet, then add it to a group that
+  //    owns that dir.
+  deps.exec("usermod", ["-aG", "adm", SERVICE_USER]);
+
+  // 3. Trust the wrapper directory AND its parent, against the FINAL groups. A
+  //    tamperable dir (or grandparent, which lets the dir itself be replaced)
+  //    means the root-owned wrapper could be swapped and run as root through the
+  //    NOPASSWD grant. Refuse (and revoke any prior grant) rather than assume.
+  const gout = deps.exec("id", ["-G", SERVICE_USER]);
+  if (gout.status !== 0) return fail(`could not read '${SERVICE_USER}' groups (id -G status=${gout.status})`);
+  const serviceGids = gout.stdout.trim().split(/\s+/).filter(Boolean).map((n) => Number(n));
+  if (serviceGids.some((n) => !Number.isFinite(n))) return fail(`could not parse '${SERVICE_USER}' group ids from: ${gout.stdout.trim()}`);
+  const wrapperDir = pathDefault.dirname(WRAPPER_PATH);
+  for (const dir of [wrapperDir, pathDefault.dirname(wrapperDir)]) {
+    const problem = dirTrustFailure(deps, dir, serviceGids);
+    if (problem) return fail(`wrapper directory chain is not trustworthy: ${problem}`);
+  }
+
+  // 4. The collection wrapper. The dir is now known un-writable by the service
+  //    user, so build a FRESH root-owned temp file (O_EXCL via flag "wx", so a
+  //    pre-planted symlink is never followed), chown root, atomically rename into
+  //    place (replacing any pre-existing file/symlink), then lstat-verify.
   const wrapperTmp = `${WRAPPER_PATH}.tmp`;
   try {
-    deps.fs.writeFileSync(wrapperTmp, WRAPPER_SCRIPT, { mode: 0o755 });
+    try { if (deps.fs.existsSync(wrapperTmp)) deps.fs.unlinkSync(wrapperTmp); } catch { /* re-created below */ }
+    deps.fs.writeFileSync(wrapperTmp, WRAPPER_SCRIPT, { mode: 0o755, flag: "wx" });
     deps.fs.chmodSync(wrapperTmp, 0o755);
     deps.fs.chownSync(wrapperTmp, 0, 0);
     deps.fs.renameSync(wrapperTmp, WRAPPER_PATH);
     const st = deps.fs.lstatSync(WRAPPER_PATH);
     if (st.isSymbolicLink || st.uid !== 0 || st.gid !== 0 || (st.mode & 0o022) !== 0) {
-      deps.warn(`[init] wrapper ${WRAPPER_PATH} failed its post-install safety check (symlink=${st.isSymbolicLink}, uid=${st.uid}, gid=${st.gid}, mode=${(st.mode & 0o777).toString(8)}); staying on User=root.`);
-      return false;
+      return fail(`wrapper ${WRAPPER_PATH} failed its post-install safety check (symlink=${st.isSymbolicLink}, uid=${st.uid}, gid=${st.gid}, mode=${(st.mode & 0o777).toString(8)})`);
     }
   } catch (err: any) {
-    deps.warn(`[init] could not install wrapper ${WRAPPER_PATH}: ${err?.message ?? err}; staying on User=root.`);
-    return false;
+    return fail(`could not install wrapper ${WRAPPER_PATH}: ${err?.message ?? err}`);
   }
 
-  // 2b. Parent-directory trust boundary. The file-level checks above are moot if
-  //     the service user can replace the wrapper via write access to its
-  //     DIRECTORY. Debian ships /usr/local/sbin as 2775 root:staff, so a
-  //     `glassmkr` account in `staff` (or any group that owns the dir) could swap
-  //     the root-owned wrapper and run code as root through the NOPASSWD grant.
-  //     Default installs are safe (our useradd does not add `glassmkr` to a
-  //     dir-owning group), but verify rather than assume: refuse if the dir is
-  //     not root-owned, is world-writable, or is group-writable by a group the
-  //     service user belongs to. (Codex re-review 2026-07-18.)
-  try {
-    const wrapperDir = pathDefault.dirname(WRAPPER_PATH);
-    const dst = deps.fs.lstatSync(wrapperDir);
-    const worldWritable = (dst.mode & 0o002) !== 0;
-    let groupWritableByServiceUser = false;
-    if ((dst.mode & 0o020) !== 0) {
-      const g = deps.exec("id", ["-G", SERVICE_USER]);
-      const gids = g.stdout.trim().split(/\s+/).filter(Boolean).map(Number);
-      groupWritableByServiceUser = gids.includes(dst.gid);
-    }
-    if (dst.uid !== 0 || worldWritable || groupWritableByServiceUser) {
-      deps.warn(`[init] wrapper directory ${wrapperDir} is not trustworthy (uid=${dst.uid}, mode=${(dst.mode & 0o777).toString(8)}, service-user-writable=${worldWritable || groupWritableByServiceUser}); staying on User=root.`);
-      return false;
-    }
-  } catch (err: any) {
-    deps.warn(`[init] could not verify the wrapper directory: ${err?.message ?? err}; staying on User=root.`);
-    return false;
-  }
-
-  // 3. Sudoers drop-in, validated with `visudo -cf` on a temp file BEFORE it
-  //    goes live (a malformed sudoers file breaks sudo host-wide).
+  // 5. Sudoers drop-in, validated with `visudo -cf` on a temp file BEFORE it goes
+  //    live (a malformed sudoers file breaks sudo host-wide).
   const sudoersTmp = `${SUDOERS_PATH}.tmp`;
   try {
     deps.fs.writeFileSync(sudoersTmp, SUDOERS_CONTENT, { mode: 0o440 });
     const chk = deps.exec("visudo", ["-cf", sudoersTmp]);
-    if (chk.status !== 0) {
-      deps.warn(`[init] visudo rejected the sudoers drop-in (status=${chk.status}); staying on User=root.`);
-      return false;
-    }
+    if (chk.status !== 0) return fail(`visudo rejected the sudoers drop-in (status=${chk.status})`);
     deps.fs.renameSync(sudoersTmp, SUDOERS_PATH);
     deps.fs.chmodSync(SUDOERS_PATH, 0o440);
   } catch (err: any) {
-    deps.warn(`[init] could not install sudoers ${SUDOERS_PATH}: ${err?.message ?? err}; staying on User=root.`);
-    return false;
+    return fail(`could not install sudoers ${SUDOERS_PATH}: ${err?.message ?? err}`);
   }
 
-  // 4. State dirs the agent writes directly (alert-state, reboot-marker) +
-  //    the config it reads: hand ownership to the service user.
+  // 6. State dirs the agent writes directly (alert-state, reboot-marker) + the
+  //    config it reads: hand ownership to the service user.
   for (const dir of STATE_DIRS) {
     try { deps.fs.mkdirSync(dir, { recursive: true, mode: 0o750 }); } catch { /* exists */ }
     const ch = deps.exec("chown", ["-R", `${SERVICE_USER}:${SERVICE_USER}`, dir]);
-    if (ch.status !== 0) {
-      deps.warn(`[init] could not chown ${dir} to ${SERVICE_USER} (status=${ch.status}); staying on User=root.`);
-      return false;
-    }
+    if (ch.status !== 0) return fail(`could not chown ${dir} to ${SERVICE_USER} (status=${ch.status})`);
   }
   const chc = deps.exec("chown", [`${SERVICE_USER}:${SERVICE_USER}`, configPath]);
-  if (chc.status !== 0) {
-    deps.warn(`[init] could not chown ${configPath} to ${SERVICE_USER}; staying on User=root.`);
-    return false;
-  }
-
-  // 5. adm group: several collectors read log-adjacent paths directly. Best
-  //    effort; not fatal (the wrapper covers the binary paths regardless).
-  deps.exec("usermod", ["-aG", "adm", SERVICE_USER]);
+  if (chc.status !== 0) return fail(`could not chown ${configPath} to ${SERVICE_USER}`);
 
   deps.log(`[init] privilege separation ready: service will run as '${SERVICE_USER}' via ${WRAPPER_PATH}.`);
   return true;
@@ -451,6 +459,7 @@ export function defaultDeps(): InitDeps {
         return { isSymbolicLink: s.isSymbolicLink(), uid: s.uid, gid: s.gid, mode: s.mode };
       },
       renameSync: fsDefault.renameSync,
+      unlinkSync: fsDefault.unlinkSync,
     },
     exec: (cmd, args) => {
       try {
