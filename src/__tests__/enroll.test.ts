@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
-import { runEnroll, normalizeDashboardBase, type EnrollDeps } from "../enroll.js";
+import { postJsonWithPolicy, runEnroll, normalizeDashboardBase, type EnrollDeps } from "../enroll.js";
+import type { EndpointPolicy } from "../lib/endpoint-policy.js";
 import { DEFAULT_CONFIG_PATH } from "../init.js";
 import type { MachineId } from "../lib/machine-id.js";
 
@@ -25,6 +26,7 @@ function makeDeps(opts?: {
   postJson?: any;
   postThrows?: boolean;
   stdin?: string;
+  resolveThrows?: boolean;
 }): Harness {
   const files = new Map<string, { data: string; mode: number; uid?: number; gid?: number; symlink?: boolean }>();
   for (const f of opts?.preExisting ?? []) files.set(f, { data: "stale", mode: 0o600 });
@@ -62,7 +64,7 @@ function makeDeps(opts?: {
     log: (m) => logs.push(m),
     warn: (m) => warns.push(m),
     error: (m) => errors.push(m),
-    fetch: async () => ({ status: 200 }),
+    fetch: async () => new Response(null, { status: 200 }),
     readStdin: async () => opts?.stdin ?? "",
     postJson: async (url, body, headers) => {
       posts.push({ url, body, headers });
@@ -73,6 +75,10 @@ function makeDeps(opts?: {
       };
     },
     readMachineId: () => (opts?.machine === undefined ? MACHINE : opts.machine),
+    resolveEndpoint: async () => {
+      if (opts?.resolveThrows) throw new Error("resolved to a private address");
+      return [{ address: "203.0.113.10", family: 4 }];
+    },
   };
   return { deps, files, logs, warns, errors, posts };
 }
@@ -83,6 +89,26 @@ describe("normalizeDashboardBase", () => {
   });
   it("strips an accidental /api/v1/ingest suffix", () => {
     expect(normalizeDashboardBase("https://app.glassmkr.com/api/v1/ingest")).toBe("https://app.glassmkr.com");
+  });
+});
+
+describe("postJsonWithPolicy", () => {
+  const policy: EndpointPolicy = { allowInsecure: false, allowedOrigins: [] };
+
+  it("uses a pinned dispatcher for the validated enrollment address", async () => {
+    const fetchImpl = async (_input: string | URL | Request, init?: RequestInit) => {
+      expect((init as RequestInit & { dispatcher?: unknown }).dispatcher).toBeTruthy();
+      return new Response('{"ok":true}', { status: 201 });
+    };
+    const result = await postJsonWithPolicy(
+      "https://app.example/api/v1/servers",
+      { hostname: "node" },
+      { Authorization: "Bearer fixture" },
+      policy,
+      fetchImpl as typeof fetch,
+      async () => [{ address: "203.0.113.10", family: 4 }],
+    );
+    expect(result).toEqual({ status: 201, json: { ok: true } });
   });
 });
 
@@ -177,5 +203,52 @@ describe("runEnroll", () => {
     const code = await runEnroll({ accountKey: "-" }, h.deps);
     expect(code).toBe(0);
     expect(h.posts[0].headers.Authorization).toBe(`Bearer ${ACCT_KEY}`);
+  });
+
+  it("rejects HTTP enrollment by default", async () => {
+    const h = makeDeps();
+    const code = await runEnroll({ accountKey: ACCT_KEY, dashboardUrl: "http://enroll.example.com" }, h.deps);
+    expect(code).toBe(14);
+    expect(h.posts).toHaveLength(0);
+  });
+
+  it("supports an explicit insecure self-hosting opt-in", async () => {
+    const h = makeDeps({
+      postJson: { server: { id: "srv_local", collector_key: COLLECTOR_KEY }, ingest_url: "http://10.0.0.5/api/v1/ingest" },
+    });
+    const code = await runEnroll({
+      accountKey: ACCT_KEY,
+      dashboardUrl: "http://10.0.0.5",
+      allowInsecureEndpoint: true,
+    }, h.deps);
+    expect(code).toBe(0);
+    expect(h.files.get(DEFAULT_CONFIG_PATH)?.data).toContain("allow_insecure_endpoint: true");
+  });
+
+  it("rejects a returned cross-origin ingest endpoint by default", async () => {
+    const h = makeDeps({
+      postJson: { server: { id: "srv_abc123", collector_key: COLLECTOR_KEY }, ingest_url: "https://ingest.example.com/api/v1/ingest" },
+    });
+    const code = await runEnroll({ accountKey: ACCT_KEY }, h.deps);
+    expect(code).toBe(12);
+    expect(h.files.has(DEFAULT_CONFIG_PATH)).toBe(false);
+  });
+
+  it("accepts a returned cross-origin ingest endpoint only when allowlisted", async () => {
+    const h = makeDeps({
+      postJson: { server: { id: "srv_abc123", collector_key: COLLECTOR_KEY }, ingest_url: "https://ingest.example.com/api/v1/ingest" },
+    });
+    const code = await runEnroll({
+      accountKey: ACCT_KEY,
+      allowedEndpointOrigins: ["https://ingest.example.com"],
+    }, h.deps);
+    expect(code).toBe(0);
+  });
+
+  it("fails closed when endpoint DNS validation fails", async () => {
+    const h = makeDeps({ resolveThrows: true });
+    const code = await runEnroll({ accountKey: ACCT_KEY }, h.deps);
+    expect(code).toBe(14);
+    expect(h.posts).toHaveLength(0);
   });
 });

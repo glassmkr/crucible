@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { assertSecureConfigStat, loadConfig } from "../config.js";
+import { assertSecureConfigStat, configLoadFailureMessage, loadConfig } from "../config.js";
 
 const tempDirs: string[] = [];
 
@@ -53,6 +53,11 @@ describe("assertSecureConfigStat", () => {
 });
 
 describe("loadConfig", () => {
+  it("formats integrity failures as explicit refuse-to-start errors", () => {
+    expect(configLoadFailureMessage("/etc/glassmkr/crucible.yaml", new Error("unsafe owner")))
+      .toContain("Refusing to start: /etc/glassmkr/crucible.yaml failed integrity or schema validation: unsafe owner");
+  });
+
   it("loads a service-owned legacy config, warns once, and sets the migration flag", () => {
     const dir = mkdtempSync(join(tmpdir(), "crucible-config-"));
     tempDirs.push(dir);

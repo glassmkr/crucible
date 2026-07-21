@@ -17,6 +17,9 @@ function makeDeps(opts?: {
   systemctlExitCode?: number | null;
   fetchStatus?: number;
   fetchThrows?: boolean;
+  fetchLocation?: string;
+  resolveThrows?: boolean;
+  resolveAddresses?: Array<{ address: string; family: 4 | 6 }>;
   stdin?: string;
 }): { deps: InitDeps; fs: FakeFs; logs: string[]; warns: string[]; errors: string[]; systemctlCalls: string[][] } {
   const fs: FakeFs = { files: new Map(), dirs: new Set() };
@@ -87,7 +90,14 @@ function makeDeps(opts?: {
     error: (m) => errors.push(m),
     fetch: async () => {
       if (opts?.fetchThrows) throw new Error("network down");
-      return { status: opts?.fetchStatus ?? 200 };
+      return new Response(null, {
+        status: opts?.fetchStatus ?? 200,
+        headers: opts?.fetchLocation ? { location: opts.fetchLocation } : undefined,
+      });
+    },
+    resolveEndpoint: async () => {
+      if (opts?.resolveThrows) throw new Error("endpoint resolved to a private address");
+      return opts?.resolveAddresses ?? [{ address: "203.0.113.10", family: 4 }];
     },
     readStdin: async () => opts?.stdin ?? "",
   };
@@ -129,6 +139,14 @@ describe("buildCollectorYaml", () => {
   it("escapes embedded double quotes in name", () => {
     const y = buildCollectorYaml('we"ird', "https://x", VALID_NEW_KEY);
     expect(y).toContain('server_name: "we\\"ird"');
+  });
+  it("persists endpoint policy exceptions for runtime pushes", () => {
+    const y = buildCollectorYaml("h", "http://10.0.0.5/api/v1/ingest", VALID_NEW_KEY, {
+      allowInsecure: true,
+      allowedOrigins: ["https://ingest.internal.example"],
+    });
+    expect(y).toContain("allow_insecure_endpoint: true");
+    expect(y).toContain('- "https://ingest.internal.example"');
   });
 });
 
@@ -206,6 +224,7 @@ describe("runInit", () => {
     const { deps, fs, logs } = makeDeps({
       preExistingFiles: [configPath],
       preExistingFileData: { [configPath]: original },
+      resolveThrows: true,
     });
     const file = fs.files.get(configPath)!;
     file.uid = 1000;
@@ -318,6 +337,38 @@ describe("runInit", () => {
     const { deps, fs } = makeDeps();
     await runInit({ apiKey: VALID_NEW_KEY, ingestUrl: "https://dashboard.example.com/api/v1/ingest", configPath, noVerify: true }, deps);
     expect(fs.files.get(configPath)?.data).toContain('url: "https://dashboard.example.com"');
+  });
+
+  it("fails before writing when a private ingest endpoint is not allowed", async () => {
+    const { deps, fs, errors } = makeDeps();
+    const code = await runInit({ apiKey: VALID_NEW_KEY, ingestUrl: "http://10.0.0.5/api/v1/ingest", configPath, noVerify: true }, deps);
+    expect(code).toBe(14);
+    expect(fs.files.has(configPath)).toBe(false);
+    expect(errors[0]).toContain("--allow-insecure-endpoint");
+  });
+
+  it("allows and persists an explicitly insecure private ingest endpoint", async () => {
+    const { deps, fs } = makeDeps();
+    const code = await runInit({
+      apiKey: VALID_NEW_KEY,
+      ingestUrl: "http://10.0.0.5/api/v1/ingest",
+      configPath,
+      noVerify: true,
+      allowInsecureEndpoint: true,
+    }, deps);
+    expect(code).toBe(0);
+    expect(fs.files.get(configPath)?.data).toContain("allow_insecure_endpoint: true");
+  });
+
+  it("rejects a probe redirect to a private endpoint before writing config", async () => {
+    const { deps, fs, errors } = makeDeps({
+      fetchStatus: 302,
+      fetchLocation: "https://127.0.0.1/api/v1/ingest",
+    });
+    const code = await runInit({ apiKey: VALID_NEW_KEY, configPath }, deps);
+    expect(code).toBe(14);
+    expect(fs.files.has(configPath)).toBe(false);
+    expect(errors.some((message) => message.includes("refusing ingest redirect"))).toBe(true);
   });
 
   it("systemctl restart failure surfaces as exit code 9", async () => {

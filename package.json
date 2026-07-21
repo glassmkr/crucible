@@ -45,6 +45,7 @@
     "url": "https://github.com/glassmkr/crucible.git"
   },
   "dependencies": {
+    "undici": "8.8.0",
     "yaml": "^2.4.0",
     "zod": "^3.23.0"
   },

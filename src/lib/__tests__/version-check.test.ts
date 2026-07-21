@@ -1,5 +1,7 @@
-import { describe, it, expect } from "vitest";
-import { isOlderVersion } from "../version-check.js";
+import { beforeEach, describe, it, expect, vi } from "vitest";
+import { __test_only, checkForUpdates, isOlderVersion } from "../version-check.js";
+
+beforeEach(() => __test_only.reset());
 
 describe("isOlderVersion (update-check comparison)", () => {
   it("returns true when current is older than latest (a genuine update)", () => {
@@ -35,5 +37,29 @@ describe("isOlderVersion (update-check comparison)", () => {
     expect(isOlderVersion("v0.13.7", "0.13.8")).toBe(true);
     expect(isOlderVersion("0.13.7", "v0.13.8")).toBe(true);
     expect(isOlderVersion("v0.13.8", "v0.13.8")).toBe(false);
+  });
+});
+
+describe("checkForUpdates endpoint policy", () => {
+  it("rejects a private update endpoint before fetch", async () => {
+    const fetchImpl = vi.fn();
+    await checkForUpdates("https://updates.example", undefined, {
+      fetch: fetchImpl as typeof fetch,
+      resolveEndpoint: async () => { throw new Error("private resolution"); },
+    });
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
+  it("revalidates and rejects a redirect to a private target", async () => {
+    const fetchImpl = vi.fn(async (_input: string | URL | Request, _init?: RequestInit) => new Response(null, {
+      status: 302,
+      headers: { location: "https://127.0.0.1/version" },
+    }));
+    await checkForUpdates("https://updates.example", undefined, {
+      fetch: fetchImpl as typeof fetch,
+      resolveEndpoint: async () => [{ address: "203.0.113.10", family: 4 }],
+    });
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+    expect(fetchImpl.mock.calls[0][1]?.redirect).toBe("manual");
   });
 });

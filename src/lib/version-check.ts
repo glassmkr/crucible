@@ -1,4 +1,10 @@
 import { CRUCIBLE_VERSION as CURRENT_VERSION } from "./version.js";
+import {
+  assertEndpointResolution,
+  fetchPinnedEndpoint,
+  validateEndpoint,
+  type EndpointPolicy,
+} from "./endpoint-policy.js";
 
 let lastCheckTime = 0;
 const CHECK_INTERVAL = 6 * 60 * 60 * 1000; // check every 6 hours
@@ -24,16 +30,54 @@ export function isOlderVersion(current: string, latest: string): boolean {
   return false;
 }
 
-export async function checkForUpdates(dashboardUrl?: string): Promise<void> {
+export interface VersionCheckDeps {
+  fetch: typeof fetch;
+  resolveEndpoint: typeof assertEndpointResolution;
+}
+
+const defaultDeps: VersionCheckDeps = { fetch, resolveEndpoint: assertEndpointResolution };
+
+export async function checkForUpdates(
+  dashboardUrl?: string,
+  policy: EndpointPolicy = { allowInsecure: false, allowedOrigins: [] },
+  deps: VersionCheckDeps = defaultDeps,
+): Promise<void> {
   const now = Date.now();
   if (now - lastCheckTime < CHECK_INTERVAL) return;
   lastCheckTime = now;
 
   const url = dashboardUrl || "https://app.glassmkr.com";
   try {
-    const res = await fetch(`${url}/api/v1/version`, { signal: AbortSignal.timeout(5000) });
-    if (!res.ok) return;
-    const data = await res.json() as { crucible?: { latest?: string; min_supported?: string; changelog_url?: string } };
+    const initial = validateEndpoint(`${url.replace(/\/+$/, "")}/api/v1/version`, policy);
+    const initialOrigin = initial.origin;
+    let current = initial;
+    let data: { crucible?: { latest?: string; min_supported?: string; changelog_url?: string } } | undefined;
+    for (let redirectCount = 0; redirectCount <= 3; redirectCount++) {
+      const { response, dispatcher } = await fetchPinnedEndpoint(current, {
+        redirect: "manual",
+        signal: AbortSignal.timeout(5000),
+      }, policy, deps.fetch, deps.resolveEndpoint);
+      if ([301, 302, 303, 307, 308].includes(response.status)) {
+        const location = response.headers.get("location");
+        await response.body?.cancel();
+        await dispatcher.close();
+        if (!location) return;
+        current = validateEndpoint(new URL(location, current).toString(), policy, initialOrigin);
+        continue;
+      }
+      if (!response.ok) {
+        await response.body?.cancel();
+        await dispatcher.close();
+        return;
+      }
+      try {
+        data = await response.json() as typeof data;
+      } finally {
+        await dispatcher.close();
+      }
+      break;
+    }
+    if (!data) return;
     const latest = data.crucible?.latest;
     if (!latest) return;
 
@@ -46,3 +90,7 @@ export async function checkForUpdates(dashboardUrl?: string): Promise<void> {
     // Version check is non-critical, fail silently
   }
 }
+
+export const __test_only = {
+  reset: () => { lastCheckTime = 0; },
+};
