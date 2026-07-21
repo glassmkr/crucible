@@ -133,6 +133,7 @@ import { collectGpu } from "./collect/gpu.js";
 import { collectThermal } from "./collect/thermal.js";
 import { collectDmi, formatVendorLine } from "./collect/dmi.js";
 import { detectIpmiCapability, formatCapabilityLine } from "./lib/capability.js";
+import { checkPrivilegedWrapper } from "./lib/privileged.js";
 import type { Snapshot, IpmiInfo, DmiInfo, IpmiCapability } from "./lib/types.js";
 import { consumeRebootMarker, type PlannedReboot } from "./lib/reboot-marker.js";
 import {
@@ -168,6 +169,13 @@ console.log(`[collector] Starting. Server: ${config.server_name}. Interval: ${co
 console.log(`[collector] IPMI: ${config.collection.ipmi ? "enabled" : "disabled"}, SMART: ${config.collection.smart ? "enabled" : "disabled"}`);
 console.log(`[collector] Dashboard: ${config.dashboard.enabled ? config.dashboard.url : "disabled"}`);
 console.log(`[collector] Prometheus: ${config.prometheus.enabled ? `${config.prometheus.address}:${config.prometheus.port}/metrics` : "disabled"}`);
+
+// This runs inside the persistent service unit. Its journal marker is the
+// authoritative canary for the real sandbox, sudo implementation, and SELinux
+// context; a systemd-run reproduction is not equivalent on RHEL-family hosts.
+void checkPrivilegedWrapper()
+  .then((ok) => console.log(`[collector] Privileged wrapper self-check: ${ok ? "ok" : "failed"}`))
+  .catch(() => console.log("[collector] Privileged wrapper self-check: failed"));
 
 // /proc/pressure is absent on kernels < 4.20, built without CONFIG_PSI, or
 // shipping PSI default-disabled (CONFIG_PSI_DEFAULT_DISABLED=y; stock

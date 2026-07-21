@@ -19,12 +19,35 @@
 // root:root 0755 (not writable by `glassmkr`) so the sudo grant cannot be
 // hijacked by tampering with the script.
 
-import { run } from "./exec.js";
+import { run, runDetailed, type RunDetailedResult } from "./exec.js";
 import { existsSync } from "fs";
 
 export const SERVICE_USER = "glassmkr";
 export const WRAPPER_PATH = "/usr/local/sbin/crucible-collect";
 export const SUDOERS_PATH = "/etc/sudoers.d/glassmkr-crucible";
+
+type DetailedRunner = (
+  cmd: string,
+  args: string[],
+  timeoutMs?: number,
+) => Promise<RunDetailedResult>;
+
+/**
+ * Prove that the running agent can cross the narrow sudo boundary. The fixed
+ * ssh-config-mtime action is available on every supported host and returns a
+ * numeric value even when no SSH config exists. Calling this from index.ts
+ * makes the result authoritative for the real persistent unit and sandbox.
+ */
+export async function checkPrivilegedWrapper(
+  execute: DetailedRunner = runDetailed,
+  wrapperExists: (path: string) => boolean = existsSync,
+): Promise<boolean> {
+  if (!wrapperExists(WRAPPER_PATH)) return false;
+  const result = await execute("sudo", ["-n", WRAPPER_PATH, "ssh-config-mtime"], 10_000);
+  return result.installed
+    && result.exitCode === 0
+    && /^\d+\s*$/.test(result.stdout ?? "");
+}
 
 // The fixed action set. Each maps to a hard-coded argv in the wrapper.
 // `smart` takes a device path; `ethtool` takes an interface name; both are

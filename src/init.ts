@@ -152,11 +152,13 @@ export function buildSystemdUnit(binPath: string, configPath: string, user = SER
     // explicitly accepts the fallback through ROOT_FALLBACK_ENV.
     `User=${user}`,
     `ExecStart=${binPath} ${configPath}`,
+    // LockPersonality, ProtectKernelTunables, and other directives that imply
+    // NoNewPrivileges (see systemd.exec) are deliberately omitted. systemd forces
+    // NoNewPrivileges=yes for them, and NoNewPrivileges=no cannot override
+    // that implication. Classic sudo needs its setuid transition here.
     `ProtectHome=yes`,
     `PrivateTmp=yes`,
-    `ProtectKernelTunables=yes`,
     `ProtectControlGroups=yes`,
-    `LockPersonality=yes`,
     `ProtectSystem=strict`,
     `ReadWritePaths=${STATE_DIR} ${REBOOT_MARKER_DIR}`,
     `Restart=always`,

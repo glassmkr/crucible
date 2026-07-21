@@ -173,13 +173,15 @@ describe("buildSystemdUnit", () => {
     expect(u).toContain("Type=simple");
     expect(u).toContain("Restart=always");
     expect(u).toContain("User=glassmkr");
+    // Lock this against systemd's NNP implication trap. These directives
+    // break the setuid sudo wrapper even if NoNewPrivileges=no is explicit.
     expect(u).toContain("ProtectHome=yes");
     expect(u).toContain("PrivateTmp=yes");
-    expect(u).toContain("ProtectKernelTunables=yes");
     expect(u).toContain("ProtectControlGroups=yes");
-    expect(u).toContain("LockPersonality=yes");
     expect(u).toContain("ProtectSystem=strict");
     expect(u).toContain("ReadWritePaths=/var/lib/glassmkr /var/lib/crucible");
+    expect(u).not.toContain("LockPersonality=");
+    expect(u).not.toContain("ProtectKernelTunables=");
     expect(u).not.toContain("NoNewPrivileges=");
     expect(u).not.toContain("RestrictSUIDSGID=");
   });

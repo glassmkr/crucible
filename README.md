@@ -242,30 +242,41 @@ installer emits a prominent security warning when it honors this override.
 
 The service user receives `systemd-journal` membership for failed-unit context.
 `init` removes the broader legacy `adm` membership when present. The generated
-unit enables `ProtectHome`, `PrivateTmp`, `ProtectKernelTunables`,
-`ProtectControlGroups`, `LockPersonality`, and `ProtectSystem=strict`, with
-write access limited to `/var/lib/glassmkr` and `/var/lib/crucible`.
+unit enables `ProtectHome`, `PrivateTmp`, `ProtectControlGroups`, and
+`ProtectSystem=strict`, with write access limited to `/var/lib/glassmkr` and
+`/var/lib/crucible`.
 
 `NoNewPrivileges` and `RestrictSUIDSGID` are deliberately not set because the
 collector's narrow root wrapper is reached through the setuid `sudo` binary.
+`LockPersonality` and `ProtectKernelTunables` are also deliberately omitted:
+systemd makes either directive imply `NoNewPrivileges=yes`, and an explicit
+`NoNewPrivileges=no` cannot override that implication. Classic sudo then cannot
+perform its setuid transition. `sudo-rs` may tolerate the same context, so a
+green result on a sudo-rs host does not validate classic sudo.
 This is a residual risk: the wrapper and sudoers rule are root-owned, fixed
 action, and fail closed, but the service can still invoke that reviewed setuid
 boundary. Keep sudo's `secure_path` configured and do not grant the `glassmkr`
 user any broader sudo access.
 
-Before shipping this hardening on a distro, run the privileged-wrapper smoke
-test after `init`:
+Before shipping this hardening on a distro, install and start the real generated
+unit, wait for its first collection, then run the privileged-wrapper smoke test:
 
 ```bash
 sudo npm run test:hardened-wrapper
 ```
 
-The test launches a transient `User=glassmkr`, `ProtectSystem=strict` unit and
-requires a fixed privileged action to return data. This check is required on
-Ubuntu 24.04, Debian 12, and Rocky 9 because sudo may need writable runtime
-state under `/run`. A failure blocks rollout until the required narrow writable
-runtime path or `RuntimeDirectory=` setting is established. Never add
-`/etc/glassmkr` to `ReadWritePaths`; runtime configuration stays read-only.
+The test inspects the running `glassmkr-crucible.service`, requires its effective
+`NoNewPrivileges` value to be `no`, and checks the current service invocation's
+journal for a successful fixed privileged action. This proves escalation under
+the real persistent unit, its shipped sandbox, the installed sudo, and the host
+SELinux policy. The real installed unit is required for a green result.
+
+A `systemd-run --pipe` reproduction is not authoritative on RHEL-family hosts:
+SELinux can reject sudo from that transient harness even with no sandbox
+directives. Validate the persistent unit on a RHEL-family host with SELinux
+enforcing and on a Debian or Ubuntu host with classic sudo before rollout.
+Never add `/etc/glassmkr` to `ReadWritePaths`; runtime configuration stays
+read-only.
 
 Failed-unit journal excerpts cross the host-to-dashboard data boundary. The
 feature remains enabled, but the agent exports at most five lines per unit,

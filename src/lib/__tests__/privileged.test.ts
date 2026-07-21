@@ -7,6 +7,7 @@ import {
   WRAPPER_PATH,
   SUDOERS_PATH,
   SERVICE_USER,
+  checkPrivilegedWrapper,
 } from "../privileged.js";
 import { setupPrivilegeSeparation, type InitDeps } from "../../init.js";
 
@@ -53,6 +54,28 @@ const okExec: ExecImpl = (cmd, args) =>
   cmd === "id" && args[0] === "-G" ? { stdout: "0", status: 0 } :
   cmd === "id" ? { stdout: "", status: 1 } :
   { stdout: "", status: 0 };
+
+describe("checkPrivilegedWrapper", () => {
+  it("accepts only an installed wrapper action that exits zero with numeric data", async () => {
+    const success = async () => ({
+      installed: true,
+      exitCode: 0,
+      stdout: "1712345678\n",
+      stderr: "",
+      timedOut: false,
+    });
+    const nnpFailure = async () => ({
+      installed: true,
+      exitCode: 1,
+      stdout: "",
+      stderr: "sudo: The no new privileges flag is set",
+      timedOut: false,
+    });
+    expect(await checkPrivilegedWrapper(success, () => true)).toBe(true);
+    expect(await checkPrivilegedWrapper(nnpFailure, () => true)).toBe(false);
+    expect(await checkPrivilegedWrapper(success, () => false)).toBe(false);
+  });
+});
 
 describe("setupPrivilegeSeparation", () => {
   it("succeeds on a clean box: creates user, installs wrapper 0755 + sudoers 0440", () => {
