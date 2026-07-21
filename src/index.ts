@@ -107,7 +107,7 @@ import { sendTelegram } from "./notify/telegram.js";
 import { sendSlack } from "./notify/slack.js";
 import { sendEmail } from "./notify/email.js";
 import { pushToDashboard, initDashboardAgent } from "./push/dashboard.js";
-import { collectSecurity, type SecurityData } from "./collect/security.js";
+import { collectSecurity, securityCollectionAvailability, type SecurityData } from "./collect/security.js";
 import { collectSupportStatus } from "./collect/support-status.js";
 import { collectZfs } from "./collect/zfs.js";
 import { collectEdac } from "./collect/edac.js";
@@ -136,7 +136,6 @@ import { detectIpmiCapability, formatCapabilityLine } from "./lib/capability.js"
 import type { Snapshot, IpmiInfo, DmiInfo, IpmiCapability } from "./lib/types.js";
 import { consumeRebootMarker, type PlannedReboot } from "./lib/reboot-marker.js";
 import {
-  availabilityFromValue,
   collectOptional,
   staleAvailability,
   type CollectionStatusMap,
@@ -261,7 +260,14 @@ async function assignOptional<K extends keyof Snapshot>(
   key: K,
   collector: () => Snapshot[K] | null | Promise<Snapshot[K] | null>,
 ): Promise<void> {
-  const value = await collectOptional(String(key), collector, statuses);
+  const value = await collectOptional(
+    String(key),
+    collector,
+    statuses,
+    undefined,
+    undefined,
+    { nullMeansAbsent: true },
+  );
   if (value !== undefined) {
     (snapshot as unknown as Record<string, unknown>)[String(key)] = value;
   }
@@ -298,7 +304,7 @@ async function collect() {
     lastSecurityResult = await collectSecurity();
     lastSecurityAt = new Date();
     securityResult = lastSecurityResult;
-    collectionStatus.security = availabilityFromValue(securityResult);
+    collectionStatus.security = securityCollectionAvailability(securityResult);
   } catch (err) {
     console.error("[security] Collection error:", err);
     collectionStatus.security = { available: false, error: err instanceof Error ? err.message : String(err) };

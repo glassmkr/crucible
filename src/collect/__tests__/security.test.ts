@@ -13,8 +13,10 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
 const runMock = vi.fn();
+const runDetailedMock = vi.fn();
 vi.mock("../../lib/exec.js", () => ({
   run: (...args: unknown[]) => runMock(...args),
+  runDetailed: (...args: unknown[]) => runDetailedMock(...args),
 }));
 vi.mock("fs", () => ({
   existsSync: () => false,
@@ -28,10 +30,20 @@ const {
   iptablesHasEffectiveIngressProtection,
   nftHasEffectiveIngressProtection,
   readKernelVulnerability,
+  securityCollectionAvailability,
 } = await import("../security.js");
+const { allRules } = await import("../../alerts/rules.js");
 
 beforeEach(() => {
   runMock.mockReset();
+  runDetailedMock.mockReset();
+  runDetailedMock.mockResolvedValue({
+    installed: true,
+    exitCode: 1,
+    stdout: null,
+    stderr: "",
+    timedOut: false,
+  });
   __resetSecurityCacheForTests();
 });
 
@@ -124,12 +136,21 @@ describe("fail-visible security probes", () => {
         type filter hook input priority 0; policy drop;
       }
     }`)).toBe(true);
+    expect(nftHasEffectiveIngressProtection(`table inet filter {
+      chain input {
+        type filter hook input priority 0; policy accept;
+        tcp dport { 22, 80 } accept
+        ct state invalid drop
+      }
+    }`)).toBe(true);
   });
 
   it("evaluates only the iptables INPUT policy and verdicts", () => {
     const acceptOnly = "Chain INPUT (policy ACCEPT)\ntarget prot opt source destination\nACCEPT all -- 0.0.0.0/0 0.0.0.0/0\n\nChain DOCKER (policy ACCEPT)\nDROP all -- 0.0.0.0/0 0.0.0.0/0\n";
     expect(iptablesHasEffectiveIngressProtection(acceptOnly)).toBe(false);
     expect(iptablesHasEffectiveIngressProtection(acceptOnly.replace("policy ACCEPT", "policy DROP"))).toBe(true);
+    const fail2banOnly = "Chain INPUT (policy ACCEPT)\ntarget prot opt source destination\nDROP all -- 203.0.113.8 0.0.0.0/0\n";
+    expect(iptablesHasEffectiveIngressProtection(fail2banOnly)).toBe(false);
   });
 
   it("marks a failed kernel vulnerability read unknown and unavailable", () => {
@@ -141,10 +162,29 @@ describe("fail-visible security probes", () => {
     });
   });
 
-  it("reports firewall state unknown when no probe can establish it", async () => {
+  it("reports no installed firewall tooling as a reachable inactive state", async () => {
     runMock.mockResolvedValue(null);
     const result = await collectSecurity();
+    expect(result.firewall).toMatchObject({ available: true, active: false, source: "none" });
+    const noFirewallRule = allRules.find((rule) => rule.type === "no_firewall")!;
+    expect(noFirewallRule.evaluate({ security: result } as any, {} as any)).toHaveLength(1);
+  });
+
+  it("propagates a present but failed firewall probe into collection status", async () => {
+    runMock.mockResolvedValue(null);
+    runDetailedMock.mockImplementation((_cmd: string, args: string[]) => Promise.resolve({
+      installed: true,
+      exitCode: args[0] === "nft" ? 0 : 1,
+      stdout: args[0] === "nft" ? "/usr/sbin/nft\n" : null,
+      stderr: "",
+      timedOut: false,
+    }));
+    const result = await collectSecurity();
     expect(result.firewall).toMatchObject({ available: false, active: null, source: "unknown" });
+    expect(securityCollectionAvailability(result)).toMatchObject({
+      available: false,
+      error: expect.stringContaining("firewall"),
+    });
   });
 
   it("ignores commented unattended-upgrades examples and accepts effective apt-config", async () => {

@@ -1,4 +1,4 @@
-import { run } from "../lib/exec.js";
+import { run, runDetailed } from "../lib/exec.js";
 import { runPrivileged } from "../lib/privileged.js";
 import { readFileSync, existsSync, readdirSync, statSync } from "fs";
 import type { CollectorAvailability } from "../lib/availability.js";
@@ -109,6 +109,19 @@ export async function collectSecurity(): Promise<SecurityData> {
     kernel_reboot: kernelReboot,
     auto_updates: autoUpdates,
   };
+}
+
+export function securityCollectionAvailability(data: SecurityData): CollectorAvailability {
+  if (data.available === false) {
+    return { available: false, error: data.error ?? "security collector reported unavailable" };
+  }
+  if (data.firewall.available === false) {
+    return {
+      available: false,
+      error: `firewall: ${data.firewall.error ?? "probe reported unavailable"}`,
+    };
+  }
+  return { available: true };
 }
 
 /**
@@ -260,8 +273,17 @@ async function checkSshConfig(): Promise<SshSecurityStatus | null> {
 // === Firewall ===
 
 async function checkFirewall(): Promise<FirewallStatus> {
+  const toolNames = ["ufw", "firewall-cmd", "pve-firewall", "nft", "iptables"] as const;
+  const toolLookups = await Promise.all(toolNames.map(async (name) => {
+    const result = await runDetailed("which", [name], 2000);
+    if (!result.installed || result.timedOut || result.exitCode === null) return "unknown" as const;
+    return result.exitCode === 0 && Boolean(result.stdout?.trim()) ? "present" as const : "absent" as const;
+  }));
+  let sawProbeOutput = false;
+
   // UFW: if installed, its status is authoritative (ignores Docker iptables chains)
   const ufw = await runPrivileged("ufw", [], 5000);
+  sawProbeOutput ||= Boolean(ufw?.trim());
   if (ufw && ufw.includes("Status:")) {
     const active = ufw.includes("Status: active");
     return { available: true, active, source: "ufw", details: active ? "UFW is active" : "UFW is inactive" };
@@ -269,6 +291,7 @@ async function checkFirewall(): Promise<FirewallStatus> {
 
   // firewalld: if installed, its status is authoritative
   const fwd = await runPrivileged("firewall-cmd", [], 5000);
+  sawProbeOutput ||= Boolean(fwd?.trim());
   if (fwd) {
     if (fwd.trim() === "running") {
       return { available: true, active: true, source: "firewalld", details: "firewalld is running" };
@@ -285,6 +308,7 @@ async function checkFirewall(): Promise<FirewallStatus> {
   // active. Added 2026-05-18 after a validation Proxmox host was found
   // with `no_firewall` muted as a workaround for missing detection.
   const pve = await runPrivileged("pve-firewall", [], 5000);
+  sawProbeOutput ||= Boolean(pve?.trim());
   if (pve) {
     // Status line shape: "Status: <state>/<systemd>" e.g.
     //   "Status: enabled/running"
@@ -305,6 +329,7 @@ async function checkFirewall(): Promise<FirewallStatus> {
 
   // nftables (only if no managed firewall found)
   const nft = await runPrivileged("nft", [], 5000);
+  sawProbeOutput ||= Boolean(nft?.trim());
   if (nft) {
     const active = nftHasEffectiveIngressProtection(nft);
     return {
@@ -317,6 +342,7 @@ async function checkFirewall(): Promise<FirewallStatus> {
 
   // iptables fallback: filter out Docker/container chains to avoid false positives
   const ipt = await runPrivileged("iptables", [], 5000);
+  sawProbeOutput ||= Boolean(ipt?.trim());
   if (ipt) {
     const active = iptablesHasEffectiveIngressProtection(ipt);
     return {
@@ -327,18 +353,38 @@ async function checkFirewall(): Promise<FirewallStatus> {
     };
   }
 
+  const noToolingPresent = !sawProbeOutput && toolLookups.every((result) => result === "absent");
+  if (noToolingPresent) {
+    return {
+      available: true,
+      active: false,
+      source: "none",
+      details: "No firewall tooling is installed",
+    };
+  }
+
   return {
     available: false,
     active: null,
     source: "unknown",
     details: "Could not establish effective ingress protection",
-    error: "firewall tools were unavailable or failed",
+    error: "firewall tooling was present or its availability could not be checked, but every probe failed",
   };
 }
 
 export function nftHasEffectiveIngressProtection(output: string): boolean {
-  for (const match of output.matchAll(/chain\s+[^\s{]+\s*\{([\s\S]*?)\}/g)) {
-    const body = match[1];
+  const chainStart = /\bchain\s+[^\s{]+\s*\{/g;
+  for (const match of output.matchAll(chainStart)) {
+    const openBrace = match.index + match[0].lastIndexOf("{");
+    let depth = 1;
+    let end = openBrace + 1;
+    while (end < output.length && depth > 0) {
+      if (output[end] === "{") depth++;
+      if (output[end] === "}") depth--;
+      end++;
+    }
+    if (depth !== 0) continue;
+    const body = output.slice(openBrace + 1, end - 1);
     if (!/\bhook\s+input\b/.test(body)) continue;
     if (/\bpolicy\s+(?:drop|reject)\s*;/.test(body)) return true;
     if (body.split(/\r?\n/).some((line) => /(?:^|\s)(?:drop|reject)(?:\s|$)/.test(line.trim()))) return true;
@@ -351,11 +397,7 @@ export function iptablesHasEffectiveIngressProtection(output: string): boolean {
   const start = lines.findIndex((line) => line.startsWith("Chain INPUT "));
   if (start < 0) return false;
   const header = lines[start].match(/\(policy ([A-Z]+)\)/);
-  if (header?.[1] === "DROP" || header?.[1] === "REJECT") return true;
-  for (let index = start + 1; index < lines.length && !lines[index].startsWith("Chain "); index++) {
-    if (/^(?:DROP|REJECT)\s/.test(lines[index].trim())) return true;
-  }
-  return false;
+  return header?.[1] === "DROP" || header?.[1] === "REJECT";
 }
 
 // === Pending Security Updates ===

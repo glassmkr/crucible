@@ -27,6 +27,35 @@ describe("collector availability", () => {
     expect(log).toHaveBeenCalledTimes(1);
   });
 
+  it("omits healthy null results when null means absent", async () => {
+    const statuses: CollectionStatusMap = {
+      zfs: { available: false, error: "stale failure" },
+    };
+    const result = await collectOptional(
+      "zfs",
+      () => null,
+      statuses,
+      undefined,
+      undefined,
+      { nullMeansAbsent: true },
+    );
+    expect(result).toBeUndefined();
+    expect(statuses).not.toHaveProperty("zfs");
+  });
+
+  it("still records explicit unavailable payloads in absent mode", async () => {
+    const statuses: CollectionStatusMap = {};
+    await collectOptional(
+      "zfs",
+      () => ({ available: false, error: "zpool probe failed" }),
+      statuses,
+      undefined,
+      undefined,
+      { nullMeansAbsent: true },
+    );
+    expect(statuses.zfs).toEqual({ available: false, error: "zpool probe failed" });
+  });
+
   it("marks stale data unavailable with age and last-success evidence", () => {
     const stale = staleAvailability(
       { firewall: { active: true } },

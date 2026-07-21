@@ -7,6 +7,10 @@ export interface CollectorAvailability {
 
 export type CollectionStatusMap = Record<string, CollectorAvailability>;
 
+export interface CollectOptionalOptions {
+  nullMeansAbsent?: boolean;
+}
+
 const lastErrorLogAt = new Map<string, number>();
 const ERROR_LOG_INTERVAL_MS = 5 * 60 * 1000;
 
@@ -34,9 +38,14 @@ export async function collectOptional<T>(
   statuses: CollectionStatusMap,
   log: (message: string) => void = (message) => console.error(message),
   now = Date.now(),
+  options: CollectOptionalOptions = {},
 ): Promise<T | undefined> {
   try {
     const value = await collect();
+    if ((value === null || value === undefined) && options.nullMeansAbsent) {
+      delete statuses[name];
+      return undefined;
+    }
     statuses[name] = availabilityFromValue(value);
     return value ?? undefined;
   } catch (error) {
