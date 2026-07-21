@@ -26,6 +26,21 @@ describe("buildSubprocessEnv", () => {
     );
     expect(result.stdout).toBe("tool-only");
   });
+
+  it("does not expose the Ubuntu Pro token to an ordinary spawned tool", async () => {
+    const previous = process.env.GLASSMKR_UBUNTU_PRO_TOKEN;
+    process.env.GLASSMKR_UBUNTU_PRO_TOKEN = "must-not-leak";
+    try {
+      const result = await runDetailed(
+        process.execPath,
+        ["-e", "process.stdout.write(process.env.GLASSMKR_UBUNTU_PRO_TOKEN || '')"],
+      );
+      expect(result.stdout).toBe("");
+    } finally {
+      if (previous === undefined) delete process.env.GLASSMKR_UBUNTU_PRO_TOKEN;
+      else process.env.GLASSMKR_UBUNTU_PRO_TOKEN = previous;
+    }
+  });
 });
 
 describe("looksLikeFieldRenameError", () => {

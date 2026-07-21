@@ -72,9 +72,10 @@ if (cliArgs.mode === "mark-reboot" || cliArgs.mode === "reboot") {
   }
   if (cliArgs.mode === "reboot") {
     const { execFileSync } = await import("node:child_process");
+    const { buildSubprocessEnv } = await import("./lib/exec.js");
     console.log("[reboot] invoking systemctl reboot");
     try {
-      execFileSync("systemctl", ["reboot"], { stdio: "inherit" });
+      execFileSync("systemctl", ["reboot"], { stdio: "inherit", env: buildSubprocessEnv() });
     } catch (err: any) {
       console.error(`[reboot] systemctl reboot failed: ${err?.message || err}`);
       process.exit(1);

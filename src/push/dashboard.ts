@@ -15,6 +15,32 @@ export function addResponseChunkSize(current: number, chunk: Buffer | string): n
   return next;
 }
 
+export async function readDashboardResponse(response: Response, abort?: () => void): Promise<{ active_alerts?: number }> {
+  const contentLength = response.headers.get("content-length");
+  if (contentLength !== null && Number(contentLength) > MAX_PINNED_RESPONSE_BYTES) {
+    abort?.();
+    throw new Error(`Dashboard response exceeded ${MAX_PINNED_RESPONSE_BYTES} bytes`);
+  }
+  if (!response.body) return {};
+
+  const reader = response.body.getReader();
+  const chunks: Buffer[] = [];
+  let responseBytes = 0;
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      responseBytes = addResponseChunkSize(responseBytes, Buffer.from(value));
+      chunks.push(Buffer.from(value));
+    }
+  } catch (err) {
+    abort?.();
+    await reader.cancel().catch(() => {});
+    throw err;
+  }
+  return JSON.parse(Buffer.concat(chunks).toString("utf8"));
+}
+
 export function initDashboardAgent(tlsPin?: string): void {
   if (!tlsPin) {
     agent = undefined; // Use default (Node built-in fetch)
@@ -52,14 +78,15 @@ export async function pushToDashboard(url: string, apiKey: string, snapshot: Sna
 
   // Default: use fetch (no pinning)
   try {
+    const controller = new AbortController();
     const response = await fetch(`${url}/api/v1/ingest`, {
       method: "POST",
       headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
       body: JSON.stringify(snapshot),
-      signal: AbortSignal.timeout(10000),
+      signal: AbortSignal.any([controller.signal, AbortSignal.timeout(10000)]),
     });
     if (response.ok) {
-      const data = await response.json() as { active_alerts?: number };
+      const data = await readDashboardResponse(response, () => controller.abort());
       console.log(`[dashboard] Push successful. Active alerts: ${data.active_alerts ?? 0}`);
     } else {
       console.error(`[dashboard] Push failed: ${response.status} ${response.statusText}`);

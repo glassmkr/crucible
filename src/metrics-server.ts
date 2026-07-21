@@ -8,7 +8,11 @@ export function updateMetrics(snapshot: Snapshot) {
 }
 
 export function escapePrometheusLabel(value: string): string {
-  return value.replace(/\\/g, "\\\\").replace(/\n/g, "\\n").replace(/"/g, '\\"');
+  return value
+    .replace(/[\x00-\x09\x0b-\x1f\x7f]/g, " ")
+    .replace(/\\/g, "\\\\")
+    .replace(/\n/g, "\\n")
+    .replace(/"/g, '\\"');
 }
 
 export function prometheusLabels(values: Record<string, string>): string {

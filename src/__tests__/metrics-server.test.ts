@@ -8,6 +8,10 @@ describe("Prometheus output hardening", () => {
     expect(escapePrometheusLabel('disk\\name"\nnext')).toBe('disk\\\\name\\"\\nnext');
   });
 
+  it("replaces carriage returns and NUL bytes in labels", () => {
+    expect(escapePrometheusLabel("before\rafter\0end")).toBe("before after end");
+  });
+
   it("serializes hostile disk, device, model, interface, and sensor labels safely", () => {
     const hostile = 'bad"\\\nlabel';
     const snapshot = {

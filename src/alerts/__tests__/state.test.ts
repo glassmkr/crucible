@@ -2,7 +2,7 @@ import { mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
-import { loadAlertStateFile, saveAlertStateFile, updateAlertState, __test_only, type AlertState } from "../state.js";
+import { loadAlertStateFile, MAX_CORRUPT_STATE_BACKUPS, saveAlertStateFile, updateAlertState, __test_only, type AlertState } from "../state.js";
 import type { AlertResult } from "../../lib/types.js";
 
 function alert(type: string, instance?: string): AlertResult {
@@ -105,6 +105,20 @@ describe("alert state persistence", () => {
     expect(backup).toBeTruthy();
     expect(readFileSync(join(dir, backup!), "utf8")).toBe("{broken");
     expect(error).toHaveBeenCalled();
+    error.mockRestore();
+  });
+
+  it("keeps only the newest corrupt-state backups", () => {
+    const error = vi.spyOn(console, "error").mockImplementation(() => {});
+    let timestamp = 1_700_000_000_000;
+    vi.spyOn(Date, "now").mockImplementation(() => timestamp++);
+    writeFileSync(path, "{broken", { mode: 0o600 });
+
+    for (let i = 0; i < MAX_CORRUPT_STATE_BACKUPS + 3; i++) loadAlertStateFile(path);
+
+    const backups = readdirSync(dir).filter((name) => name.includes(".corrupt-"));
+    expect(backups).toHaveLength(MAX_CORRUPT_STATE_BACKUPS);
+    expect(backups.some((name) => name.includes("1700000000000"))).toBe(false);
     error.mockRestore();
   });
 });

@@ -27,7 +27,6 @@ const ThresholdSchema = z.object({
     value.nvme_wear_percent,
     value.interface_utilization_percent,
   ].some((threshold) => threshold >= 100)
-    || !value.swap_alert
     || value.disk_latency_nvme_ms > 10_000
     || value.disk_latency_hdd_ms > 10_000
     || value.cpu_temp_warning_c > 110

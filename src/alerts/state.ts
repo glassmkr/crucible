@@ -6,16 +6,30 @@ import {
   fsyncSync,
   mkdirSync,
   openSync,
+  readdirSync,
   readFileSync,
   renameSync,
   unlinkSync,
   writeFileSync,
 } from "node:fs";
 import { randomUUID } from "node:crypto";
-import { dirname } from "node:path";
+import { basename, dirname } from "node:path";
 import type { AlertResult } from "../lib/types.js";
 
 const STATE_FILE = "/var/lib/glassmkr/alert-state.json";
+export const MAX_CORRUPT_STATE_BACKUPS = 5;
+
+function pruneCorruptBackups(path: string): void {
+  const parent = dirname(path);
+  const prefix = `${basename(path)}.corrupt-`;
+  const backups = readdirSync(parent)
+    .filter((name) => name.startsWith(prefix))
+    .sort()
+    .reverse();
+  for (const name of backups.slice(MAX_CORRUPT_STATE_BACKUPS)) {
+    unlinkSync(`${parent}/${name}`);
+  }
+}
 
 export interface AlertState {
   type: string;
@@ -49,6 +63,7 @@ export function loadAlertStateFile(path: string): Map<string, AlertState> {
     try {
       copyFileSync(path, backup, constants.COPYFILE_EXCL);
       chmodSync(backup, 0o600);
+      pruneCorruptBackups(path);
     } catch (backupErr) {
       console.error(`[state] Failed to preserve corrupt alert state at ${path}:`, backupErr);
     }
@@ -63,6 +78,7 @@ export function saveAlertStateFile(path: string, value: Map<string, AlertState>)
   for (const [key, item] of value) obj[key] = item;
   const temp = `${path}.tmp-${randomUUID()}`;
   let fd: number | undefined;
+  let parentFd: number | undefined;
   try {
     fd = openSync(
       temp,
@@ -74,10 +90,14 @@ export function saveAlertStateFile(path: string, value: Map<string, AlertState>)
     closeSync(fd);
     fd = undefined;
     renameSync(temp, path);
+    parentFd = openSync(parent, constants.O_RDONLY | constants.O_DIRECTORY);
+    fsyncSync(parentFd);
   } catch (err) {
-    if (fd !== undefined) closeSync(fd);
     try { unlinkSync(temp); } catch { /* best effort */ }
     throw err;
+  } finally {
+    if (fd !== undefined) closeSync(fd);
+    if (parentFd !== undefined) closeSync(parentFd);
   }
 }
 

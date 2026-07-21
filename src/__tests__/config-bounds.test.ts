@@ -39,4 +39,8 @@ describe("config bounds", () => {
     expect(config("thresholds:\n  disk_percent: 100\n")).toThrow(/acknowledge_disabled_detection/);
     expect(config("thresholds:\n  disk_percent: 100\n  acknowledge_disabled_detection: true\n")().thresholds.disk_percent).toBe(100);
   });
+
+  it("allows swap alerts to be disabled without a global detection acknowledgement", () => {
+    expect(config("thresholds:\n  swap_alert: false\n")().thresholds.swap_alert).toBe(false);
+  });
 });

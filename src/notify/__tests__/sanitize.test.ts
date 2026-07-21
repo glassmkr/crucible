@@ -3,7 +3,7 @@ import type { AlertResult } from "../../lib/types.js";
 import { buildEmailMessage } from "../email.js";
 import { escapeSlackMrkdwn, escapeTelegramHtml, isValidMailbox } from "../sanitize.js";
 import { sendSlack } from "../slack.js";
-import { sendTelegram } from "../telegram.js";
+import { sendTelegram, TELEGRAM_TEXT_LIMIT } from "../telegram.js";
 
 const hostile = 'host</b>*_`\r\nInjected';
 const alert: AlertResult = {
@@ -36,6 +36,25 @@ describe("notification sanitization", () => {
     const payload = JSON.parse(body);
     expect(payload.text).not.toContain("host</b>");
     expect(payload.text).toContain("&lt;/b&gt;");
+  });
+
+  it("keeps a large Telegram batch within the limit as complete HTML", async () => {
+    let body = "";
+    vi.stubGlobal("fetch", vi.fn(async (_url, init: RequestInit) => {
+      body = String(init.body);
+      return { ok: true };
+    }));
+    const large = Array.from({ length: 100 }, (_, index) => ({
+      ...alert,
+      title: `<title-${index}>`.repeat(100),
+      recommendation: `recommendation-${index} & `.repeat(200),
+    }));
+
+    expect(await sendTelegram("fake-token", "1", large, large, hostile)).toBe(true);
+    const text = JSON.parse(body).text as string;
+    expect(text.length).toBeLessThanOrEqual(TELEGRAM_TEXT_LIMIT);
+    expect((text.match(/<b>/g) ?? []).length).toBe((text.match(/<\/b>/g) ?? []).length);
+    expect(text).not.toMatch(/&(?:a|am|amp|l|lt|g|gt|q|qu|quo|quot)?$/);
   });
 
   it("serializes hostile Slack fields without raw mrkdwn controls", async () => {
