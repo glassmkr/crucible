@@ -107,7 +107,7 @@ import { sendTelegram } from "./notify/telegram.js";
 import { sendSlack } from "./notify/slack.js";
 import { sendEmail } from "./notify/email.js";
 import { pushToDashboard, initDashboardAgent } from "./push/dashboard.js";
-import { collectSecurity, type SecurityData } from "./collect/security.js";
+import { collectSecurity, securityCollectionAvailability, type SecurityData } from "./collect/security.js";
 import { collectSupportStatus } from "./collect/support-status.js";
 import { collectZfs } from "./collect/zfs.js";
 import { collectEdac } from "./collect/edac.js";
@@ -135,6 +135,11 @@ import { collectDmi, formatVendorLine } from "./collect/dmi.js";
 import { detectIpmiCapability, formatCapabilityLine } from "./lib/capability.js";
 import type { Snapshot, IpmiInfo, DmiInfo, IpmiCapability } from "./lib/types.js";
 import { consumeRebootMarker, type PlannedReboot } from "./lib/reboot-marker.js";
+import {
+  collectOptional,
+  staleAvailability,
+  type CollectionStatusMap,
+} from "./lib/availability.js";
 
 // Consume the planned-reboot marker once at startup. If the operator ran
 // `crucible-agent mark-reboot` / `reboot` before this boot, the marker
@@ -247,6 +252,26 @@ if (config.collection.ipmi) {
 // made legitimate fixes look broken from the customer's view for up
 // to an hour. Surfaced by CLEANUP_REPORT_2026-05-13.md.
 let lastSecurityResult: SecurityData | undefined;
+let lastSecurityAt: Date | undefined;
+
+async function assignOptional<K extends keyof Snapshot>(
+  snapshot: Snapshot,
+  statuses: CollectionStatusMap,
+  key: K,
+  collector: () => Snapshot[K] | null | Promise<Snapshot[K] | null>,
+): Promise<void> {
+  const value = await collectOptional(
+    String(key),
+    collector,
+    statuses,
+    undefined,
+    undefined,
+    { nullMeansAbsent: true },
+  );
+  if (value !== undefined) {
+    (snapshot as unknown as Record<string, unknown>)[String(key)] = value;
+  }
+}
 
 async function collect() {
   const startTime = Date.now();
@@ -273,20 +298,28 @@ async function collect() {
     collectOsAlerts(),
   ]);
 
+  const collectionStatus: CollectionStatusMap = {};
+  let securityResult: SecurityData | undefined;
   try {
     lastSecurityResult = await collectSecurity();
+    lastSecurityAt = new Date();
+    securityResult = lastSecurityResult;
+    collectionStatus.security = securityCollectionAvailability(securityResult);
   } catch (err) {
     console.error("[security] Collection error:", err);
-    // Leave `lastSecurityResult` at its previous value so an
-    // intermittent failure doesn't blank out the security block.
+    collectionStatus.security = { available: false, error: err instanceof Error ? err.message : String(err) };
+    if (lastSecurityResult && lastSecurityAt) {
+      securityResult = staleAvailability(lastSecurityResult, err, lastSecurityAt);
+    }
   }
 
   const snapshot: Snapshot = {
     collector_version: PKG_VERSION,
     timestamp: new Date().toISOString(),
     system, cpu, memory, disks, smart: smartResult.smart, network, raid, ipmi, os_alerts: osAlerts,
-    security: lastSecurityResult,
+    security: securityResult,
     dmi: cachedDmi,
+    collection_status: collectionStatus,
   };
   if (config.config_migration_required) snapshot.config_migration_required = true;
   // Disks present but SMART-unreadable (blind spot: smartctl missing /
@@ -304,54 +337,54 @@ async function collect() {
 
   // ZFS and I/O errors: collect every cycle (lightweight checks)
   if (config.collection.thermal) {
-    try { snapshot.thermal = await collectThermal(); } catch { /* skip on error */ }
+    await assignOptional(snapshot, collectionStatus, "thermal", () => collectThermal());
   }
-  try { snapshot.zfs = await collectZfs() ?? undefined; } catch { /* skip if ZFS not available */ }
-  try { snapshot.io_errors = await collectIoErrors() ?? undefined; } catch { /* skip on error */ }
-  try { snapshot.io_latency = collectIoLatency(); } catch { /* skip on error */ }
-  try { snapshot.conntrack = collectConntrack(); } catch { /* skip on error */ }
-  try { snapshot.systemd = await collectSystemd(); } catch { /* skip on error */ }
-  try { snapshot.ntp = await collectNtp(); } catch { /* skip on error */ }
-  try { snapshot.file_descriptors = collectFileDescriptors(); } catch { /* skip on error */ }
+  await assignOptional(snapshot, collectionStatus, "zfs", () => collectZfs());
+  await assignOptional(snapshot, collectionStatus, "io_errors", () => collectIoErrors());
+  await assignOptional(snapshot, collectionStatus, "io_latency", () => collectIoLatency());
+  await assignOptional(snapshot, collectionStatus, "conntrack", () => collectConntrack());
+  await assignOptional(snapshot, collectionStatus, "systemd", () => collectSystemd());
+  await assignOptional(snapshot, collectionStatus, "ntp", () => collectNtp());
+  await assignOptional(snapshot, collectionStatus, "file_descriptors", () => collectFileDescriptors());
 
   // C1-C6 collectors (v0.10.4, 2026-05-19). Each capability-gates by
   // detecting whether the underlying kernel/CLI surface exists; absent
   // → field omitted → dashboard rules degrade gracefully per the
   // activation PR's capability gates.
-  try { snapshot.ecc_edac = collectEdac() ?? undefined; } catch { /* skip on error */ }
-  try { snapshot.memory_topology = await collectMemoryTopology() ?? undefined; } catch { /* skip on error */ }
-  try { snapshot.psi = collectPsi() ?? undefined; } catch { /* skip on error */ }
-  try { snapshot.vmstat = collectVmstat() ?? undefined; } catch { /* skip on error */ }
-  try { snapshot.reboot_evidence = await collectRebootEvidence(); } catch { /* skip on error */ }
-  try { snapshot.hardware_raid = await collectHardwareRaid() ?? undefined; } catch { /* skip on error */ }
+  await assignOptional(snapshot, collectionStatus, "ecc_edac", () => collectEdac());
+  await assignOptional(snapshot, collectionStatus, "memory_topology", () => collectMemoryTopology());
+  await assignOptional(snapshot, collectionStatus, "psi", () => collectPsi());
+  await assignOptional(snapshot, collectionStatus, "vmstat", () => collectVmstat());
+  await assignOptional(snapshot, collectionStatus, "reboot_evidence", () => collectRebootEvidence());
+  await assignOptional(snapshot, collectionStatus, "hardware_raid", () => collectHardwareRaid());
 
   // C7-C10 collectors (v0.11.0, 2026-05-19). Capability gating mirrors
   // C1-C6: each emits an `available: false` payload (or absent field)
   // when its underlying /proc surface is missing. Dashboard rules
   // degrade gracefully on older agents and hosts that lack the
   // relevant kernel modules.
-  try { snapshot.process_fd = await collectProcessFd(); } catch { /* skip on error */ }
-  try { snapshot.bonding = collectBonding(); } catch { /* skip on error */ }
-  try { snapshot.tcp_stats = collectTcpStats(); } catch { /* skip on error */ }
+  await assignOptional(snapshot, collectionStatus, "process_fd", () => collectProcessFd());
+  await assignOptional(snapshot, collectionStatus, "bonding", () => collectBonding());
+  await assignOptional(snapshot, collectionStatus, "tcp_stats", () => collectTcpStats());
 
   // C11-C18 collectors (v0.12.0, 2026-05-19). Five small + three big.
   // Same capability-gating discipline: each collector reports
   // available: false when its source is missing.
-  try { snapshot.lvm = await collectLvm(); } catch { /* skip on error */ }
-  try { snapshot.ethtool = await collectEthtool(); } catch { /* skip on error */ }
-  try { snapshot.softnet = collectSoftnet(); } catch { /* skip on error */ }
-  try { snapshot.cve = await collectCve(); } catch { /* skip on error */ }
-  try { snapshot.dmesg_events = await collectDmesgEvents(); } catch { /* skip on error */ }
+  await assignOptional(snapshot, collectionStatus, "lvm", () => collectLvm());
+  await assignOptional(snapshot, collectionStatus, "ethtool", () => collectEthtool());
+  await assignOptional(snapshot, collectionStatus, "softnet", () => collectSoftnet());
+  await assignOptional(snapshot, collectionStatus, "cve", () => collectCve());
+  await assignOptional(snapshot, collectionStatus, "dmesg_events", () => collectDmesgEvents());
 
   // C19 GPU collection (v0.13.0, 2026-05-19). Three-tier capability-
   // gated; non-NVIDIA hosts short-circuit in <10ms via the
   // which-nvidia-smi probe. Per CC_SPEC_CRUCIBLE_GPU_COLLECTION_
   // 2026-05-19.md.
-  try { snapshot.gpu = await collectGpu(); } catch { /* skip on error */ }
+  await assignOptional(snapshot, collectionStatus, "gpu", () => collectGpu());
 
   // OS extended-support enrollment (currency-monitoring milestone, v0.13.24+).
   // Unprivileged only; omitted on distros/hosts without a readable mechanism.
-  try { snapshot.support_status = await collectSupportStatus() ?? undefined; } catch { /* skip on error */ }
+  await assignOptional(snapshot, collectionStatus, "support_status", () => collectSupportStatus());
 
   // Update Prometheus metrics
   updateMetrics(snapshot);

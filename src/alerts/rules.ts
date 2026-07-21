@@ -311,11 +311,13 @@ export const allRules: AlertRule[] = [
   { type: "ecc_errors", evaluate(snap) {
     if (!snap.ipmi?.ecc_errors) return [];
     const named = snap.ipmi.ecc_errors;
-    const sel = snap.ipmi.ecc_errors_from_sel ?? { correctable: 0, uncorrectable: 0, newest_event_timestamp: null };
-    const correctable = Math.max(named.correctable, sel.correctable);
-    const uncorrectable = Math.max(named.uncorrectable, sel.uncorrectable);
+    const sel = snap.ipmi.ecc_errors_from_sel;
+    const selCorrectable = sel?.available === false ? 0 : sel?.correctable ?? 0;
+    const selUncorrectable = sel?.available === false ? 0 : sel?.uncorrectable ?? 0;
+    const correctable = Math.max(named.correctable, selCorrectable);
+    const uncorrectable = Math.max(named.uncorrectable, selUncorrectable);
     if (correctable <= 0 && uncorrectable <= 0) return [];
-    const sourceUsed = (sel.correctable > named.correctable || sel.uncorrectable > named.uncorrectable) ? "ipmi_sel" : "ipmi_sensors";
+    const sourceUsed = (selCorrectable > named.correctable || selUncorrectable > named.uncorrectable) ? "ipmi_sel" : "ipmi_sensors";
     const sourceLabel = sourceUsed === "ipmi_sel" ? "IPMI SEL events" : "IPMI named sensors";
     if (uncorrectable > 0) return [{ type: "ecc_errors", severity: "critical",
       title: `${uncorrectable} uncorrectable ECC error(s)`,
@@ -425,6 +427,7 @@ export const allRules: AlertRule[] = [
   // === Security (7) ===
   // 21. SSH root password login
   { type: "ssh_root_password", evaluate(snap) {
+    if (snap.security?.available === false) return [];
     if (!snap.security?.ssh?.rootPasswordExposed) return [];
     return [{ type: "ssh_root_password", severity: "warning",
       title: "SSH root login with password enabled",
@@ -440,6 +443,7 @@ export const allRules: AlertRule[] = [
   // configApplied defaults to true when undeterminable (and is absent on
   // pre-0.13.16 snapshots), so this never false-fires.
   { type: "ssh_config_unapplied", evaluate(snap) {
+    if (snap.security?.available === false) return [];
     const ssh = snap.security?.ssh;
     if (!ssh || ssh.configApplied !== false) return [];
     return [{ type: "ssh_config_unapplied", severity: "warning" as const,
@@ -450,7 +454,7 @@ export const allRules: AlertRule[] = [
   }},
   // 22. No firewall
   { type: "no_firewall", evaluate(snap) {
-    if (!snap.security || snap.security.firewall.active) return [];
+    if (!snap.security || snap.security.available === false || snap.security.firewall.available === false || snap.security.firewall.active !== false) return [];
     return [{ type: "no_firewall", severity: "warning" as const,
       title: "No firewall active",
       message: "No active firewall rules detected (checked UFW, firewalld, nftables, iptables). All ports are exposed unless protected by network-level ACLs.",
@@ -459,6 +463,7 @@ export const allRules: AlertRule[] = [
   }},
   // 23. Pending security updates
   { type: "pending_security_updates", evaluate(snap) {
+    if (snap.security?.available === false) return [];
     if (!snap.security?.pending_updates?.available) return [];
     const maxPending = 10;
     if (snap.security.pending_updates.pendingCount <= maxPending) return [];
@@ -471,8 +476,8 @@ export const allRules: AlertRule[] = [
   }},
   // 24. Kernel vulnerabilities
   { type: "kernel_vulnerabilities", evaluate(snap) {
-    if (!snap.security?.kernel_vulns?.length) return [];
-    const unmitigated = snap.security.kernel_vulns.filter(v => !v.mitigated);
+    if (!snap.security?.kernel_vulns?.length || snap.security.available === false) return [];
+    const unmitigated = snap.security.kernel_vulns.filter(v => v.available !== false && !v.mitigated);
     if (unmitigated.length === 0) return [];
     const details = unmitigated.map(v => `${v.name}: ${v.status}`).join("; ");
     return [{ type: "kernel_vulnerabilities", severity: "warning",
@@ -483,6 +488,7 @@ export const allRules: AlertRule[] = [
   }},
   // 25. Kernel needs reboot
   { type: "kernel_needs_reboot", evaluate(snap) {
+    if (snap.security?.available === false) return [];
     if (!snap.security?.kernel_reboot?.needsReboot) return [];
     const k = snap.security.kernel_reboot;
     return [{ type: "kernel_needs_reboot", severity: "warning" as const,
@@ -493,7 +499,7 @@ export const allRules: AlertRule[] = [
   }},
   // 26. Unattended upgrades disabled
   { type: "unattended_upgrades_disabled", evaluate(snap) {
-    if (!snap.security || snap.security.auto_updates.configured) return [];
+    if (!snap.security || snap.security.available === false || snap.security.auto_updates.configured) return [];
     const a = snap.security.auto_updates;
     const hint = a.mechanism === "unattended-upgrades" ? 'Enable: "sudo dpkg-reconfigure -plow unattended-upgrades"'
       : a.mechanism === "dnf-automatic" ? 'Enable: "sudo systemctl enable --now dnf-automatic-install.timer"'

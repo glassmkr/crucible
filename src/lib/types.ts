@@ -1,3 +1,5 @@
+import type { CollectionStatusMap, CollectorAvailability } from "./availability.js";
+
 export interface Snapshot {
   collector_version: string;
   timestamp: string;
@@ -22,6 +24,8 @@ export interface Snapshot {
   dmi?: DmiInfo;
   thermal?: ThermalInfo;
   os_alerts: OsAlerts;
+  /** Per-collector success/failure metadata. Older agents omit this map. */
+  collection_status?: CollectionStatusMap;
   security?: SecurityData;
   /** OS extended-support enrollment (Ubuntu Pro/ESM, RHEL EUS). Omitted when
    *  no unprivileged mechanism is present. The dashboard os_end_of_life rule
@@ -304,6 +308,7 @@ export interface KernelCve {
 export interface CveSnapshot {
   available: boolean;
   reason?: string;
+  error?: string;
   distro: CveDistro;
   kernel_cves_pending: KernelCve[];
   total_critical_pending: number;
@@ -538,9 +543,9 @@ export interface TcpStatsSnapshot {
   listen_drops_rate_per_sec?: number | null;
 }
 
-export interface SystemdData {
+export interface SystemdData extends CollectorAvailability {
   failed_units: string[];
-  failed_count: number;
+  failed_count: number | null;
   /** Last 5 journal lines per failed unit, populated only when at
    *  least one unit is failed. Keys match `failed_units`. Codex
    *  experiment 2026-05-12. */
@@ -599,11 +604,11 @@ export interface ZfsData {
   pools: ZfsPool[];
 }
 
-export interface SecurityData {
+export interface SecurityData extends CollectorAvailability {
   ssh: { permitRootLogin: string; passwordAuthentication: string; rootPasswordExposed: boolean; configApplied: boolean; configMtime?: number | null; configLoadedAt?: number | null } | null;
-  firewall: { active: boolean; source: string; details: string };
+  firewall: { available: boolean; active: boolean | null; source: string; details: string; error?: string };
   pending_updates: { distro: string; pendingCount: number; available: boolean } | null;
-  kernel_vulns: Array<{ name: string; status: string; mitigated: boolean }>;
+  kernel_vulns: Array<{ name: string; status: string; mitigated: boolean; available?: boolean; error?: string }>;
   kernel_reboot: { running: string; installed: string; needsReboot: boolean } | null;
   auto_updates: { configured: boolean; mechanism: string; details: string };
 }
@@ -937,8 +942,10 @@ export interface IpmiInfo {
    * Cumulative since last SEL clear, not rate over interval.
    */
   ecc_errors_from_sel?: {
-    correctable: number;
-    uncorrectable: number;
+    available?: boolean;
+    error?: string;
+    correctable: number | null;
+    uncorrectable: number | null;
     newest_event_timestamp: string | null;
   };
   /**
