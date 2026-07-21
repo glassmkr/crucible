@@ -6,6 +6,10 @@ on:
 
 permissions: {}
 
+concurrency:
+  group: publish-${{ github.ref }}
+  cancel-in-progress: false
+
 jobs:
   build:
     name: Build verified package
@@ -26,10 +30,13 @@ jobs:
           set -euo pipefail
           mkdir -p package
           npm pack --ignore-scripts --pack-destination package
+          sha256sum package/*.tgz > package/SHA256SUMS
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: npm-package
-          path: package/*.tgz
+          path: |
+            package/*.tgz
+            package/SHA256SUMS
           if-no-files-found: error
           retention-days: 1
 
@@ -52,6 +59,8 @@ jobs:
           name: npm-package
           path: package
       - run: npm --version
+      - name: Verify package artifact
+        run: sha256sum -c package/SHA256SUMS
       - run: npm publish package/*.tgz --access public --provenance
 
       # Create the GitHub Release from the tag + its CHANGELOG section, so a
