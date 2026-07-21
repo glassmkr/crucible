@@ -40,7 +40,7 @@ export async function checkForUpdates(dashboardUrl?: string): Promise<void> {
     if (isOlderVersion(CURRENT_VERSION, latest)) {
       console.log(`[update] New Crucible version available: ${latest} (current: ${CURRENT_VERSION})`);
       console.log(`[update] Changelog: ${data.crucible?.changelog_url || "https://github.com/glassmkr/crucible/releases"}`);
-      console.log(`[update] Run: npm update -g @glassmkr/crucible && sudo systemctl restart glassmkr-crucible`);
+      console.log(`[update] Run: npm i -g @glassmkr/crucible && sudo glassmkr-crucible init && sudo systemctl restart glassmkr-crucible`);
     }
   } catch {
     // Version check is non-critical, fail silently

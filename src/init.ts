@@ -1,8 +1,8 @@
 // `glassmkr-crucible init` subcommand: canonical first-run setup.
 //
 // Validates the API key, optionally probes the ingest endpoint to
-// confirm it's accepted, writes /etc/glassmkr/crucible.yaml (mode
-// 0600), writes a systemd unit at /etc/systemd/system/glassmkr-crucible
+// confirm it's accepted, writes or re-secures /etc/glassmkr/crucible.yaml
+// as root-owned mode 0640, and writes a systemd unit at /etc/systemd/system/glassmkr-crucible
 // (mode 0644) with ExecStart pointing at the dynamically-detected
 // binary path (so Debian's /usr/local/bin/ vs Ubuntu's /usr/bin/
 // divergence is handled), runs daemon-reload, and (unless --no-start)
@@ -23,16 +23,18 @@
 
 import * as fsDefault from "node:fs";
 import { execFileSync as execFileSyncDefault } from "node:child_process";
+import { randomUUID as randomUUIDDefault } from "node:crypto";
 import * as osDefault from "node:os";
 import * as pathDefault from "node:path";
 import {
   SERVICE_USER, WRAPPER_PATH, WRAPPER_SCRIPT, SUDOERS_PATH, SUDOERS_CONTENT,
 } from "./lib/privileged.js";
 
-export const STATE_DIRS = ["/var/lib/glassmkr", "/var/lib/crucible"];
+export const STATE_DIR = "/var/lib/glassmkr";
+export const REBOOT_MARKER_DIR = "/var/lib/crucible";
 
 export interface InitOptions {
-  apiKey: string; // raw value, may be the literal "-" to mean "read from stdin"
+  apiKey?: string; // raw value, may be the literal "-" to mean "read from stdin"
   name?: string;
   ingestUrl?: string;
   configPath?: string;
@@ -48,7 +50,16 @@ export interface InitDeps {
     writeFileSync: (p: string, data: string, opts?: { mode?: number; flag?: string }) => void;
     chmodSync: (p: string, mode: number) => void;
     chownSync: (p: string, uid: number, gid: number) => void;
-    lstatSync: (p: string) => { isSymbolicLink: boolean; uid: number; gid: number; mode: number };
+    lstatSync: (p: string) => {
+      isSymbolicLink: boolean;
+      isFile?: boolean;
+      isDirectory?: boolean;
+      uid: number;
+      gid: number;
+      mode: number;
+    };
+    realpathSync: (p: string) => string;
+    writeSecureFileSync: (p: string, data: string, mode: number) => void;
     renameSync: (from: string, to: string) => void;
     unlinkSync: (p: string) => void;
   };
@@ -68,6 +79,8 @@ export const SYSTEMD_UNIT_PATH = "/etc/systemd/system/glassmkr-crucible.service"
 
 const KEY_RE_NEW = /^gmk_cru_live_[A-Za-z0-9]{20,}_[A-Za-z0-9]{4}$/;
 const KEY_RE_LEGACY = /^col_[A-Fa-f0-9]{16,}$/;
+const SYSTEMD_PATH_RE = /^\/[A-Za-z0-9_./:@+,-]+$/;
+const SYSTEMD_USER_RE = /^[A-Za-z_][A-Za-z0-9_-]*$/;
 
 export function isValidApiKey(key: string): boolean {
   if (!key || /\s/.test(key)) return false;
@@ -100,6 +113,9 @@ function escapeDoubleQuoted(s: string): string {
 }
 
 export function buildSystemdUnit(binPath: string, configPath: string, user = "root"): string {
+  assertSafeSystemdPath(binPath, "binary path");
+  assertSafeSystemdPath(configPath, "config path");
+  if (!SYSTEMD_USER_RE.test(user)) throw new Error(`unsafe systemd user: ${user}`);
   return [
     `[Unit]`,
     `Description=Glassmkr Crucible - Bare Metal Monitoring`,
@@ -121,6 +137,41 @@ export function buildSystemdUnit(binPath: string, configPath: string, user = "ro
   ].join("\n");
 }
 
+function assertSafeSystemdPath(value: string, label: string): void {
+  if (!SYSTEMD_PATH_RE.test(value) || value.includes("//") || value.includes("/../") || value.endsWith("/..")) {
+    throw new Error(`unsafe ${label}: ${JSON.stringify(value)}`);
+  }
+}
+
+function ancestorDirectories(path: string): string[] {
+  const out: string[] = [];
+  let current = pathDefault.resolve(path);
+  while (true) {
+    out.push(current);
+    if (current === pathDefault.parse(current).root) return out;
+    current = pathDefault.dirname(current);
+  }
+}
+
+function aclTrustFailure(deps: InitDeps, dir: string): string | null {
+  const acl = deps.exec("getfacl", ["-cpn", dir]);
+  if (acl.status === 0) {
+    for (const raw of acl.stdout.split(/\r?\n/)) {
+      const line = raw.replace(/\s*#.*$/, "").trim();
+      if (/^(?:default:)?(?:user|group):[^:]+:[rwx-]*w[rwx-]*$/.test(line)) {
+        return `${dir} has a named ACL entry granting write: ${line}`;
+      }
+    }
+    return null;
+  }
+
+  const ls = deps.exec("ls", ["-ldn", dir]);
+  if (ls.status !== 0) return `cannot inspect ACLs on ${dir}`;
+  const mode = ls.stdout.trim().split(/\s+/, 1)[0] ?? "";
+  if (mode.endsWith("+")) return `${dir} has ACLs but getfacl is unavailable`;
+  return null;
+}
+
 /**
  * A wrapper directory is trustworthy iff it is root-owned and NOT writable by
  * the service user: not world-writable, and not group-writable by any group the
@@ -128,17 +179,27 @@ export function buildSystemdUnit(binPath: string, configPath: string, user = "ro
  * safe. `serviceGids` must be the service user's FINAL group set.
  */
 function dirTrustFailure(deps: InitDeps, dir: string, serviceGids: number[]): string | null {
-  let st: { isSymbolicLink: boolean; uid: number; gid: number; mode: number };
+  let st: ReturnType<InitDeps["fs"]["lstatSync"]>;
   try {
     st = deps.fs.lstatSync(dir);
   } catch (err: any) {
     return `cannot stat ${dir}: ${err?.message ?? err}`;
   }
+  if (st.isSymbolicLink) return `${dir} is a symbolic link`;
+  if (st.isDirectory === false) return `${dir} is not a directory`;
   if (st.uid !== 0) return `${dir} is not root-owned (uid=${st.uid})`;
   if ((st.mode & 0o002) !== 0) return `${dir} is world-writable (mode=${(st.mode & 0o777).toString(8)})`;
   if ((st.mode & 0o020) !== 0 && serviceGids.includes(st.gid)) {
     return `${dir} is group-writable by a group '${SERVICE_USER}' belongs to (gid=${st.gid})`;
   }
+  return aclTrustFailure(deps, dir);
+}
+
+function strictRootDirectoryFailure(deps: InitDeps, dir: string): string | null {
+  const problem = dirTrustFailure(deps, dir, []);
+  if (problem) return problem;
+  const st = deps.fs.lstatSync(dir);
+  if ((st.mode & 0o020) !== 0) return `${dir} is group-writable`;
   return null;
 }
 
@@ -220,16 +281,27 @@ export function setupPrivilegeSeparation(deps: InitDeps, configPath: string): bo
   //    owns that dir.
   deps.exec("usermod", ["-aG", "adm", SERVICE_USER]);
 
-  // 3. Trust the wrapper directory AND its parent, against the FINAL groups. A
-  //    tamperable dir (or grandparent, which lets the dir itself be replaced)
+  // 3. Trust every wrapper ancestor against the FINAL groups. A
+  //    tamperable ancestor can replace the directory below it
   //    means the root-owned wrapper could be swapped and run as root through the
   //    NOPASSWD grant. Refuse (and revoke any prior grant) rather than assume.
   const gout = deps.exec("id", ["-G", SERVICE_USER]);
   if (gout.status !== 0) return fail(`could not read '${SERVICE_USER}' groups (id -G status=${gout.status})`);
   const serviceGids = gout.stdout.trim().split(/\s+/).filter(Boolean).map((n) => Number(n));
-  if (serviceGids.some((n) => !Number.isFinite(n))) return fail(`could not parse '${SERVICE_USER}' group ids from: ${gout.stdout.trim()}`);
+  if (serviceGids.length === 0 || serviceGids.some((n) => !Number.isFinite(n))) return fail(`could not parse '${SERVICE_USER}' group ids from: ${gout.stdout.trim()}`);
+
+  try {
+    deps.fs.chownSync(configPath, 0, serviceGids[0]);
+    deps.fs.chmodSync(configPath, 0o640);
+    const configStat = deps.fs.lstatSync(configPath);
+    if (configStat.isSymbolicLink || configStat.isFile === false || configStat.uid !== 0 || configStat.gid !== serviceGids[0] || (configStat.mode & 0o777) !== 0o640) {
+      return fail(`config ${configPath} failed its post-install safety check`);
+    }
+  } catch (err: any) {
+    return fail(`could not secure ${configPath}: ${err?.message ?? err}`);
+  }
   const wrapperDir = pathDefault.dirname(WRAPPER_PATH);
-  for (const dir of [wrapperDir, pathDefault.dirname(wrapperDir)]) {
+  for (const dir of ancestorDirectories(wrapperDir)) {
     const problem = dirTrustFailure(deps, dir, serviceGids);
     if (problem) return fail(`wrapper directory chain is not trustworthy: ${problem}`);
   }
@@ -266,15 +338,18 @@ export function setupPrivilegeSeparation(deps: InitDeps, configPath: string): bo
     return fail(`could not install sudoers ${SUDOERS_PATH}: ${err?.message ?? err}`);
   }
 
-  // 6. State dirs the agent writes directly (alert-state, reboot-marker) + the
-  //    config it reads: hand ownership to the service user.
-  for (const dir of STATE_DIRS) {
-    try { deps.fs.mkdirSync(dir, { recursive: true, mode: 0o750 }); } catch { /* exists */ }
-    const ch = deps.exec("chown", ["-R", `${SERVICE_USER}:${SERVICE_USER}`, dir]);
-    if (ch.status !== 0) return fail(`could not chown ${dir} to ${SERVICE_USER} (status=${ch.status})`);
+  // 6. Keep mutable agent state service-owned. Keep the marker directory and
+  //    config root-owned, granting only the narrow group access each needs.
+  try { deps.fs.mkdirSync(STATE_DIR, { recursive: true, mode: 0o750 }); } catch { /* exists */ }
+  const stateChown = deps.exec("chown", ["-R", `${SERVICE_USER}:${SERVICE_USER}`, STATE_DIR]);
+  if (stateChown.status !== 0) return fail(`could not chown ${STATE_DIR} to ${SERVICE_USER} (status=${stateChown.status})`);
+
+  try { deps.fs.mkdirSync(REBOOT_MARKER_DIR, { recursive: true, mode: 0o2770 }); } catch { /* exists */ }
+  const markerChown = deps.exec("chown", [`root:${SERVICE_USER}`, REBOOT_MARKER_DIR]);
+  if (markerChown.status !== 0) return fail(`could not set ${REBOOT_MARKER_DIR} ownership (status=${markerChown.status})`);
+  try { deps.fs.chmodSync(REBOOT_MARKER_DIR, 0o2770); } catch (err: any) {
+    return fail(`could not set ${REBOOT_MARKER_DIR} mode: ${err?.message ?? err}`);
   }
-  const chc = deps.exec("chown", [`${SERVICE_USER}:${SERVICE_USER}`, configPath]);
-  if (chc.status !== 0) return fail(`could not chown ${configPath} to ${SERVICE_USER}`);
 
   deps.log(`[init] privilege separation ready: service will run as '${SERVICE_USER}' via ${WRAPPER_PATH}.`);
   return true;
@@ -285,8 +360,16 @@ export function setupPrivilegeSeparation(deps: InitDeps, configPath: string): bo
  * (0 = success). Pure orchestration; no side effects on `process`.
  */
 export async function runInit(opts: InitOptions, deps: InitDeps): Promise<number> {
+  const ingestUrl = opts.ingestUrl ?? DEFAULT_INGEST_URL;
+  const configPath = opts.configPath ?? DEFAULT_CONFIG_PATH;
+  const isCanonicalPath = configPath === DEFAULT_CONFIG_PATH;
+  const repairMode = !opts.force && (
+    deps.fs.existsSync(configPath)
+    || (isCanonicalPath && deps.fs.existsSync(LEGACY_CONFIG_PATH))
+  );
+
   // Resolve API key (stdin form supports `--api-key -`).
-  let apiKey = opts.apiKey;
+  let apiKey = opts.apiKey ?? "";
   if (apiKey === "-") {
     try {
       apiKey = (await deps.readStdin()).replace(/\r?\n$/, "").trim();
@@ -295,19 +378,36 @@ export async function runInit(opts: InitOptions, deps: InitDeps): Promise<number
       return 1;
     }
   }
-  if (!isValidApiKey(apiKey)) {
+  if (!repairMode && !isValidApiKey(apiKey)) {
     deps.error(`[init] invalid --api-key: must look like "gmk_cru_live_<...>_<4>" or "col_<hex>". Got ${apiKey.length} char(s).`);
     return 2;
   }
 
-  const ingestUrl = opts.ingestUrl ?? DEFAULT_INGEST_URL;
-  const configPath = opts.configPath ?? DEFAULT_CONFIG_PATH;
   const serverName = opts.name && opts.name.trim() ? opts.name.trim() : deps.hostname();
+
+  try {
+    assertSafeSystemdPath(configPath, "config path");
+  } catch (err: any) {
+    deps.error(`[init] ${err?.message ?? err}`);
+    return 5;
+  }
+
+  const parent = pathDefault.dirname(configPath);
+  try {
+    deps.fs.mkdirSync(parent, { recursive: true, mode: 0o755 });
+    for (const dir of ancestorDirectories(parent)) {
+      const problem = strictRootDirectoryFailure(deps, dir);
+      if (problem) throw new Error(problem);
+    }
+  } catch (err: any) {
+    deps.error(`[init] config directory chain is not trustworthy: ${err?.message ?? err}`);
+    return 5;
+  }
 
   // Connectivity probe (optional). 401 means key is wrong → hard fail.
   // 5xx / network errors → warn but continue (the host's network may
   // still be coming up during a fresh install).
-  if (!opts.noVerify) {
+  if (!repairMode && !opts.noVerify) {
     deps.log(`[init] probing ${ingestUrl} ...`);
     try {
       const ctrl = new AbortController();
@@ -341,12 +441,33 @@ export async function runInit(opts: InitOptions, deps: InitDeps): Promise<number
   // operator so they can resolve the divergence; --force on top of a
   // populated new path is the normal overwrite path and the legacy
   // file becomes irrelevant.
-  const isCanonicalPath = configPath === DEFAULT_CONFIG_PATH;
   const legacyPresent = isCanonicalPath && deps.fs.existsSync(LEGACY_CONFIG_PATH);
   const newPresent = deps.fs.existsSync(configPath);
+  if (newPresent) {
+    try {
+      const target = deps.fs.lstatSync(configPath);
+      const serviceUidResult = deps.exec("id", ["-u", SERVICE_USER]);
+      const serviceUid = Number(serviceUidResult.stdout.trim());
+      const allowedOwner = target.uid === 0 || (serviceUidResult.status === 0 && Number.isFinite(serviceUid) && target.uid === serviceUid);
+      if (target.isSymbolicLink || target.isFile === false || !allowedOwner || (target.mode & 0o022) !== 0) {
+        deps.error(`[init] refusing unsafe config target at ${configPath}`);
+        return 4;
+      }
+    } catch (err: any) {
+      deps.error(`[init] could not inspect existing config ${configPath}: ${err?.message ?? err}`);
+      return 4;
+    }
+  }
   let justMigrated = false;
   if (legacyPresent && !newPresent) {
     try {
+      const legacy = deps.fs.lstatSync(LEGACY_CONFIG_PATH);
+      const serviceUidResult = deps.exec("id", ["-u", SERVICE_USER]);
+      const serviceUid = Number(serviceUidResult.stdout.trim());
+      const allowedOwner = legacy.uid === 0 || (serviceUidResult.status === 0 && Number.isFinite(serviceUid) && legacy.uid === serviceUid);
+      if (legacy.isSymbolicLink || legacy.isFile === false || !allowedOwner || (legacy.mode & 0o022) !== 0) {
+        throw new Error("legacy config is not a safe regular file owned by root or the service user");
+      }
       deps.fs.renameSync(LEGACY_CONFIG_PATH, configPath);
       justMigrated = true;
       deps.log(`[init] migrated legacy config: ${LEGACY_CONFIG_PATH} -> ${configPath}`);
@@ -358,36 +479,29 @@ export async function runInit(opts: InitOptions, deps: InitDeps): Promise<number
     deps.warn(`[init] both ${LEGACY_CONFIG_PATH} and ${configPath} exist; leaving the legacy file in place. After init, remove the legacy file with: sudo rm ${LEGACY_CONFIG_PATH}`);
   }
 
-  // Write config (0600) — refuse to overwrite without --force. A file
+  // Write config (0600) unless repair mode preserves the existing bytes. A file
   // that arrived via the legacy migration just above counts as "the
   // operator's existing config" and is preserved without rewrite (the
   // explicit migration log line above tells them what happened).
   if (justMigrated) {
     deps.log(`[init] preserved migrated config at ${configPath} (no rewrite). To regenerate from scratch, re-run with --force.`);
   } else if (deps.fs.existsSync(configPath) && !opts.force) {
-    deps.error(`[init] config already exists at ${configPath}. Pass --force to overwrite, or remove the file first.`);
-    return 4;
-  }
-
-  const parent = pathDefault.dirname(configPath);
-  try {
-    deps.fs.mkdirSync(parent, { recursive: true, mode: 0o755 });
-  } catch (err: any) {
-    deps.error(`[init] failed to create config directory ${parent}: ${err?.message ?? err}`);
-    return 5;
+    deps.log(`[init] preserving existing config at ${configPath}; ownership and mode will be re-secured.`);
   }
 
   // Skip rewrite when we just migrated the legacy file into place;
   // operator-edited content (telegram tokens, custom thresholds, tls_pin)
   // is preserved verbatim. --force still re-generates from scratch by
   // overwriting unconditionally.
-  if (!justMigrated || opts.force) {
+  if ((!justMigrated && !repairMode) || opts.force) {
     const yaml = buildCollectorYaml(serverName, ingestUrl, apiKey);
+    const configTmp = `${configPath}.tmp-${randomUUIDDefault()}`;
     try {
-      deps.fs.writeFileSync(configPath, yaml, { mode: 0o600 });
-      deps.fs.chmodSync(configPath, 0o600);
+      deps.fs.writeSecureFileSync(configTmp, yaml, 0o600);
+      deps.fs.renameSync(configTmp, configPath);
       deps.log(`[init] wrote config: ${configPath} (mode 0600, server_name=${serverName})`);
     } catch (err: any) {
+      try { if (deps.fs.existsSync(configTmp)) deps.fs.unlinkSync(configTmp); } catch { /* best effort */ }
       deps.error(`[init] failed to write ${configPath}: ${err?.message ?? err}`);
       return 6;
     }
@@ -416,6 +530,19 @@ export async function runInit(opts: InitOptions, deps: InitDeps): Promise<number
     return 7;
   }
 
+  try {
+    assertSafeSystemdPath(binPath, "binary path");
+    const resolvedBin = deps.fs.realpathSync(binPath);
+    assertSafeSystemdPath(resolvedBin, "resolved binary path");
+    const binStat = deps.fs.lstatSync(resolvedBin);
+    if (binStat.isSymbolicLink || binStat.isFile === false || binStat.uid !== 0 || (binStat.mode & 0o022) !== 0) {
+      throw new Error(`binary must be a root-owned regular file and not group/world-writable: ${resolvedBin}`);
+    }
+  } catch (err: any) {
+    deps.error(`[init] refusing unsafe glassmkr-crucible binary: ${err?.message ?? err}`);
+    return 7;
+  }
+
   // §2.1: establish the unprivileged-user + sudo-wrapper boundary. Runs
   // AFTER the config is written (so it can hand ownership to the service
   // user) and BEFORE the unit is written (so the escalation path exists
@@ -424,8 +551,8 @@ export async function runInit(opts: InitOptions, deps: InitDeps): Promise<number
   const serviceUser = setupPrivilegeSeparation(deps, configPath) ? SERVICE_USER : "root";
 
   // Write systemd unit (0644).
-  const unit = buildSystemdUnit(binPath, configPath, serviceUser);
   try {
+    const unit = buildSystemdUnit(binPath, configPath, serviceUser);
     deps.fs.writeFileSync(SYSTEMD_UNIT_PATH, unit, { mode: 0o644 });
     deps.fs.chmodSync(SYSTEMD_UNIT_PATH, 0o644);
     deps.log(`[init] wrote systemd unit: ${SYSTEMD_UNIT_PATH} (ExecStart=${binPath})`);
@@ -494,7 +621,34 @@ export function defaultDeps(): InitDeps {
       chownSync: fsDefault.chownSync,
       lstatSync: (p) => {
         const s = fsDefault.lstatSync(p);
-        return { isSymbolicLink: s.isSymbolicLink(), uid: s.uid, gid: s.gid, mode: s.mode };
+        return {
+          isSymbolicLink: s.isSymbolicLink(),
+          isFile: s.isFile(),
+          isDirectory: s.isDirectory(),
+          uid: s.uid,
+          gid: s.gid,
+          mode: s.mode,
+        };
+      },
+      realpathSync: fsDefault.realpathSync,
+      writeSecureFileSync: (p, data, mode) => {
+        const flags = fsDefault.constants.O_CREAT
+          | fsDefault.constants.O_EXCL
+          | fsDefault.constants.O_WRONLY
+          | fsDefault.constants.O_NOFOLLOW;
+        let fd: number | undefined;
+        try {
+          fd = fsDefault.openSync(p, flags, mode);
+          const st = fsDefault.fstatSync(fd);
+          if (!st.isFile() || st.nlink !== 1 || st.uid !== 0) {
+            throw new Error(`refusing unsafe temporary file ${p}`);
+          }
+          fsDefault.fchmodSync(fd, mode);
+          fsDefault.writeFileSync(fd, data, "utf8");
+          fsDefault.fsyncSync(fd);
+        } finally {
+          if (fd !== undefined) fsDefault.closeSync(fd);
+        }
       },
       renameSync: fsDefault.renameSync,
       unlinkSync: fsDefault.unlinkSync,

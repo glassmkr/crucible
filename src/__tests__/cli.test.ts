@@ -130,6 +130,11 @@ describe("resolveConfigPathWithLegacyFallback", () => {
 });
 
 describe("init subcommand parsing", () => {
+  it("init without an api key is accepted for repair mode", () => {
+    const { result } = parseCliArgs(["init"], "0.9.1");
+    expect(result.mode).toBe("init");
+    expect(result.init?.apiKey).toBeUndefined();
+  });
   it("init --api-key K -> mode=init with the key captured", () => {
     const { result } = parseCliArgs(["init", "--api-key", "gmk_cru_live_abc"], "0.9.1");
     expect(result.mode).toBe("init");

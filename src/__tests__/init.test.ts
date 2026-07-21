@@ -34,6 +34,10 @@ function makeDeps(opts?: {
       // A freshly written file is owned by the writing process (root, in the
       // real install), so default uid/gid to 0.
       writeFileSync: (p, data, o) => { fs.files.set(p, { data, mode: o?.mode ?? 0o644, uid: 0, gid: 0 }); },
+      writeSecureFileSync: (p, data, mode) => {
+        if (fs.files.has(p)) throw new Error(`EEXIST: ${p}`);
+        fs.files.set(p, { data, mode, uid: 0, gid: 0 });
+      },
       chmodSync: (p, mode) => {
         const f = fs.files.get(p);
         if (f) f.mode = mode;
@@ -45,11 +49,15 @@ function makeDeps(opts?: {
       },
       lstatSync: (p) => {
         const f = fs.files.get(p);
+        const expectedBin = opts?.binPath ?? "/usr/local/bin/glassmkr-crucible";
         // Untracked path (e.g. the wrapper's parent dir): model a normal
         // root-owned 0755 directory so the parent-dir trust check passes.
-        if (!f) return { isSymbolicLink: false, uid: 0, gid: 0, mode: 0o755 };
-        return { isSymbolicLink: !!f.symlink, uid: f.uid ?? 0, gid: f.gid ?? 0, mode: f.mode };
+        if (!f) return p === expectedBin
+          ? { isSymbolicLink: false, isFile: true, isDirectory: false, uid: 0, gid: 0, mode: 0o755 }
+          : { isSymbolicLink: false, isFile: false, isDirectory: true, uid: 0, gid: 0, mode: 0o755 };
+        return { isSymbolicLink: !!f.symlink, isFile: !f.symlink, isDirectory: false, uid: f.uid ?? 0, gid: f.gid ?? 0, mode: f.mode };
       },
+      realpathSync: (p) => p,
       renameSync: (from, to) => {
         const f = fs.files.get(from);
         if (!f) throw new Error(`ENOENT: ${from}`);
@@ -65,6 +73,8 @@ function makeDeps(opts?: {
       if (cmd === "which" && args[0] === "glassmkr-crucible") {
         return { stdout: opts?.binPath === null ? "" : `${opts?.binPath ?? "/usr/local/bin/glassmkr-crucible"}\n`, status: 0 };
       }
+      if (cmd === "id" && args[0] === "-G") return { stdout: "1000\n", status: 0 };
+      if (cmd === "id" && args[0] === "-u") return { stdout: "1000\n", status: 0 };
       if (cmd === "systemctl") {
         systemctlCalls.push(args);
         return { stdout: "", status: opts?.systemctlExitCode ?? 0 };
@@ -129,6 +139,14 @@ describe("buildSystemdUnit", () => {
     expect(u).toContain("Type=simple");
     expect(u).toContain("Restart=always");
   });
+
+  it.each([
+    ["/usr/local/bin/glassmkr-crucible\nExecStart=/bin/sh", "/etc/glassmkr/crucible.yaml"],
+    ["/usr/local/bin/glassmkr-crucible", "/etc/glassmkr/%n.yaml"],
+    ["/usr/local/bin/glassmkr-crucible", "relative.yaml"],
+  ])("rejects unsafe binary or config paths", (binPath, configPath) => {
+    expect(() => buildSystemdUnit(binPath, configPath)).toThrow(/unsafe/);
+  });
 });
 
 describe("runInit", () => {
@@ -142,12 +160,14 @@ describe("runInit", () => {
     expect(errors[0]).toContain("invalid --api-key");
   });
 
-  it("happy path: writes config (0600) + systemd unit (0644), enables service", async () => {
+  it("happy path: writes root-owned config (0640) + systemd unit (0644), enables service", async () => {
     const { deps, fs, systemctlCalls } = makeDeps();
     const code = await runInit({ apiKey: VALID_NEW_KEY, configPath, noVerify: true }, deps);
     expect(code).toBe(0);
     const yaml = fs.files.get(configPath);
-    expect(yaml?.mode).toBe(0o600);
+    expect(yaml?.mode).toBe(0o640);
+    expect(yaml?.uid).toBe(0);
+    expect(yaml?.gid).toBe(1000);
     expect(yaml?.data).toContain(VALID_NEW_KEY);
     const unit = fs.files.get(SYSTEMD_UNIT_PATH);
     expect(unit?.mode).toBe(0o644);
@@ -169,11 +189,36 @@ describe("runInit", () => {
     expect(systemctlCalls.find((c) => c[0] === "enable")).toBeUndefined();
   });
 
-  it("refuses to overwrite an existing config without --force", async () => {
-    const { deps, errors } = makeDeps({ preExistingFiles: [configPath] });
-    const code = await runInit({ apiKey: VALID_NEW_KEY, configPath, noVerify: true }, deps);
+  it("repairs an existing service-owned config without a key and preserves content", async () => {
+    const original = "# preserve exactly\nserver_name: old\n";
+    const { deps, fs, logs } = makeDeps({
+      preExistingFiles: [configPath],
+      preExistingFileData: { [configPath]: original },
+    });
+    const file = fs.files.get(configPath)!;
+    file.uid = 1000;
+    file.gid = 1000;
+    file.mode = 0o600;
+
+    const code = await runInit({ configPath, noVerify: true }, deps);
+    expect(code).toBe(0);
+    expect(fs.files.get(configPath)).toMatchObject({ data: original, uid: 0, gid: 1000, mode: 0o640 });
+    expect(logs.some((message) => message.includes("preserving existing config"))).toBe(true);
+  });
+
+  it("still requires an api key when no config exists", async () => {
+    const { deps, errors } = makeDeps();
+    const code = await runInit({ configPath, noVerify: true }, deps);
+    expect(code).toBe(2);
+    expect(errors[0]).toContain("invalid --api-key");
+  });
+
+  it("refuses an existing group-writable config", async () => {
+    const { deps, fs, errors } = makeDeps({ preExistingFiles: [configPath] });
+    fs.files.get(configPath)!.mode = 0o620;
+    const code = await runInit({ configPath, noVerify: true }, deps);
     expect(code).toBe(4);
-    expect(errors[0]).toContain("config already exists");
+    expect(errors.some((message) => message.includes("unsafe config target"))).toBe(true);
   });
 
   it("--force overwrites an existing config", async () => {
@@ -181,6 +226,33 @@ describe("runInit", () => {
     const code = await runInit({ apiKey: VALID_NEW_KEY, configPath, noVerify: true, force: true }, deps);
     expect(code).toBe(0);
     expect(fs.files.get(configPath)?.data).toContain(VALID_NEW_KEY);
+  });
+
+  it("refuses a symlink config target even with --force", async () => {
+    const { deps, fs, errors } = makeDeps({ preExistingFiles: [configPath] });
+    const existing = fs.files.get(configPath)!;
+    existing.symlink = true;
+    const code = await runInit({ apiKey: VALID_NEW_KEY, configPath, noVerify: true, force: true }, deps);
+    expect(code).toBe(4);
+    expect(errors.some((message) => message.includes("unsafe config target"))).toBe(true);
+  });
+
+  it("rejects systemd metacharacters in the config path", async () => {
+    const { deps, errors } = makeDeps();
+    const code = await runInit({ apiKey: VALID_NEW_KEY, configPath: "/etc/glassmkr/%n.yaml", noVerify: true }, deps);
+    expect(code).toBe(5);
+    expect(errors[0]).toContain("unsafe config path");
+  });
+
+  it("rejects a group-writable binary", async () => {
+    const { deps, errors } = makeDeps();
+    const original = deps.fs.lstatSync;
+    deps.fs.lstatSync = (p) => p === "/usr/local/bin/glassmkr-crucible"
+      ? { isSymbolicLink: false, isFile: true, isDirectory: false, uid: 0, gid: 0, mode: 0o775 }
+      : original(p);
+    const code = await runInit({ apiKey: VALID_NEW_KEY, configPath, noVerify: true }, deps);
+    expect(code).toBe(7);
+    expect(errors.some((message) => message.includes("unsafe glassmkr-crucible binary"))).toBe(true);
   });
 
   it("reads --api-key from stdin when value is '-'", async () => {
@@ -285,10 +357,10 @@ describe("runInit legacy config migration", () => {
     const { deps, fs, warns } = makeDeps({
       preExistingFiles: [LEGACY_CONFIG_PATH, DEFAULT_CONFIG_PATH],
     });
-    // The existing-without-force guard kicks in next, so exit 4. The warn must already have fired.
-    const code = await runInit({ apiKey: VALID_NEW_KEY, configPath: DEFAULT_CONFIG_PATH, noVerify: true }, deps);
-    expect(code).toBe(4);
+    const code = await runInit({ configPath: DEFAULT_CONFIG_PATH, noVerify: true }, deps);
+    expect(code).toBe(0);
     expect(fs.files.has(LEGACY_CONFIG_PATH)).toBe(true);
+    expect(fs.files.get(DEFAULT_CONFIG_PATH)).toMatchObject({ uid: 0, gid: 1000, mode: 0o640 });
     expect(warns.some((w) => w.includes("both") && w.includes(LEGACY_CONFIG_PATH))).toBe(true);
   });
 
@@ -311,6 +383,7 @@ describe("runInit legacy config migration", () => {
 describe("setupPrivilegeSeparation wrapper hardening (Codex #6)", () => {
   it("installs the wrapper root-owned (0:0), mode 0755, and returns true on a clean host", () => {
     const { deps, fs } = makeDeps();
+    fs.files.set(DEFAULT_CONFIG_PATH, { data: "config", mode: 0o600, uid: 0, gid: 0 });
     const ok = setupPrivilegeSeparation(deps, DEFAULT_CONFIG_PATH);
     expect(ok).toBe(true);
     const w = fs.files.get(WRAPPER_PATH);
@@ -324,6 +397,7 @@ describe("setupPrivilegeSeparation wrapper hardening (Codex #6)", () => {
 
   it("forces root ownership even when a service-user-owned wrapper pre-exists (privesc vector)", () => {
     const { deps, fs } = makeDeps();
+    fs.files.set(DEFAULT_CONFIG_PATH, { data: "config", mode: 0o600, uid: 0, gid: 0 });
     // Simulate the attack precondition: WRAPPER_PATH already exists owned by the
     // unprivileged service user (uid 999). The old code writeFileSync'd over it,
     // preserving that ownership, while still installing the NOPASSWD sudo rule.
@@ -336,9 +410,12 @@ describe("setupPrivilegeSeparation wrapper hardening (Codex #6)", () => {
   });
 
   it("stays on User=root (returns false) when the wrapper cannot be made root-owned", () => {
-    const { deps, warns } = makeDeps();
-    (deps.fs as { chownSync: (p: string, u: number, g: number) => void }).chownSync = () => {
-      throw new Error("EPERM"); // e.g. init not actually running as root
+    const { deps, fs, warns } = makeDeps();
+    fs.files.set(DEFAULT_CONFIG_PATH, { data: "config", mode: 0o600, uid: 0, gid: 0 });
+    const realChown = deps.fs.chownSync;
+    (deps.fs as { chownSync: (p: string, u: number, g: number) => void }).chownSync = (p, uid, gid) => {
+      if (p === `${WRAPPER_PATH}.tmp`) throw new Error("EPERM");
+      realChown(p, uid, gid);
     };
     const ok = setupPrivilegeSeparation(deps, DEFAULT_CONFIG_PATH);
     expect(ok).toBe(false);
@@ -346,22 +423,28 @@ describe("setupPrivilegeSeparation wrapper hardening (Codex #6)", () => {
   });
 
   it("rejects a wrapper that verifies as a symlink (returns false)", () => {
-    const { deps, warns } = makeDeps();
+    const { deps, fs, warns } = makeDeps();
+    fs.files.set(DEFAULT_CONFIG_PATH, { data: "config", mode: 0o600, uid: 0, gid: 0 });
+    const realLstat = deps.fs.lstatSync;
     (deps.fs as { lstatSync: (p: string) => { isSymbolicLink: boolean; uid: number; gid: number; mode: number } }).lstatSync =
-      () => ({ isSymbolicLink: true, uid: 0, gid: 0, mode: 0o755 });
+      (p) => p === WRAPPER_PATH
+        ? { isSymbolicLink: true, uid: 0, gid: 0, mode: 0o755 }
+        : realLstat(p);
     const ok = setupPrivilegeSeparation(deps, DEFAULT_CONFIG_PATH);
     expect(ok).toBe(false);
     expect(warns.some((w) => w.includes("failed its post-install safety check"))).toBe(true);
   });
 
   it("rejects a group/world-writable wrapper file (returns false)", () => {
-    const { deps, warns } = makeDeps();
+    const { deps, fs, warns } = makeDeps();
+    fs.files.set(DEFAULT_CONFIG_PATH, { data: "config", mode: 0o600, uid: 0, gid: 0 });
+    const realLstat = deps.fs.lstatSync;
     // Dirs safe; only the wrapper FILE is group/world-writable, so the file-mode
     // check (not the parent-dir check) is what rejects it.
     (deps.fs as { lstatSync: (p: string) => { isSymbolicLink: boolean; uid: number; gid: number; mode: number } }).lstatSync =
-      (p) => p.endsWith("/crucible-collect")
+      (p) => p === WRAPPER_PATH
         ? { isSymbolicLink: false, uid: 0, gid: 0, mode: 0o777 }
-        : { isSymbolicLink: false, uid: 0, gid: 0, mode: 0o755 };
+        : realLstat(p);
     const ok = setupPrivilegeSeparation(deps, DEFAULT_CONFIG_PATH);
     expect(ok).toBe(false);
     expect(warns.some((w) => w.includes("failed its post-install safety check"))).toBe(true);

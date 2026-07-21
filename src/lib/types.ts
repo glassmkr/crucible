@@ -41,6 +41,9 @@ export interface Snapshot {
   // subsequent snapshots don't carry it.
   expected_reboot?: boolean;
   expected_reboot_reason?: string;
+  /** Transitional upgrade state: init must re-secure the legacy service-owned
+   *  config as root-owned mode 0640. */
+  config_migration_required?: boolean;
 
   // C1-C6 fields added 2026-05-19 (CC_SPEC_FORGE_FOLLOWUP_C1_C6_ACTIVATION).
   // Each is optional + omitted when the collector returns null; the

@@ -38,19 +38,24 @@ function makeDeps(opts?: {
       existsSync: (p) => files.has(p),
       mkdirSync: () => {},
       writeFileSync: (p, data, o) => { files.set(p, { data, mode: o?.mode ?? 0o644, uid: 0, gid: 0 }); },
+      writeSecureFileSync: (p, data, mode) => { files.set(p, { data, mode, uid: 0, gid: 0 }); },
       chmodSync: (p, mode) => { const f = files.get(p); if (f) f.mode = mode; },
       chownSync: (p, uid, gid) => { const f = files.get(p); if (!f) throw new Error(`ENOENT: ${p}`); f.uid = uid; f.gid = gid; },
       lstatSync: (p) => {
         const f = files.get(p);
         // Untracked path (e.g. the wrapper's parent dir): a normal root-owned 0755 dir.
-        if (!f) return { isSymbolicLink: false, uid: 0, gid: 0, mode: 0o755 };
-        return { isSymbolicLink: !!f.symlink, uid: f.uid ?? 0, gid: f.gid ?? 0, mode: f.mode };
+        if (!f) return p === "/usr/local/bin/glassmkr-crucible"
+          ? { isSymbolicLink: false, isFile: true, isDirectory: false, uid: 0, gid: 0, mode: 0o755 }
+          : { isSymbolicLink: false, isFile: false, isDirectory: true, uid: 0, gid: 0, mode: 0o755 };
+        return { isSymbolicLink: !!f.symlink, isFile: !f.symlink, isDirectory: false, uid: f.uid ?? 0, gid: f.gid ?? 0, mode: f.mode };
       },
+      realpathSync: (p) => p,
       renameSync: (from, to) => { const f = files.get(from); if (f) { files.set(to, f); files.delete(from); } },
       unlinkSync: (p) => { files.delete(p); },
     },
-    exec: (cmd) => {
+    exec: (cmd, args) => {
       if (cmd === "command" || cmd === "which") return { stdout: "/usr/local/bin/glassmkr-crucible\n", status: 0 };
+      if (cmd === "id" && args[0] === "-G") return { stdout: "1000\n", status: 0 };
       return { stdout: "", status: 0 };
     },
     hostname: () => "web-01",

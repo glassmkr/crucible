@@ -76,7 +76,7 @@ the **Manual install** section below.
 
 ```
 glassmkr-crucible [options]
-glassmkr-crucible init        --api-key <K> [--name <N>] [--ingest-url <U>] [--no-start] [--force] [--no-verify]
+glassmkr-crucible init        [--api-key <K>] [--name <N>] [--ingest-url <U>] [--no-start] [--force] [--no-verify]
 glassmkr-crucible mark-reboot [--reason TEXT] [--ttl DURATION]
 glassmkr-crucible reboot      [--reason TEXT] [--ttl DURATION]
 
@@ -106,6 +106,22 @@ dashboard:
 
 Hand-edit any time. The agent re-reads on restart. Run
 `glassmkr-crucible init --help` for the full flag list.
+
+## Upgrading
+
+Run `init` after installing a new version so it can refresh the service unit,
+privilege wrapper, and config ownership before the service restarts:
+
+```bash
+sudo npm i -g @glassmkr/crucible
+sudo glassmkr-crucible init
+sudo systemctl restart glassmkr-crucible
+```
+
+Existing service-owned configs continue to load during the ownership migration.
+The agent emits a warning and sets `config_migration_required: true` in snapshots
+until `init` preserves the file content and changes it to `root:glassmkr` mode
+`0640`. A new config or a `--force` rewrite still requires `--api-key`.
 
 ### Migrating from 0.9.x to 0.10.x
 

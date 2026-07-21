@@ -1,4 +1,4 @@
-import { readFileSync } from "fs";
+import { closeSync, constants, fstatSync, openSync, readFileSync, type Stats } from "node:fs";
 import { parse } from "yaml";
 import { z } from "zod";
 
@@ -50,18 +50,57 @@ const ConfigSchema = z.object({
   }).default({}),
 });
 
-export type Config = z.infer<typeof ConfigSchema>;
+export type Config = z.infer<typeof ConfigSchema> & {
+  config_migration_required?: true;
+};
+
+const warnedLegacyConfigPaths = new Set<string>();
+
+export function assertSecureConfigStat(path: string, stat: Pick<Stats, "uid" | "mode"> & {
+  isFile: () => boolean;
+  isSymbolicLink: () => boolean;
+}, serviceUid = typeof process.getuid === "function" ? process.getuid() : -1): boolean {
+  if (stat.isSymbolicLink() || !stat.isFile()) {
+    throw new Error(`[config] Refusing non-regular config file at ${path}`);
+  }
+  if (stat.uid === 0) {
+    if ((stat.mode & 0o037) !== 0) {
+      throw new Error(`[config] Refusing writable or world-accessible config at ${path} (mode=${(stat.mode & 0o777).toString(8)})`);
+    }
+    return false;
+  }
+  if (stat.uid !== serviceUid) {
+    throw new Error(`[config] Refusing config owned by unexpected uid at ${path} (uid=${stat.uid})`);
+  }
+  if ((stat.mode & 0o022) !== 0) {
+    throw new Error(`[config] Refusing group/other-writable config at ${path} (mode=${(stat.mode & 0o777).toString(8)})`);
+  }
+  return true;
+}
 
 export function loadConfig(path: string): Config {
+  let fd: number | undefined;
   try {
-    const raw = readFileSync(path, "utf-8");
+    fd = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW);
+    const migrationRequired = assertSecureConfigStat(path, fstatSync(fd));
+    const raw = readFileSync(fd, "utf-8");
     const parsed = parse(raw);
-    return ConfigSchema.parse(parsed);
+    const config = ConfigSchema.parse(parsed) as Config;
+    if (migrationRequired) {
+      config.config_migration_required = true;
+      if (!warnedLegacyConfigPaths.has(path)) {
+        warnedLegacyConfigPaths.add(path);
+        console.warn("[config] WARNING: config is not yet root-owned; run `sudo glassmkr-crucible init` to complete the security migration");
+      }
+    }
+    return config;
   } catch (err: any) {
     if (err.code === "ENOENT") {
       console.log(`[config] No config file at ${path}, using defaults`);
       return ConfigSchema.parse({});
     }
     throw err;
+  } finally {
+    if (fd !== undefined) closeSync(fd);
   }
 }

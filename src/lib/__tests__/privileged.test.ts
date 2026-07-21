@@ -14,12 +14,14 @@ type ExecImpl = (cmd: string, args: string[]) => { stdout: string; status: numbe
 
 function mockDeps(execImpl: ExecImpl) {
   const files = new Map<string, { data: string; mode: number; uid?: number; gid?: number; symlink?: boolean }>();
+  files.set("/etc/glassmkr/crucible.yaml", { data: "config", mode: 0o600, uid: 0, gid: 0 });
   const warns: string[] = [];
   const deps: InitDeps = {
     fs: {
       existsSync: (p) => files.has(p),
       mkdirSync: () => {},
       writeFileSync: (p, data, o) => { files.set(p, { data, mode: o?.mode ?? 0o644, uid: 0, gid: 0 }); },
+      writeSecureFileSync: (p, data, mode) => { files.set(p, { data, mode, uid: 0, gid: 0 }); },
       chmodSync: (p, mode) => { const f = files.get(p); if (f) f.mode = mode; },
       chownSync: (p, uid, gid) => { const f = files.get(p); if (!f) throw new Error(`ENOENT: ${p}`); f.uid = uid; f.gid = gid; },
       lstatSync: (p) => {
@@ -28,6 +30,7 @@ function mockDeps(execImpl: ExecImpl) {
         if (!f) return { isSymbolicLink: false, uid: 0, gid: 0, mode: 0o755 };
         return { isSymbolicLink: !!f.symlink, uid: f.uid ?? 0, gid: f.gid ?? 0, mode: f.mode };
       },
+      realpathSync: (p) => p,
       renameSync: (from, to) => {
         const f = files.get(from); if (!f) throw new Error(`ENOENT: ${from}`);
         files.set(to, f); files.delete(from);
@@ -79,10 +82,13 @@ describe("setupPrivilegeSeparation", () => {
   // writable by the service user (Debian /usr/local/sbin is 2775 root:staff).
   type Stat = { isSymbolicLink: boolean; uid: number; gid: number; mode: number };
   const setDirStat = (deps: InitDeps, dir: Stat) => {
+    const original = deps.fs.lstatSync;
     (deps.fs as { lstatSync: (p: string) => Stat }).lstatSync = (p) =>
-      p.endsWith("/crucible-collect")
+      p === WRAPPER_PATH
         ? { isSymbolicLink: false, uid: 0, gid: 0, mode: 0o755 } // the wrapper file: fine
-        : dir; // its parent directory
+        : ["/usr/local/sbin", "/usr/local", "/usr", "/"].includes(p)
+          ? dir
+          : original(p);
   };
 
   it("stays on User=root when the wrapper directory is world-writable", () => {
@@ -118,10 +124,48 @@ describe("setupPrivilegeSeparation", () => {
     // /usr/local/sbin is safe, but its parent /usr/local is group-writable by
     // a group the service user is in (a writable grandparent lets the dir be
     // replaced wholesale).
+    const original = deps.fs.lstatSync;
     (deps.fs as { lstatSync: (p: string) => Stat }).lstatSync = (p) =>
       p === "/usr/local"
         ? { isSymbolicLink: false, uid: 0, gid: 50, mode: 0o2775 }
-        : { isSymbolicLink: false, uid: 0, gid: 0, mode: 0o755 };
+        : ["/usr/local/sbin", "/usr", "/"].includes(p)
+          ? { isSymbolicLink: false, uid: 0, gid: 0, mode: 0o755 }
+          : original(p);
+    expect(setupPrivilegeSeparation(deps, "/etc/glassmkr/crucible.yaml")).toBe(false);
+  });
+
+  it("checks every ancestor up to the filesystem root", () => {
+    const { deps } = mockDeps((cmd, args) =>
+      cmd === "id" && args[0] === "-G" ? { stdout: "0 50\n", status: 0 } :
+      cmd === "id" ? { stdout: "", status: 1 } :
+      { stdout: "", status: 0 });
+    const original = deps.fs.lstatSync;
+    (deps.fs as { lstatSync: (p: string) => Stat }).lstatSync = (p) =>
+      p === "/usr"
+        ? { isSymbolicLink: false, uid: 0, gid: 50, mode: 0o2775 }
+        : ["/usr/local/sbin", "/usr/local", "/"].includes(p)
+          ? { isSymbolicLink: false, uid: 0, gid: 0, mode: 0o755 }
+          : original(p);
+    expect(setupPrivilegeSeparation(deps, "/etc/glassmkr/crucible.yaml")).toBe(false);
+  });
+
+  it("rejects named ACL entries that grant the service user write access", () => {
+    const { deps } = mockDeps((cmd, args) =>
+      cmd === "id" && args[0] === "-G" ? { stdout: "0 4\n", status: 0 } :
+      cmd === "id" ? { stdout: "", status: 1 } :
+      cmd === "getfacl" && args[1] === "/usr/local/sbin"
+        ? { stdout: "user::rwx\nuser:1000:rwx\ngroup::r-x\nother::r-x\n", status: 0 }
+        : { stdout: "", status: 0 });
+    expect(setupPrivilegeSeparation(deps, "/etc/glassmkr/crucible.yaml")).toBe(false);
+  });
+
+  it("rejects a writable named ACL entry with an effective-permissions comment", () => {
+    const { deps } = mockDeps((cmd, args) =>
+      cmd === "id" && args[0] === "-G" ? { stdout: "0 4\n", status: 0 } :
+      cmd === "id" ? { stdout: "", status: 1 } :
+      cmd === "getfacl" && args[1] === "/usr/local/sbin"
+        ? { stdout: "user::rwx\nuser:1000:rwx\t#effective:rw-\ngroup::r-x\nother::r-x\n", status: 0 }
+        : { stdout: "", status: 0 });
     expect(setupPrivilegeSeparation(deps, "/etc/glassmkr/crucible.yaml")).toBe(false);
   });
 
