@@ -24,22 +24,16 @@
 set -u
 set -o noclobber
 umask 077
+export PATH="/usr/sbin:/usr/bin:/sbin:/bin"
+export LC_ALL=C
 
 PROFILE="${1:-}"
 STRESS_SECONDS="${STRESS_SECONDS:-600}"
 INTERVAL_S="${INTERVAL_S:-5}"
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 OUTPUT_DIR="${OUTPUT_DIR:-/var/lib/glassmkr/measurements/stress}"
 HOST="$(hostname)"
-
-# glassmkr-crucible runs as root + Profile B needs systemctl stop/start;
-# self-elevate so /proc/<pid>/io reads succeed and systemctl works without
-# a per-call sudo prompt.
-if [ "$(id -u)" -ne 0 ] && [ -n "${PROFILE:-}" ]; then
-  exec sudo -n -E env PROFILE="$PROFILE" STRESS_SECONDS="$STRESS_SECONDS" \
-    INTERVAL_S="$INTERVAL_S" OUTPUT_DIR="$OUTPUT_DIR" \
-    bash "$0" "$PROFILE"
-fi
+PROFILE_B_LOCK_FILE="/run/lock/glassmkr-crucible-stress.lock"
 
 usage() {
   cat >&2 <<'EOF'
@@ -63,12 +57,14 @@ SERVICE_NEEDS_RESTORE=0
 sample_pid=""
 fio_pid=""
 stress_pid=""
+PROFILE_B_LOCK_FD=""
 FIO_FILE=""
 FIO_FILE_CLEANUP=0
 
 cleanup() {
   local status=$?
-  trap - EXIT INT TERM
+  trap '' INT TERM
+  trap - EXIT
   local pid
   for pid in "$sample_pid" "$fio_pid" "$stress_pid"; do
     if [[ "$pid" =~ ^[0-9]+$ ]]; then
@@ -85,6 +81,11 @@ cleanup() {
   if [ "$FIO_FILE_CLEANUP" -eq 1 ] && [ -n "$FIO_FILE" ]; then
     rm -f -- "$FIO_FILE"
   fi
+  if [[ "$PROFILE_B_LOCK_FD" =~ ^[0-9]+$ ]]; then
+    flock -u "$PROFILE_B_LOCK_FD" 2>/dev/null || true
+    exec {PROFILE_B_LOCK_FD}>&-
+    PROFILE_B_LOCK_FD=""
+  fi
   exit "$status"
 }
 
@@ -92,11 +93,78 @@ trap cleanup EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM
 
-prepare_private_output_dir() {
+validate_output_dir_syntax() {
+  if [[ "$OUTPUT_DIR" =~ [[:cntrl:]] ]]; then
+    echo "[run_stress] OUTPUT_DIR must not contain control characters" >&2
+    return 1
+  fi
   if [ "$OUTPUT_DIR" = "/" ] || [[ "$OUTPUT_DIR" != /* ]] || [[ "$OUTPUT_DIR" == *"//"* ]] || [[ "$OUTPUT_DIR" == */ ]] || [[ "/$OUTPUT_DIR/" == *"/../"* ]] || [[ "/$OUTPUT_DIR/" == *"/./"* ]]; then
     echo "[run_stress] OUTPUT_DIR must be a normalized absolute path" >&2
     return 1
   fi
+}
+
+reject_symlink_components() {
+  local path="$1"
+  local current=""
+  local component
+  local -a components=()
+  IFS='/' read -r -a components <<< "${path#/}"
+  for component in "${components[@]}"; do
+    [ -n "$component" ] || continue
+    current="${current}/${component}"
+    if [ -L "$current" ]; then
+      echo "[run_stress] refusing symlink in output path: $current" >&2
+      return 1
+    fi
+  done
+}
+
+require_root_owned_safe_path() {
+  local path="$1"
+  local expected_kind="$2"
+  local metadata owner group mode kind
+  if [ -L "$path" ]; then
+    echo "[run_stress] refusing symlinked trusted path: $path" >&2
+    return 1
+  fi
+  metadata="$(stat -c '%u %g %a %F' -- "$path")" || return 1
+  read -r owner group mode kind <<< "$metadata"
+  if [ "$kind" != "$expected_kind" ] || [ "$owner" -ne 0 ] || [ "$group" -ne 0 ] || (( (8#$mode & 022) != 0 )); then
+    echo "[run_stress] trusted path must be root-owned and not group/world-writable: $path" >&2
+    return 1
+  fi
+}
+
+assert_trusted_scripts() {
+  require_root_owned_safe_path "$SCRIPT_DIR" "directory" || return 1
+  require_root_owned_safe_path "$SCRIPT_DIR/run_stress.sh" "regular file" || return 1
+  require_root_owned_safe_path "$SCRIPT_DIR/collect_metrics.sh" "regular file" || return 1
+}
+
+require_supported_platform() {
+  if [ "$(uname -s)" != "Linux" ] || ! stat --version 2>/dev/null | head -n 1 | grep -q "GNU coreutils"; then
+    echo "[run_stress] Linux with GNU coreutils is required" >&2
+    return 1
+  fi
+  if ! command -v systemctl >/dev/null 2>&1 || ! systemctl --version 2>/dev/null | head -n 1 | grep -q '^systemd '; then
+    echo "[run_stress] systemd is required" >&2
+    return 1
+  fi
+}
+
+acquire_profile_b_lock() {
+  local lock_path="${1:-$PROFILE_B_LOCK_FILE}"
+  exec {PROFILE_B_LOCK_FD}>|"$lock_path" || return 1
+  if ! flock -n "$PROFILE_B_LOCK_FD"; then
+    echo "[run_stress] another Profile B run holds $PROFILE_B_LOCK_FILE" >&2
+    return 1
+  fi
+}
+
+prepare_private_output_dir() {
+  validate_output_dir_syntax || return 1
+  reject_symlink_components "$OUTPUT_DIR" || return 1
 
   local current=""
   local component
@@ -153,15 +221,29 @@ require_new_output() {
   fi
 }
 
-run_collector_background() {
-  # Spawns collect_metrics.sh writing to the FD passed as $1
-  # (>&3 in callers). The collector terminates when the foreground
-  # stress process exits and we trap SIGTERM.
-  local fd="$1"
-  DURATION_S="$STRESS_SECONDS" INTERVAL_S="$INTERVAL_S" \
-    bash "$SCRIPT_DIR/collect_metrics.sh" >&"$fd" &
-  echo $!
-}
+if [ "${RUN_STRESS_SOURCE_ONLY:-0}" = "1" ]; then
+  return 0 2>/dev/null || exit 0
+fi
+
+case "$PROFILE" in
+  a|b|c) ;;
+  *) usage ;;
+esac
+
+validate_output_dir_syntax || exit 3
+require_supported_platform || exit 2
+assert_trusted_scripts || exit 2
+
+# Profile B controls the service, and every profile reads root-owned proc data.
+# Re-exec with a minimal environment so root never inherits caller-controlled
+# command lookup or unrelated variables.
+if [ "$(id -u)" -ne 0 ]; then
+  exec /usr/bin/sudo -n /usr/bin/env -i \
+    PATH="/usr/sbin:/usr/bin:/sbin:/bin" LC_ALL=C \
+    STRESS_SECONDS="$STRESS_SECONDS" INTERVAL_S="$INTERVAL_S" \
+    OUTPUT_DIR="$OUTPUT_DIR" \
+    /bin/bash "$SCRIPT_DIR/run_stress.sh" "$PROFILE"
+fi
 
 case "$PROFILE" in
   a)
@@ -186,16 +268,20 @@ case "$PROFILE" in
       exit 2
     }
 
-    # Step 1: control run (agent stopped). Writes control CSV via a
-    # background tail of /dev/null (no agent so collect_metrics emits
-    # empty rows, which is useful to confirm the gap). Also captures fio
-    # throughput summary into a sibling .fio-throughput file.
+    # Step 1: control run with the agent stopped. collect_metrics records the
+    # host window while agent process fields remain absent. fio writes its
+    # throughput summary into a sibling file.
     >&2 echo "[run_stress] profile B (I/O) on ${HOST}"
     >&2 echo "[run_stress] step 1/2: control run (agent STOPPED) for ${STRESS_SECONDS}s"
     command -v systemctl >/dev/null 2>&1 || {
       echo "[run_stress] systemctl is required for profile B" >&2
       exit 3
     }
+    command -v flock >/dev/null 2>&1 || {
+      echo "[run_stress] flock is required for profile B" >&2
+      exit 3
+    }
+    acquire_profile_b_lock || exit 3
     systemctl is-active --quiet glassmkr-crucible || {
       echo "[run_stress] glassmkr-crucible must be active before profile B" >&2
       exit 3
