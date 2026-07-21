@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
-import { runEnroll, normalizeDashboardBase, type EnrollDeps } from "../enroll.js";
+import { postJsonWithPolicy, runEnroll, normalizeDashboardBase, type EnrollDeps } from "../enroll.js";
+import type { EndpointPolicy } from "../lib/endpoint-policy.js";
 import { DEFAULT_CONFIG_PATH } from "../init.js";
 import type { MachineId } from "../lib/machine-id.js";
 
@@ -63,7 +64,7 @@ function makeDeps(opts?: {
     log: (m) => logs.push(m),
     warn: (m) => warns.push(m),
     error: (m) => errors.push(m),
-    fetch: async () => ({ status: 200 }),
+    fetch: async () => new Response(null, { status: 200 }),
     readStdin: async () => opts?.stdin ?? "",
     postJson: async (url, body, headers) => {
       posts.push({ url, body, headers });
@@ -76,6 +77,7 @@ function makeDeps(opts?: {
     readMachineId: () => (opts?.machine === undefined ? MACHINE : opts.machine),
     resolveEndpoint: async () => {
       if (opts?.resolveThrows) throw new Error("resolved to a private address");
+      return [{ address: "203.0.113.10", family: 4 }];
     },
   };
   return { deps, files, logs, warns, errors, posts };
@@ -87,6 +89,26 @@ describe("normalizeDashboardBase", () => {
   });
   it("strips an accidental /api/v1/ingest suffix", () => {
     expect(normalizeDashboardBase("https://app.glassmkr.com/api/v1/ingest")).toBe("https://app.glassmkr.com");
+  });
+});
+
+describe("postJsonWithPolicy", () => {
+  const policy: EndpointPolicy = { allowInsecure: false, allowedOrigins: [] };
+
+  it("uses a pinned dispatcher for the validated enrollment address", async () => {
+    const fetchImpl = async (_input: string | URL | Request, init?: RequestInit) => {
+      expect((init as RequestInit & { dispatcher?: unknown }).dispatcher).toBeTruthy();
+      return new Response('{"ok":true}', { status: 201 });
+    };
+    const result = await postJsonWithPolicy(
+      "https://app.example/api/v1/servers",
+      { hostname: "node" },
+      { Authorization: "Bearer fixture" },
+      policy,
+      fetchImpl as typeof fetch,
+      async () => [{ address: "203.0.113.10", family: 4 }],
+    );
+    expect(result).toEqual({ status: 201, json: { ok: true } });
   });
 });
 

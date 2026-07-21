@@ -23,6 +23,8 @@ export interface InitFlags {
   noStart: boolean;
   force: boolean;
   noVerify: boolean;
+  allowInsecureEndpoint: boolean;
+  allowedEndpointOrigins?: string[];
 }
 
 export interface EnrollFlags {
@@ -53,7 +55,7 @@ export function parseCliArgs(argv: string[], version: string): { result: CliArgs
 
   // Subcommand dispatch: `init` takes its own flag set.
   if (argv[0] === "init") {
-    const flags: InitFlags = { noStart: false, force: false, noVerify: false };
+    const flags: InitFlags = { noStart: false, force: false, noVerify: false, allowInsecureEndpoint: false };
     for (let i = 1; i < argv.length; i++) {
       const a = argv[i];
       if (a === "--help" || a === "-h") {
@@ -67,6 +69,15 @@ export function parseCliArgs(argv: string[], version: string): { result: CliArgs
       if (a.startsWith("--ingest-url=")) { flags.ingestUrl = a.slice("--ingest-url=".length); continue; }
       if (a === "--config-path") { flags.configPath = argv[++i]; continue; }
       if (a.startsWith("--config-path=")) { flags.configPath = a.slice("--config-path=".length); continue; }
+      if (a === "--allow-insecure-endpoint") { flags.allowInsecureEndpoint = true; continue; }
+      if (a === "--allow-endpoint-origin") {
+        flags.allowedEndpointOrigins = [...(flags.allowedEndpointOrigins ?? []), argv[++i]];
+        continue;
+      }
+      if (a.startsWith("--allow-endpoint-origin=")) {
+        flags.allowedEndpointOrigins = [...(flags.allowedEndpointOrigins ?? []), a.slice("--allow-endpoint-origin=".length)];
+        continue;
+      }
       if (a === "--no-start") { flags.noStart = true; continue; }
       if (a === "--force") { flags.force = true; continue; }
       if (a === "--no-verify") { flags.noVerify = true; continue; }
@@ -259,6 +270,10 @@ export function initHelp(version: string): string {
     "                      A protected file descriptor or systemd credential can be piped to stdin.",
     "  --name <NAME>       Server name in the Glassmkr dashboard. Defaults to the host's hostname.",
     "  --ingest-url <URL>  Ingest endpoint (default: https://app.glassmkr.com/api/v1/ingest).",
+    "  --allow-endpoint-origin <ORIGIN>",
+    "                      Permit a specific cross-origin or private endpoint. Repeatable.",
+    "  --allow-insecure-endpoint",
+    "                      Permit HTTP and private endpoints for trusted self-hosting.",
     "  --config-path <P>   Where to write crucible.yaml (default: /etc/glassmkr/crucible.yaml).",
     "  --no-start          Write config + unit, daemon-reload, but do not enable/start the service.",
     "  --force             Overwrite an existing config file. Without it, init re-secures in place.",

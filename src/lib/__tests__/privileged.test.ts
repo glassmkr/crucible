@@ -39,7 +39,9 @@ function mockDeps(execImpl: ExecImpl) {
     },
     exec: execImpl,
     hostname: () => "h", log: () => {}, warn: (m) => warns.push(m), error: () => {},
-    fetch: async () => ({ status: 200 }), readStdin: async () => "",
+    fetch: async () => new Response(null, { status: 200 }),
+    resolveEndpoint: async () => [{ address: "203.0.113.10", family: 4 }],
+    readStdin: async () => "",
   };
   return { deps, files, warns };
 }

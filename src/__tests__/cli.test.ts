@@ -164,6 +164,14 @@ describe("init subcommand parsing", () => {
     expect(result.init?.ingestUrl).toBe("https://dashboard.example.com/api/v1/ingest");
     expect(result.init?.configPath).toBe("/etc/x.yaml");
   });
+  it("init captures endpoint policy exceptions", () => {
+    const { result } = parseCliArgs([
+      "init", "--api-key", "k", "--allow-insecure-endpoint",
+      "--allow-endpoint-origin", "https://ingest.example.com",
+    ], "0.14.5");
+    expect(result.init?.allowInsecureEndpoint).toBe(true);
+    expect(result.init?.allowedEndpointOrigins).toEqual(["https://ingest.example.com"]);
+  });
   it("init --help returns help text instead of running init", () => {
     const { result, output } = parseCliArgs(["init", "--help"], "0.9.1");
     expect(result.mode).toBe("help");

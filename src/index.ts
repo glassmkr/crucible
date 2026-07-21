@@ -31,6 +31,8 @@ if (cliArgs.mode === "init") {
     force: flags.force,
     noVerify: flags.noVerify,
     apiKeyFromArgv: flags.apiKey !== "-",
+    allowInsecureEndpoint: flags.allowInsecureEndpoint,
+    allowedEndpointOrigins: flags.allowedEndpointOrigins,
   }, defaultDeps());
   process.exit(code);
 }
@@ -86,8 +88,9 @@ if (cliArgs.mode === "mark-reboot" || cliArgs.mode === "reboot") {
   process.exit(0);
 }
 
-import { loadConfig } from "./config.js";
+import { configLoadFailureMessage, loadConfig } from "./config.js";
 import { checkForUpdates } from "./lib/version-check.js";
+import { normalizeAllowedOrigins } from "./lib/endpoint-policy.js";
 import { startMetricsServer, updateMetrics } from "./metrics-server.js";
 import { collectSystem } from "./collect/system.js";
 import { collectCpu } from "./collect/cpu.js";
@@ -148,7 +151,13 @@ let plannedRebootConsumed = false;
 // exist but /etc/glassmkr/collector.yaml does, transparently use the
 // legacy path and warn once. v0.13.5 rename, preserves existing installs.
 const resolvedConfigPath = resolveConfigPathWithLegacyFallback(cliArgs.configPath);
-const config = loadConfig(resolvedConfigPath);
+let config: ReturnType<typeof loadConfig>;
+try {
+  config = loadConfig(resolvedConfigPath);
+} catch (error) {
+  console.error(configLoadFailureMessage(resolvedConfigPath, error));
+  process.exit(11);
+}
 
 console.log(`[collector] Starting. Server: ${config.server_name}. Interval: ${config.collection.interval_seconds}s`);
 console.log(`[collector] IPMI: ${config.collection.ipmi ? "enabled" : "disabled"}, SMART: ${config.collection.smart ? "enabled" : "disabled"}`);
@@ -376,7 +385,10 @@ async function collect() {
   }
 
   // Check for updates (every 6 hours, non-blocking)
-  checkForUpdates(config.dashboard.enabled ? config.dashboard.url : undefined);
+  checkForUpdates(config.dashboard.enabled ? config.dashboard.url : undefined, {
+    allowInsecure: config.dashboard.allow_insecure_endpoint,
+    allowedOrigins: normalizeAllowedOrigins(config.dashboard.allowed_origins),
+  });
 
   // Print summary on first run
   if (firstRun) {

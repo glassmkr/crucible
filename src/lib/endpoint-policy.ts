@@ -1,5 +1,6 @@
-import { isIP } from "node:net";
+import { isIP, type LookupFunction } from "node:net";
 import { lookup } from "node:dns/promises";
+import { Agent, type Dispatcher } from "undici";
 
 export interface EndpointPolicy {
   allowInsecure: boolean;
@@ -19,7 +20,7 @@ function stripIpv6Brackets(hostname: string): string {
   return hostname.startsWith("[") && hostname.endsWith("]") ? hostname.slice(1, -1) : hostname;
 }
 
-function ipv4FromMappedIpv6(hostname: string): string | null {
+function ipv6Words(hostname: string): number[] | null {
   let host = hostname;
   const dottedMatch = host.match(/^(.*:)(\d+\.\d+\.\d+\.\d+)$/);
   if (dottedMatch) {
@@ -36,7 +37,12 @@ function ipv4FromMappedIpv6(hostname: string): string | null {
   if ((halves.length === 1 && missing !== 0) || missing < 0) return null;
   const words = [...left, ...Array(missing).fill("0"), ...right].map((word) => Number.parseInt(word || "0", 16));
   if (words.length !== 8 || words.some((word) => !Number.isInteger(word) || word < 0 || word > 0xffff)) return null;
-  if (!words.slice(0, 5).every((word) => word === 0) || words[5] !== 0xffff) return null;
+  return words;
+}
+
+function ipv4FromMappedIpv6(hostname: string): string | null {
+  const words = ipv6Words(hostname);
+  if (!words || !words.slice(0, 5).every((word) => word === 0) || words[5] !== 0xffff) return null;
   return `${words[6] >> 8}.${words[6] & 0xff}.${words[7] >> 8}.${words[7] & 0xff}`;
 }
 
@@ -58,10 +64,12 @@ export function isPrivateAddress(hostname: string): boolean {
       || a >= 224;
   }
   if (family === 6) {
+    const words = ipv6Words(host);
+    if (!words) return true;
     const mapped = ipv4FromMappedIpv6(host);
     if (mapped) return isPrivateAddress(mapped);
-    if (host === "::" || host === "::1") return true;
-    if (/^f[cd]/.test(host) || /^fe[89ab]/.test(host)) return true;
+    if (words.slice(0, 6).every((word) => word === 0)) return true;
+    if (/^f[cd]/.test(host) || /^fe[89a-f]/.test(host)) return true;
   }
   return false;
 }
@@ -93,15 +101,108 @@ export function validateEndpoint(
   return url;
 }
 
+export interface ResolvedEndpointAddress {
+  address: string;
+  family: 4 | 6;
+}
+
 export async function assertEndpointResolution(
   url: URL,
   policy: EndpointPolicy,
   resolve: typeof lookup = lookup,
-): Promise<void> {
-  if (policy.allowInsecure || originIsExplicitlyAllowed(url.origin, policy) || isIP(stripIpv6Brackets(url.hostname))) return;
+): Promise<ResolvedEndpointAddress[]> {
+  const literalFamily = isIP(stripIpv6Brackets(url.hostname));
+  if (literalFamily) {
+    return [{ address: stripIpv6Brackets(url.hostname), family: literalFamily as 4 | 6 }];
+  }
   const addresses = await resolve(url.hostname, { all: true, verbatim: true });
   if (addresses.length === 0) throw new Error(`endpoint hostname did not resolve: ${url.hostname}`);
-  if (addresses.some((entry) => isPrivateAddress(entry.address))) {
+  if (!policy.allowInsecure && !originIsExplicitlyAllowed(url.origin, policy) && addresses.some((entry) => isPrivateAddress(entry.address))) {
     throw new Error(`endpoint resolved to a private, loopback, or link-local address: ${url.hostname}`);
+  }
+  return addresses.map((entry) => ({ address: entry.address, family: entry.family as 4 | 6 }));
+}
+
+type AddressSelector = (addresses: ResolvedEndpointAddress[]) => ResolvedEndpointAddress;
+
+export function selectPinnedAddress(
+  url: URL,
+  validatedAddresses: ResolvedEndpointAddress[],
+  policy: EndpointPolicy,
+  family: number = 0,
+  select: AddressSelector = (addresses) => addresses[0],
+): ResolvedEndpointAddress {
+  const candidates = family === 4 || family === 6
+    ? validatedAddresses.filter((entry) => entry.family === family)
+    : validatedAddresses;
+  if (candidates.length === 0) throw new Error(`no validated address matches family ${family} for ${url.hostname}`);
+  const selected = select(candidates);
+  if (!policy.allowInsecure && !originIsExplicitlyAllowed(url.origin, policy) && isPrivateAddress(selected.address)) {
+    throw new Error(`refusing private address selected for endpoint connection: ${selected.address}`);
+  }
+  if (!candidates.some((entry) => entry.address === selected.address && entry.family === selected.family)) {
+    throw new Error(`endpoint connection address was not in the validated DNS result: ${selected.address}`);
+  }
+  return selected;
+}
+
+export function createPinnedDispatcher(
+  url: URL,
+  validatedAddresses: ResolvedEndpointAddress[],
+  policy: EndpointPolicy,
+  select?: AddressSelector,
+): Agent {
+  const lookup: LookupFunction = ((
+    _hostname: string,
+    options: Parameters<LookupFunction>[1],
+    callback: (...args: any[]) => void,
+  ) => {
+    try {
+      const opts = typeof options === "number" ? { family: options, all: false } : options;
+      const family = opts?.family === "IPv4" ? 4 : opts?.family === "IPv6" ? 6 : (opts?.family ?? 0);
+      if (opts?.all) {
+        const candidates = family === 4 || family === 6
+          ? validatedAddresses.filter((entry) => entry.family === family)
+          : validatedAddresses;
+        for (const entry of candidates) selectPinnedAddress(url, validatedAddresses, policy, entry.family, () => entry);
+        callback(null, candidates);
+        return;
+      }
+      const selected = selectPinnedAddress(url, validatedAddresses, policy, family, select);
+      callback(null, selected.address, selected.family);
+    } catch (err) {
+      callback(err);
+    }
+  }) as LookupFunction;
+
+  const hostname = stripIpv6Brackets(url.hostname);
+  return new Agent({
+    connect: {
+      lookup,
+      ...(isIP(hostname) ? {} : { servername: hostname }),
+    },
+  });
+}
+
+export interface PinnedFetchResult {
+  response: Response;
+  dispatcher: Dispatcher;
+}
+
+export async function fetchPinnedEndpoint(
+  url: URL,
+  init: RequestInit,
+  policy: EndpointPolicy,
+  fetchImpl: typeof fetch = fetch,
+  resolveEndpoint: typeof assertEndpointResolution = assertEndpointResolution,
+): Promise<PinnedFetchResult> {
+  const addresses = await resolveEndpoint(url, policy);
+  const dispatcher = createPinnedDispatcher(url, addresses, policy);
+  try {
+    const response = await fetchImpl(url, { ...init, dispatcher } as RequestInit);
+    return { response, dispatcher };
+  } catch (err) {
+    await dispatcher.close();
+    throw err;
   }
 }

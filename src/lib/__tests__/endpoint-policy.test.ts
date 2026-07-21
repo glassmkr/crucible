@@ -3,6 +3,7 @@ import {
   assertEndpointResolution,
   isPrivateAddress,
   normalizeAllowedOrigins,
+  selectPinnedAddress,
   validateEndpoint,
   type EndpointPolicy,
 } from "../endpoint-policy.js";
@@ -21,6 +22,8 @@ describe("endpoint policy", () => {
     "fe80::1",
     "::ffff:127.0.0.1",
     "::ffff:7f00:1",
+    "::7f00:1",
+    "fec0::1",
     "0:0:0:0:0:ffff:a9fe:a9fe",
   ])("classifies %s as non-public", (address) => {
     expect(isPrivateAddress(address)).toBe(true);
@@ -61,7 +64,18 @@ describe("endpoint policy", () => {
     await expect(assertEndpointResolution(new URL("https://internal.example.com"), {
       ...STRICT,
       allowedOrigins: ["https://internal.example.com"],
-    }, resolve as any)).resolves.toBeUndefined();
-    expect(resolve).not.toHaveBeenCalled();
+    }, resolve as any)).resolves.toEqual([{ address: "10.0.0.2", family: 4 }]);
+    expect(resolve).toHaveBeenCalled();
+  });
+
+  it("rejects a private address selected after a public DNS validation", () => {
+    const url = new URL("https://example.com");
+    expect(() => selectPinnedAddress(
+      url,
+      [{ address: "203.0.113.10", family: 4 }],
+      STRICT,
+      4,
+      () => ({ address: "127.0.0.1", family: 4 }),
+    )).toThrow("private address selected");
   });
 });
