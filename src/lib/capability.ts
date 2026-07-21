@@ -12,6 +12,7 @@
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { runPrivileged } from "./privileged.js";
+import { buildSubprocessEnv } from "./exec.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -62,7 +63,10 @@ interface DetectDeps {
 }
 
 async function defaultRunIpmitool(args: string[]): Promise<{ stdout: string; stderr: string }> {
-  const { stdout, stderr } = await execFileAsync("ipmitool", args, { timeout: 2000 });
+  const { stdout, stderr } = await execFileAsync("ipmitool", args, {
+    timeout: 2000,
+    env: buildSubprocessEnv(),
+  });
   return { stdout, stderr };
 }
 

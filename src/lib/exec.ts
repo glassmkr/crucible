@@ -3,6 +3,20 @@ import { promisify } from "util";
 
 const execFileAsync = promisify(execFile);
 
+export type SubprocessEnv = Record<string, string | undefined>;
+
+export function buildSubprocessEnv(extra: SubprocessEnv = {}): NodeJS.ProcessEnv {
+  const env: NodeJS.ProcessEnv = {
+    PATH: process.env.PATH ?? "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+    LANG: process.env.LANG ?? "C.UTF-8",
+    LC_ALL: process.env.LC_ALL ?? "C.UTF-8",
+  };
+  for (const [key, value] of Object.entries(extra)) {
+    if (value !== undefined) env[key] = value;
+  }
+  return env;
+}
+
 // Backwards-compatible: existing callers get a string or null.
 // The new runDetailed() returns stderr + exitCode + presence info so
 // callers can distinguish "tool not installed" from "tool exited 0
@@ -11,8 +25,13 @@ const execFileAsync = promisify(execFile);
 // typo + the v0.13.2 `clocks_event_reasons` rename for ~24h each: in
 // both cases nvidia-smi exited 0 with stderr saying "field not found"
 // and Crucible's collectors processed empty stdout as "no data".
-export async function run(cmd: string, args: string[], timeoutMs = 10000): Promise<string | null> {
-  const res = await runDetailed(cmd, args, timeoutMs);
+export async function run(
+  cmd: string,
+  args: string[],
+  timeoutMs = 10000,
+  extraEnv: SubprocessEnv = {},
+): Promise<string | null> {
+  const res = await runDetailed(cmd, args, timeoutMs, extraEnv);
   return res.installed && res.stdout !== null ? res.stdout : null;
 }
 
@@ -28,9 +47,13 @@ export async function runDetailed(
   cmd: string,
   args: string[],
   timeoutMs = 10000,
+  extraEnv: SubprocessEnv = {},
 ): Promise<RunDetailedResult> {
   try {
-    const { stdout, stderr } = await execFileAsync(cmd, args, { timeout: timeoutMs });
+    const { stdout, stderr } = await execFileAsync(cmd, args, {
+      timeout: timeoutMs,
+      env: buildSubprocessEnv(extraEnv),
+    });
     return { installed: true, exitCode: 0, stdout, stderr: stderr ?? "", timedOut: false };
   } catch (err: any) {
     if (err.code === "ENOENT") {

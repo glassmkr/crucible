@@ -60,6 +60,9 @@ export function normalizeDashboardBase(raw: string): string {
 
 export async function runEnroll(opts: EnrollOptions, deps: EnrollDeps): Promise<number> {
   let accountKey = opts.accountKey;
+  if (accountKey !== "-") {
+    deps.warn("[enroll] WARNING: literal --account-key values are visible in process listings and shell history. Prefer --account-key - and provide the key on stdin.");
+  }
   if (accountKey === "-") {
     try {
       accountKey = (await deps.readStdin()).replace(/\r?\n$/, "").trim();
@@ -160,6 +163,7 @@ export async function runEnroll(opts: EnrollOptions, deps: EnrollDeps): Promise<
       noStart: opts.noStart,
       force: opts.force,
       noVerify: opts.noVerify ?? true,
+      apiKeyFromArgv: false,
     },
     deps,
   );

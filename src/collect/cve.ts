@@ -111,7 +111,12 @@ async function collectUbuntuPro(): Promise<CveSnapshot> {
       parser_quality: "fleet-tested",
     };
   }
-  const out = await run("pro", ["security-status", "--format=json"]);
+  const out = await run(
+    "pro",
+    ["security-status", "--format=json"],
+    10000,
+    { GLASSMKR_UBUNTU_PRO_TOKEN: token },
+  );
   if (!out) {
     return {
       available: false,

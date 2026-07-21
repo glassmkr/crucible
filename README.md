@@ -42,7 +42,7 @@ Or run the steps yourself:
 
 ```bash
 sudo npm install -g @glassmkr/crucible
-sudo glassmkr-crucible init --api-key gmk_cru_live_<your-key>
+sudo glassmkr-crucible init --api-key - < /path/to/protected-key-file
 ```
 
 `init` is the canonical first-run path. It validates the key shape,
@@ -56,14 +56,18 @@ Run `glassmkr-crucible init --help` for the full flag list.
 2. Run `init`:
 
    ```bash
-   sudo glassmkr-crucible init --api-key gmk_cru_live_<your-key>
+   sudo glassmkr-crucible init --api-key - < /path/to/protected-key-file
    ```
 
    This writes `/etc/glassmkr/crucible.yaml`, writes the systemd unit,
    and starts the service. Pass `--name` to override the dashboard
    server name (defaults to the host's hostname). Pass `--no-start` if
    you want to inspect the unit before enabling it. Pass `--api-key -`
-   to read the key from stdin (handy for password-manager pipes).
+   to read the key from stdin (handy for password-manager pipes). Literal
+   values remain supported for compatibility, but they can be exposed by
+   process listings and shell history. A systemd credential can be passed
+   without argv exposure with
+   `sudo glassmkr-crucible init --api-key - < "$CREDENTIALS_DIRECTORY/crucible-api-key"`.
 
    Snapshots appear in the Glassmkr Dashboard within seconds of the first
    push.
@@ -102,7 +106,16 @@ dashboard:
   enabled: true
   url: "https://app.glassmkr.com"
   api_key: "gmk_cru_live_<...>_<4>"
+prometheus:
+  enabled: false
+  address: "127.0.0.1"
+  port: 9101
 ```
+
+The opt-in Prometheus listener binds to loopback by default and has no built-in
+authentication. To scrape it remotely, keep the loopback bind and place an
+authenticated proxy or an equivalent host ACL in front of it. Set `address`
+explicitly only when that network boundary is already in place.
 
 Hand-edit any time. The agent re-reads on restart. Run
 `glassmkr-crucible init --help` for the full flag list.

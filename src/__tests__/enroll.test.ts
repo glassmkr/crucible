@@ -87,6 +87,16 @@ describe("normalizeDashboardBase", () => {
 });
 
 describe("runEnroll", () => {
+  it("warns for a literal account key but not the stdin form", async () => {
+    const literal = makeDeps();
+    await runEnroll({ accountKey: ACCT_KEY, noStart: true }, literal.deps);
+    expect(literal.warns.some((message) => message.includes("process listings") && message.includes("--account-key -"))).toBe(true);
+
+    const stdin = makeDeps({ stdin: ACCT_KEY });
+    await runEnroll({ accountKey: "-", noStart: true }, stdin.deps);
+    expect(stdin.warns.some((message) => message.includes("process listings"))).toBe(false);
+  });
+
   it("posts machine_id + Idempotency-Key + Bearer account key, then writes the collector key", async () => {
     const h = makeDeps();
     const code = await runEnroll({ accountKey: ACCT_KEY, name: "web-01" }, h.deps);

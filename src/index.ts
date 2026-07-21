@@ -30,6 +30,7 @@ if (cliArgs.mode === "init") {
     noStart: flags.noStart,
     force: flags.force,
     noVerify: flags.noVerify,
+    apiKeyFromArgv: flags.apiKey !== "-",
   }, defaultDeps());
   process.exit(code);
 }
@@ -71,9 +72,10 @@ if (cliArgs.mode === "mark-reboot" || cliArgs.mode === "reboot") {
   }
   if (cliArgs.mode === "reboot") {
     const { execFileSync } = await import("node:child_process");
+    const { buildSubprocessEnv } = await import("./lib/exec.js");
     console.log("[reboot] invoking systemctl reboot");
     try {
-      execFileSync("systemctl", ["reboot"], { stdio: "inherit" });
+      execFileSync("systemctl", ["reboot"], { stdio: "inherit", env: buildSubprocessEnv() });
     } catch (err: any) {
       console.error(`[reboot] systemctl reboot failed: ${err?.message || err}`);
       process.exit(1);
@@ -149,7 +151,7 @@ const config = loadConfig(resolvedConfigPath);
 console.log(`[collector] Starting. Server: ${config.server_name}. Interval: ${config.collection.interval_seconds}s`);
 console.log(`[collector] IPMI: ${config.collection.ipmi ? "enabled" : "disabled"}, SMART: ${config.collection.smart ? "enabled" : "disabled"}`);
 console.log(`[collector] Dashboard: ${config.dashboard.enabled ? config.dashboard.url : "disabled"}`);
-console.log(`[collector] Prometheus: ${config.prometheus.enabled ? `:${config.prometheus.port}/metrics` : "disabled"}`);
+console.log(`[collector] Prometheus: ${config.prometheus.enabled ? `${config.prometheus.address}:${config.prometheus.port}/metrics` : "disabled"}`);
 
 // /proc/pressure is absent on kernels < 4.20, built without CONFIG_PSI, or
 // shipping PSI default-disabled (CONFIG_PSI_DEFAULT_DISABLED=y; stock
@@ -161,7 +163,7 @@ if (!existsSync("/proc/pressure")) {
 
 // Start Prometheus metrics server if enabled
 if (config.prometheus.enabled) {
-  startMetricsServer(config.prometheus.port);
+  startMetricsServer(config.prometheus.port, config.prometheus.address);
 }
 
 // Initialize TLS pinning for Dashboard if configured

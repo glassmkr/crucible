@@ -1,9 +1,37 @@
-import { readFileSync, writeFileSync, mkdirSync } from "fs";
+import {
+  chmodSync,
+  closeSync,
+  constants,
+  copyFileSync,
+  fsyncSync,
+  mkdirSync,
+  openSync,
+  readdirSync,
+  readFileSync,
+  renameSync,
+  unlinkSync,
+  writeFileSync,
+} from "node:fs";
+import { randomUUID } from "node:crypto";
+import { basename, dirname } from "node:path";
 import type { AlertResult } from "../lib/types.js";
 
 const STATE_FILE = "/var/lib/glassmkr/alert-state.json";
+export const MAX_CORRUPT_STATE_BACKUPS = 5;
 
-interface AlertState {
+function pruneCorruptBackups(path: string): void {
+  const parent = dirname(path);
+  const prefix = `${basename(path)}.corrupt-`;
+  const backups = readdirSync(parent)
+    .filter((name) => name.startsWith(prefix))
+    .sort()
+    .reverse();
+  for (const name of backups.slice(MAX_CORRUPT_STATE_BACKUPS)) {
+    unlinkSync(`${parent}/${name}`);
+  }
+}
+
+export interface AlertState {
   type: string;
   instance?: string;
   first_seen: string;
@@ -23,22 +51,63 @@ function stateKey(a: { type: string; instance?: string }): string {
 
 let state: Map<string, AlertState> = new Map();
 
-function load() {
+export function loadAlertStateFile(path: string): Map<string, AlertState> {
   try {
-    const raw = readFileSync(STATE_FILE, "utf-8");
+    const raw = readFileSync(path, "utf-8");
     const data: Record<string, AlertState> = JSON.parse(raw);
-    state = new Map(Object.entries(data));
-  } catch {
-    state = new Map();
+    return new Map(Object.entries(data));
+  } catch (err: any) {
+    if (err?.code === "ENOENT") return new Map();
+    const backup = `${path}.corrupt-${Date.now()}-${process.pid}`;
+    console.error(`[state] Invalid alert state at ${path}; preserving it as ${backup}:`, err);
+    try {
+      copyFileSync(path, backup, constants.COPYFILE_EXCL);
+      chmodSync(backup, 0o600);
+      pruneCorruptBackups(path);
+    } catch (backupErr) {
+      console.error(`[state] Failed to preserve corrupt alert state at ${path}:`, backupErr);
+    }
+    return new Map();
   }
+}
+
+export function saveAlertStateFile(path: string, value: Map<string, AlertState>): void {
+  const parent = dirname(path);
+  mkdirSync(parent, { recursive: true, mode: 0o700 });
+  const obj: Record<string, AlertState> = {};
+  for (const [key, item] of value) obj[key] = item;
+  const temp = `${path}.tmp-${randomUUID()}`;
+  let fd: number | undefined;
+  let parentFd: number | undefined;
+  try {
+    fd = openSync(
+      temp,
+      constants.O_CREAT | constants.O_EXCL | constants.O_WRONLY | constants.O_NOFOLLOW,
+      0o600,
+    );
+    writeFileSync(fd, JSON.stringify(obj, null, 2), "utf8");
+    fsyncSync(fd);
+    closeSync(fd);
+    fd = undefined;
+    renameSync(temp, path);
+    parentFd = openSync(parent, constants.O_RDONLY | constants.O_DIRECTORY);
+    fsyncSync(parentFd);
+  } catch (err) {
+    try { unlinkSync(temp); } catch { /* best effort */ }
+    throw err;
+  } finally {
+    if (fd !== undefined) closeSync(fd);
+    if (parentFd !== undefined) closeSync(parentFd);
+  }
+}
+
+function load() {
+  state = loadAlertStateFile(STATE_FILE);
 }
 
 function save() {
   try {
-    mkdirSync("/var/lib/glassmkr", { recursive: true });
-    const obj: Record<string, AlertState> = {};
-    for (const [k, v] of state) obj[k] = v;
-    writeFileSync(STATE_FILE, JSON.stringify(obj, null, 2));
+    saveAlertStateFile(STATE_FILE, state);
   } catch (err) {
     console.error("[state] Failed to save alert state:", err);
   }
