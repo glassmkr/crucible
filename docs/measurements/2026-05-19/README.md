@@ -30,11 +30,24 @@ docs/measurements/2026-05-19/
 ## Prerequisites per host
 
 - `glassmkr-crucible.service` running on Crucible v0.13.3 (verify with `systemctl status glassmkr-crucible && glassmkr-crucible --version`).
-- Passwordless sudo for the executing user (the runner scripts self-elevate so /proc/&lt;pid&gt;/io and /proc/&lt;pid&gt;/fd are readable; the agent runs as root).
+- GNU/Linux with systemd, GNU coreutils (`stat --version` must succeed), and
+  util-linux `flock` for Profile B.
+- Passwordless sudo for the executing user. Sudoers must retain a fixed
+  `secure_path` containing `/usr/sbin:/usr/bin:/sbin:/bin`. The stress runner
+  self-elevates with a minimal environment so `/proc/&lt;pid&gt;/io` and
+  `/proc/&lt;pid&gt;/fd` are readable and Profile B can control the service.
+- Stage `run_stress.sh` and `collect_metrics.sh` under a root-owned directory.
+  The runner rejects either script or its scripts directory if it is not
+  root-owned or is group/world-writable.
+- Profile B writes its auxiliary CSV and fio summaries to the private root-owned
+  directory `/var/lib/glassmkr/measurements/stress` by default. Existing files
+  are never overwritten. `OUTPUT_DIR` may override this only with a normalized
+  absolute path whose full directory chain is root-owned and not writable by
+  group or other users.
 - `python3` (stdlib only; no pip installs needed).
 - For Profile A + C: `stress-ng` (`apt install stress-ng` / `dnf install stress-ng`).
 - For Profile B: `fio` (`apt install fio` / `dnf install fio`).
-- ~2 GB free on `/var/tmp/` for the Profile B fio file.
+- ~2 GB free on the Profile B `OUTPUT_DIR` filesystem for the temporary fio file.
 
 ## Phase 1: Update fleet to v0.13.3
 
@@ -56,13 +69,13 @@ For the host carrying the FAILING DISK alert (Ubuntu 24.04.3 host per the spec):
 
 ## Phase 2: Idle baseline (all 7 hosts)
 
-On each host:
+On each host, stage the scripts outside `/tmp` so root never executes code from
+a user-writable directory:
 
 ```bash
-# Copy the scripts/ directory to the host (rsync, scp, or paste).
-# Then:
-cd /tmp/glassmkr-measurement
-bash scripts/run_idle.sh > idle/$(hostname).csv
+sudo install -d -o root -g root -m 0755 /opt/glassmkr-measurement/scripts
+sudo install -o root -g root -m 0755 scripts/run_idle.sh scripts/run_stress.sh scripts/collect_metrics.sh /opt/glassmkr-measurement/scripts/
+bash /opt/glassmkr-measurement/scripts/run_idle.sh > idle/$(hostname).csv
 ```
 
 Each run takes 30 min (default; override with `IDLE_SECONDS=1800` env var). Sampling at 5s -> 360 rows per host.
@@ -81,16 +94,16 @@ Per host, per profile:
 
 ```bash
 # Profile A: CPU saturation
-bash scripts/run_stress.sh a > stress/a-cpu-$(hostname).csv
+bash /opt/glassmkr-measurement/scripts/run_stress.sh a > stress/a-cpu-$(hostname).csv
 # Profile B: I/O saturation (also runs a separate 10-min control without agent)
-bash scripts/run_stress.sh b > stress/b-io-$(hostname).csv
+bash /opt/glassmkr-measurement/scripts/run_stress.sh b > stress/b-io-$(hostname).csv
 # Profile C: Memory pressure
-bash scripts/run_stress.sh c > stress/c-mem-$(hostname).csv
+bash /opt/glassmkr-measurement/scripts/run_stress.sh c > stress/c-mem-$(hostname).csv
 ```
 
 Each profile takes 10 min (default; override with `STRESS_SECONDS=600`).
 
-The Profile B control run is invoked automatically by `run_stress.sh b` and writes `stress/b-io-<hostname>-control.csv`. The control briefly stops the agent (`systemctl stop glassmkr-crucible`), runs fio for 10 min, then restarts the agent — make sure this is acceptable (no operator-set mutes will be lost; just a measurement window where the host doesn't ingest).
+The Profile B control run is invoked automatically by `run_stress.sh b` and writes `b-io-<hostname>-control.csv` plus the fio summaries under `/var/lib/glassmkr/measurements/stress`. The control briefly stops the agent (`systemctl stop glassmkr-crucible`), runs fio for 10 min, then restarts the agent. An exit and signal trap restores the service if any step fails or the run is interrupted. Copy the auxiliary files back into `stress/` after the run.
 
 After all 3 hosts × 3 profiles complete, copy CSVs back and:
 
