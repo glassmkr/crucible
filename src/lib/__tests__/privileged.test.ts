@@ -159,6 +159,16 @@ describe("setupPrivilegeSeparation", () => {
     expect(setupPrivilegeSeparation(deps, "/etc/glassmkr/crucible.yaml")).toBe(false);
   });
 
+  it("rejects a writable named ACL entry with an effective-permissions comment", () => {
+    const { deps } = mockDeps((cmd, args) =>
+      cmd === "id" && args[0] === "-G" ? { stdout: "0 4\n", status: 0 } :
+      cmd === "id" ? { stdout: "", status: 1 } :
+      cmd === "getfacl" && args[1] === "/usr/local/sbin"
+        ? { stdout: "user::rwx\nuser:1000:rwx\t#effective:rw-\ngroup::r-x\nother::r-x\n", status: 0 }
+        : { stdout: "", status: 0 });
+    expect(setupPrivilegeSeparation(deps, "/etc/glassmkr/crucible.yaml")).toBe(false);
+  });
+
   it("checks the dir against POST-usermod groups (adm-owned writable dir caught)", () => {
     // usermod adds glassmkr to adm (gid 4); the dir is group-writable by adm.
     // The check runs after the group add, so id -G reflects adm and it is caught.

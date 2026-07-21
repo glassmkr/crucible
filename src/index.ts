@@ -21,10 +21,7 @@ if (cliArgs.mode === "doctor-ipmi") {
 if (cliArgs.mode === "init") {
   const { runInit, defaultDeps } = await import("./init.js");
   const flags = cliArgs.init;
-  if (!flags || !flags.apiKey) {
-    console.error("[init] missing required --api-key (use --api-key - to read from stdin). See 'glassmkr-crucible init --help'.");
-    process.exit(2);
-  }
+  if (!flags) process.exit(2);
   const code = await runInit({
     apiKey: flags.apiKey,
     name: flags.name,
@@ -278,6 +275,7 @@ async function collect() {
     security: lastSecurityResult,
     dmi: cachedDmi,
   };
+  if (config.config_migration_required) snapshot.config_migration_required = true;
   // Disks present but SMART-unreadable (blind spot: smartctl missing /
   // unsupported controller). Omitted when empty so older dashboards + healthy
   // hosts are unaffected. Dashboard drive_smart_unreadable rule reads this.

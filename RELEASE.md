@@ -45,6 +45,7 @@ Single source of truth for cutting a Crucible release. Lives here (the release-t
 9. **Fleet / customer roll.** The fix only takes effect once a host runs the new version. Roll per host **sequentially** (verify each before the next), do not parallelize across shared hosts:
    ```
    sudo npm install -g @glassmkr/crucible@X.Y.Z
+   sudo glassmkr-crucible init
    sudo systemctl restart glassmkr-crucible
    systemctl is-active glassmkr-crucible && npm ls -g @glassmkr/crucible | grep crucible
    ```

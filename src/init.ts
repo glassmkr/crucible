@@ -1,8 +1,8 @@
 // `glassmkr-crucible init` subcommand: canonical first-run setup.
 //
 // Validates the API key, optionally probes the ingest endpoint to
-// confirm it's accepted, writes /etc/glassmkr/crucible.yaml (mode
-// 0600), writes a systemd unit at /etc/systemd/system/glassmkr-crucible
+// confirm it's accepted, writes or re-secures /etc/glassmkr/crucible.yaml
+// as root-owned mode 0640, and writes a systemd unit at /etc/systemd/system/glassmkr-crucible
 // (mode 0644) with ExecStart pointing at the dynamically-detected
 // binary path (so Debian's /usr/local/bin/ vs Ubuntu's /usr/bin/
 // divergence is handled), runs daemon-reload, and (unless --no-start)
@@ -34,7 +34,7 @@ export const STATE_DIR = "/var/lib/glassmkr";
 export const REBOOT_MARKER_DIR = "/var/lib/crucible";
 
 export interface InitOptions {
-  apiKey: string; // raw value, may be the literal "-" to mean "read from stdin"
+  apiKey?: string; // raw value, may be the literal "-" to mean "read from stdin"
   name?: string;
   ingestUrl?: string;
   configPath?: string;
@@ -157,7 +157,7 @@ function aclTrustFailure(deps: InitDeps, dir: string): string | null {
   const acl = deps.exec("getfacl", ["-cpn", dir]);
   if (acl.status === 0) {
     for (const raw of acl.stdout.split(/\r?\n/)) {
-      const line = raw.trim();
+      const line = raw.replace(/\s*#.*$/, "").trim();
       if (/^(?:default:)?(?:user|group):[^:]+:[rwx-]*w[rwx-]*$/.test(line)) {
         return `${dir} has a named ACL entry granting write: ${line}`;
       }
@@ -289,6 +289,17 @@ export function setupPrivilegeSeparation(deps: InitDeps, configPath: string): bo
   if (gout.status !== 0) return fail(`could not read '${SERVICE_USER}' groups (id -G status=${gout.status})`);
   const serviceGids = gout.stdout.trim().split(/\s+/).filter(Boolean).map((n) => Number(n));
   if (serviceGids.length === 0 || serviceGids.some((n) => !Number.isFinite(n))) return fail(`could not parse '${SERVICE_USER}' group ids from: ${gout.stdout.trim()}`);
+
+  try {
+    deps.fs.chownSync(configPath, 0, serviceGids[0]);
+    deps.fs.chmodSync(configPath, 0o640);
+    const configStat = deps.fs.lstatSync(configPath);
+    if (configStat.isSymbolicLink || configStat.isFile === false || configStat.uid !== 0 || configStat.gid !== serviceGids[0] || (configStat.mode & 0o777) !== 0o640) {
+      return fail(`config ${configPath} failed its post-install safety check`);
+    }
+  } catch (err: any) {
+    return fail(`could not secure ${configPath}: ${err?.message ?? err}`);
+  }
   const wrapperDir = pathDefault.dirname(WRAPPER_PATH);
   for (const dir of ancestorDirectories(wrapperDir)) {
     const problem = dirTrustFailure(deps, dir, serviceGids);
@@ -340,17 +351,6 @@ export function setupPrivilegeSeparation(deps: InitDeps, configPath: string): bo
     return fail(`could not set ${REBOOT_MARKER_DIR} mode: ${err?.message ?? err}`);
   }
 
-  try {
-    deps.fs.chownSync(configPath, 0, serviceGids[0]);
-    deps.fs.chmodSync(configPath, 0o640);
-    const configStat = deps.fs.lstatSync(configPath);
-    if (configStat.isSymbolicLink || configStat.uid !== 0 || configStat.gid !== serviceGids[0] || (configStat.mode & 0o777) !== 0o640) {
-      return fail(`config ${configPath} failed its post-install safety check`);
-    }
-  } catch (err: any) {
-    return fail(`could not secure ${configPath}: ${err?.message ?? err}`);
-  }
-
   deps.log(`[init] privilege separation ready: service will run as '${SERVICE_USER}' via ${WRAPPER_PATH}.`);
   return true;
 }
@@ -360,8 +360,16 @@ export function setupPrivilegeSeparation(deps: InitDeps, configPath: string): bo
  * (0 = success). Pure orchestration; no side effects on `process`.
  */
 export async function runInit(opts: InitOptions, deps: InitDeps): Promise<number> {
+  const ingestUrl = opts.ingestUrl ?? DEFAULT_INGEST_URL;
+  const configPath = opts.configPath ?? DEFAULT_CONFIG_PATH;
+  const isCanonicalPath = configPath === DEFAULT_CONFIG_PATH;
+  const repairMode = !opts.force && (
+    deps.fs.existsSync(configPath)
+    || (isCanonicalPath && deps.fs.existsSync(LEGACY_CONFIG_PATH))
+  );
+
   // Resolve API key (stdin form supports `--api-key -`).
-  let apiKey = opts.apiKey;
+  let apiKey = opts.apiKey ?? "";
   if (apiKey === "-") {
     try {
       apiKey = (await deps.readStdin()).replace(/\r?\n$/, "").trim();
@@ -370,13 +378,11 @@ export async function runInit(opts: InitOptions, deps: InitDeps): Promise<number
       return 1;
     }
   }
-  if (!isValidApiKey(apiKey)) {
+  if (!repairMode && !isValidApiKey(apiKey)) {
     deps.error(`[init] invalid --api-key: must look like "gmk_cru_live_<...>_<4>" or "col_<hex>". Got ${apiKey.length} char(s).`);
     return 2;
   }
 
-  const ingestUrl = opts.ingestUrl ?? DEFAULT_INGEST_URL;
-  const configPath = opts.configPath ?? DEFAULT_CONFIG_PATH;
   const serverName = opts.name && opts.name.trim() ? opts.name.trim() : deps.hostname();
 
   try {
@@ -401,7 +407,7 @@ export async function runInit(opts: InitOptions, deps: InitDeps): Promise<number
   // Connectivity probe (optional). 401 means key is wrong → hard fail.
   // 5xx / network errors → warn but continue (the host's network may
   // still be coming up during a fresh install).
-  if (!opts.noVerify) {
+  if (!repairMode && !opts.noVerify) {
     deps.log(`[init] probing ${ingestUrl} ...`);
     try {
       const ctrl = new AbortController();
@@ -435,13 +441,15 @@ export async function runInit(opts: InitOptions, deps: InitDeps): Promise<number
   // operator so they can resolve the divergence; --force on top of a
   // populated new path is the normal overwrite path and the legacy
   // file becomes irrelevant.
-  const isCanonicalPath = configPath === DEFAULT_CONFIG_PATH;
   const legacyPresent = isCanonicalPath && deps.fs.existsSync(LEGACY_CONFIG_PATH);
   const newPresent = deps.fs.existsSync(configPath);
   if (newPresent) {
     try {
       const target = deps.fs.lstatSync(configPath);
-      if (target.isSymbolicLink || target.isFile === false) {
+      const serviceUidResult = deps.exec("id", ["-u", SERVICE_USER]);
+      const serviceUid = Number(serviceUidResult.stdout.trim());
+      const allowedOwner = target.uid === 0 || (serviceUidResult.status === 0 && Number.isFinite(serviceUid) && target.uid === serviceUid);
+      if (target.isSymbolicLink || target.isFile === false || !allowedOwner || (target.mode & 0o022) !== 0) {
         deps.error(`[init] refusing unsafe config target at ${configPath}`);
         return 4;
       }
@@ -454,8 +462,11 @@ export async function runInit(opts: InitOptions, deps: InitDeps): Promise<number
   if (legacyPresent && !newPresent) {
     try {
       const legacy = deps.fs.lstatSync(LEGACY_CONFIG_PATH);
-      if (legacy.isSymbolicLink || legacy.isFile === false || legacy.uid !== 0 || (legacy.mode & 0o037) !== 0) {
-        throw new Error("legacy config is not a secure root-owned regular file");
+      const serviceUidResult = deps.exec("id", ["-u", SERVICE_USER]);
+      const serviceUid = Number(serviceUidResult.stdout.trim());
+      const allowedOwner = legacy.uid === 0 || (serviceUidResult.status === 0 && Number.isFinite(serviceUid) && legacy.uid === serviceUid);
+      if (legacy.isSymbolicLink || legacy.isFile === false || !allowedOwner || (legacy.mode & 0o022) !== 0) {
+        throw new Error("legacy config is not a safe regular file owned by root or the service user");
       }
       deps.fs.renameSync(LEGACY_CONFIG_PATH, configPath);
       justMigrated = true;
@@ -468,22 +479,21 @@ export async function runInit(opts: InitOptions, deps: InitDeps): Promise<number
     deps.warn(`[init] both ${LEGACY_CONFIG_PATH} and ${configPath} exist; leaving the legacy file in place. After init, remove the legacy file with: sudo rm ${LEGACY_CONFIG_PATH}`);
   }
 
-  // Write config (0600) — refuse to overwrite without --force. A file
+  // Write config (0600) unless repair mode preserves the existing bytes. A file
   // that arrived via the legacy migration just above counts as "the
   // operator's existing config" and is preserved without rewrite (the
   // explicit migration log line above tells them what happened).
   if (justMigrated) {
     deps.log(`[init] preserved migrated config at ${configPath} (no rewrite). To regenerate from scratch, re-run with --force.`);
   } else if (deps.fs.existsSync(configPath) && !opts.force) {
-    deps.error(`[init] config already exists at ${configPath}. Pass --force to overwrite, or remove the file first.`);
-    return 4;
+    deps.log(`[init] preserving existing config at ${configPath}; ownership and mode will be re-secured.`);
   }
 
   // Skip rewrite when we just migrated the legacy file into place;
   // operator-edited content (telegram tokens, custom thresholds, tls_pin)
   // is preserved verbatim. --force still re-generates from scratch by
   // overwriting unconditionally.
-  if (!justMigrated || opts.force) {
+  if ((!justMigrated && !repairMode) || opts.force) {
     const yaml = buildCollectorYaml(serverName, ingestUrl, apiKey);
     const configTmp = `${configPath}.tmp-${randomUUIDDefault()}`;
     try {

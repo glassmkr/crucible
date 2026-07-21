@@ -58,6 +58,16 @@ describe("consumeRebootMarker", () => {
     expect(consumeRebootMarker(path)).not.toBeNull();
     expect(consumeRebootMarker(path)).toBeNull();
   });
+
+  it("refuses a symlink on consume without reading or changing its target", () => {
+    const target = join(tmpDir, "target");
+    writeFileSync(target, JSON.stringify({ expires_at: new Date(Date.now() + 60_000).toISOString() }));
+    symlinkSync(target, path);
+
+    expect(consumeRebootMarker(path)).toBeNull();
+    expect(readFileSync(target, "utf8")).toContain("expires_at");
+    expect(existsSync(path)).toBe(false);
+  });
 });
 
 describe("writeRebootMarker", () => {

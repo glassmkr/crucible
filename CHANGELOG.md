@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 Pre-1.0 convention: minor bumps may include breaking changes; we call them
 out under `### Breaking` so downstream consumers can audit.
 
+## [Unreleased]
+
+### Security
+
+- Existing service-owned configuration files remain readable during the
+  root-ownership migration, with a prominent startup warning and a snapshot
+  flag. Run `sudo glassmkr-crucible init` after upgrading to preserve the
+  content while changing the file to `root:glassmkr` mode `0640`. Unsafe
+  symlinks, non-regular files, and group/other-writable configs are refused.
+
 ## [0.14.5] - 2026-07-18
 
 Code-review remediation round: install-time privilege-separation robustness,

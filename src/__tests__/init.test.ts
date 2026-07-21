@@ -74,6 +74,7 @@ function makeDeps(opts?: {
         return { stdout: opts?.binPath === null ? "" : `${opts?.binPath ?? "/usr/local/bin/glassmkr-crucible"}\n`, status: 0 };
       }
       if (cmd === "id" && args[0] === "-G") return { stdout: "1000\n", status: 0 };
+      if (cmd === "id" && args[0] === "-u") return { stdout: "1000\n", status: 0 };
       if (cmd === "systemctl") {
         systemctlCalls.push(args);
         return { stdout: "", status: opts?.systemctlExitCode ?? 0 };
@@ -188,11 +189,36 @@ describe("runInit", () => {
     expect(systemctlCalls.find((c) => c[0] === "enable")).toBeUndefined();
   });
 
-  it("refuses to overwrite an existing config without --force", async () => {
-    const { deps, errors } = makeDeps({ preExistingFiles: [configPath] });
-    const code = await runInit({ apiKey: VALID_NEW_KEY, configPath, noVerify: true }, deps);
+  it("repairs an existing service-owned config without a key and preserves content", async () => {
+    const original = "# preserve exactly\nserver_name: old\n";
+    const { deps, fs, logs } = makeDeps({
+      preExistingFiles: [configPath],
+      preExistingFileData: { [configPath]: original },
+    });
+    const file = fs.files.get(configPath)!;
+    file.uid = 1000;
+    file.gid = 1000;
+    file.mode = 0o600;
+
+    const code = await runInit({ configPath, noVerify: true }, deps);
+    expect(code).toBe(0);
+    expect(fs.files.get(configPath)).toMatchObject({ data: original, uid: 0, gid: 1000, mode: 0o640 });
+    expect(logs.some((message) => message.includes("preserving existing config"))).toBe(true);
+  });
+
+  it("still requires an api key when no config exists", async () => {
+    const { deps, errors } = makeDeps();
+    const code = await runInit({ configPath, noVerify: true }, deps);
+    expect(code).toBe(2);
+    expect(errors[0]).toContain("invalid --api-key");
+  });
+
+  it("refuses an existing group-writable config", async () => {
+    const { deps, fs, errors } = makeDeps({ preExistingFiles: [configPath] });
+    fs.files.get(configPath)!.mode = 0o620;
+    const code = await runInit({ configPath, noVerify: true }, deps);
     expect(code).toBe(4);
-    expect(errors[0]).toContain("config already exists");
+    expect(errors.some((message) => message.includes("unsafe config target"))).toBe(true);
   });
 
   it("--force overwrites an existing config", async () => {
@@ -331,10 +357,10 @@ describe("runInit legacy config migration", () => {
     const { deps, fs, warns } = makeDeps({
       preExistingFiles: [LEGACY_CONFIG_PATH, DEFAULT_CONFIG_PATH],
     });
-    // The existing-without-force guard kicks in next, so exit 4. The warn must already have fired.
-    const code = await runInit({ apiKey: VALID_NEW_KEY, configPath: DEFAULT_CONFIG_PATH, noVerify: true }, deps);
-    expect(code).toBe(4);
+    const code = await runInit({ configPath: DEFAULT_CONFIG_PATH, noVerify: true }, deps);
+    expect(code).toBe(0);
     expect(fs.files.has(LEGACY_CONFIG_PATH)).toBe(true);
+    expect(fs.files.get(DEFAULT_CONFIG_PATH)).toMatchObject({ uid: 0, gid: 1000, mode: 0o640 });
     expect(warns.some((w) => w.includes("both") && w.includes(LEGACY_CONFIG_PATH))).toBe(true);
   });
 
@@ -384,9 +410,12 @@ describe("setupPrivilegeSeparation wrapper hardening (Codex #6)", () => {
   });
 
   it("stays on User=root (returns false) when the wrapper cannot be made root-owned", () => {
-    const { deps, warns } = makeDeps();
-    (deps.fs as { chownSync: (p: string, u: number, g: number) => void }).chownSync = () => {
-      throw new Error("EPERM"); // e.g. init not actually running as root
+    const { deps, fs, warns } = makeDeps();
+    fs.files.set(DEFAULT_CONFIG_PATH, { data: "config", mode: 0o600, uid: 0, gid: 0 });
+    const realChown = deps.fs.chownSync;
+    (deps.fs as { chownSync: (p: string, u: number, g: number) => void }).chownSync = (p, uid, gid) => {
+      if (p === `${WRAPPER_PATH}.tmp`) throw new Error("EPERM");
+      realChown(p, uid, gid);
     };
     const ok = setupPrivilegeSeparation(deps, DEFAULT_CONFIG_PATH);
     expect(ok).toBe(false);

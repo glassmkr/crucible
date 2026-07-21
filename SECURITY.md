@@ -30,7 +30,9 @@ the latest published version on npm (`@glassmkr/crucible`); please upgrade to th
 latest before reporting, in case the issue is already fixed:
 
 ```
-sudo npm install -g @glassmkr/crucible@latest && sudo systemctl restart glassmkr-crucible
+sudo npm i -g @glassmkr/crucible@latest
+sudo glassmkr-crucible init
+sudo systemctl restart glassmkr-crucible
 ```
 
 ## How Crucible is hardened

@@ -22,7 +22,6 @@ import {
   statSync,
   unlinkSync,
   writeFileSync,
-  existsSync,
 } from "node:fs";
 import { dirname } from "node:path";
 
@@ -43,15 +42,26 @@ export interface RebootMarker {
  * Read and delete the marker at `path`. Returns the resolved reboot flag
  * if the file existed, was parseable JSON, and hasn't expired; otherwise
  * returns null. The file is unlinked in every branch where it existed,
- * so a malformed or stale marker is one-shot (can't linger).
+ * so a malformed or stale marker is one-shot (can't linger). The service user
+ * can replace the pathname in the group-writable marker directory, so reads use
+ * O_NOFOLLOW; valid marker content itself is written by root.
  */
 export function consumeRebootMarker(
   path: string = DEFAULT_MARKER_PATH,
   now: Date = new Date(),
 ): PlannedReboot | null {
-  if (!existsSync(path)) return null;
   let raw: string;
-  try { raw = readFileSync(path, "utf-8"); } catch { try { unlinkSync(path); } catch {} return null; }
+  let fd: number | undefined;
+  try {
+    fd = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW);
+    if (!fstatSync(fd).isFile()) throw new Error("marker is not a regular file");
+    raw = readFileSync(fd, "utf-8");
+  } catch {
+    try { unlinkSync(path); } catch {}
+    return null;
+  } finally {
+    if (fd !== undefined) closeSync(fd);
+  }
   // Always delete after read, regardless of validity.
   try { unlinkSync(path); } catch {}
 
