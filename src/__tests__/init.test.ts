@@ -24,6 +24,8 @@ function makeDeps(opts?: {
   privilegeSetupFails?: boolean;
   serviceUserCreateFails?: boolean;
   rootFallbackEnv?: string;
+  existingUnitUser?: "root" | "glassmkr";
+  stopExistingUnitFails?: boolean;
 }): { deps: InitDeps; fs: FakeFs; logs: string[]; warns: string[]; errors: string[]; systemctlCalls: string[][] } {
   const fs: FakeFs = { files: new Map(), dirs: new Set() };
   for (const f of opts?.preExistingFiles ?? []) fs.files.set(f, { data: opts?.preExistingFileData?.[f] ?? "stale", mode: 0o600 });
@@ -85,6 +87,13 @@ function makeDeps(opts?: {
       if (cmd === "id" && args[0] === "-u") return { stdout: "1000\n", status: 0 };
       if (cmd === "systemctl") {
         systemctlCalls.push(args);
+        if (args[0] === "cat") {
+          return {
+            stdout: opts?.existingUnitUser ? `[Service]\nUser=${opts.existingUnitUser}\n` : "",
+            status: opts?.existingUnitUser ? 0 : 1,
+          };
+        }
+        if (args[0] === "stop" && opts?.stopExistingUnitFails) return { stdout: "", status: 1 };
         return { stdout: "", status: opts?.systemctlExitCode ?? 0 };
       }
       if (cmd === "visudo" && opts?.privilegeSetupFails) return { stdout: "", status: 1 };
@@ -296,6 +305,27 @@ describe("runInit", () => {
     expect(errors.join("\n")).toContain("failed closed");
   });
 
+  it("stops an existing root service when fatal privilege setup aborts", async () => {
+    const { deps, systemctlCalls, warns } = makeDeps({
+      serviceUserCreateFails: true,
+      existingUnitUser: "root",
+    });
+    const code = await runInit({ apiKey: VALID_NEW_KEY, configPath, noVerify: true }, deps);
+    expect(code).toBe(10);
+    expect(systemctlCalls).toContainEqual(["stop", "glassmkr-crucible"]);
+    expect(warns.join("\n")).toContain("stopped the existing User=root service");
+  });
+
+  it("warns with a stop command when an existing root service cannot be stopped", async () => {
+    const { deps, errors } = makeDeps({
+      serviceUserCreateFails: true,
+      existingUnitUser: "root",
+      stopExistingUnitFails: true,
+    });
+    const code = await runInit({ apiKey: VALID_NEW_KEY, configPath, noVerify: true }, deps);
+    expect(code).toBe(10);
+    expect(errors.join("\n")).toContain("sudo systemctl stop glassmkr-crucible");
+  });
   it("--force overwrites an existing config", async () => {
     const { deps, fs } = makeDeps({ preExistingFiles: [configPath] });
     const code = await runInit({ apiKey: VALID_NEW_KEY, configPath, noVerify: true, force: true }, deps);
@@ -488,6 +518,24 @@ describe("runInit legacy config migration", () => {
 });
 
 describe("setupPrivilegeSeparation wrapper hardening (Codex #6)", () => {
+  it("falls back unprivileged when externally managed adm membership cannot be removed", () => {
+    const { deps, warns } = makeDeps();
+    const originalExec = deps.exec;
+    deps.exec = (cmd, args) => {
+      if (cmd === "getent" && args[1] === "adm") return { stdout: "adm:x:4:glassmkr\n", status: 0 };
+      if (cmd === "gpasswd") return { stdout: "", status: 1 };
+      return originalExec(cmd, args);
+    };
+    expect(setupPrivilegeSeparation(deps, DEFAULT_CONFIG_PATH)).toBe(false);
+    expect(warns.join("\n")).toContain("could not remove broad adm membership");
+  });
+
+  it("removes a sudoers temp file when validation fails", () => {
+    const { deps, fs } = makeDeps({ privilegeSetupFails: true });
+    expect(setupPrivilegeSeparation(deps, DEFAULT_CONFIG_PATH)).toBe(false);
+    expect(fs.files.has(`${SUDOERS_PATH}.tmp`)).toBe(false);
+  });
+
   it("installs the wrapper root-owned (0:0), mode 0755, and returns true on a clean host", () => {
     const { deps, fs } = makeDeps();
     fs.files.set(DEFAULT_CONFIG_PATH, { data: "config", mode: 0o600, uid: 0, gid: 0 });

@@ -144,6 +144,42 @@ describe("journal excerpt data boundary", () => {
     expect(redacted).not.toContain("swordfish");
     expect(redacted).not.toContain("secret-value");
     expect(redacted).toContain("[REDACTED]");
+    expect(redacted).not.toContain("%5BREDACTED%5D");
+  });
+
+  it("does not redact query keys that merely contain sensitive substrings", () => {
+    const raw = "https://example.test/?design=blue&assignee=alice&session_id=public-id";
+    expect(redactJournalLine(raw)).toBe(raw);
+  });
+
+  it("does not redact assignment keys that merely end in key", () => {
+    expect(redactJournalLine("monkey=banana hockey-key=public")).toBe("monkey=banana hockey-key=public");
+  });
+
+  it.each([
+    "token",
+    "key",
+    "apikey",
+    "passphrase",
+    "auth",
+    "secret_key",
+    "secret-key",
+    "private_key",
+    "private-key",
+    "access_key",
+    "access-key",
+    "aws_secret_access_key",
+  ])("redacts opaque values assigned to %s", (key) => {
+    const opaque = "plainOpaqueValue";
+    const redacted = redactJournalLine(`${key}=${opaque}`);
+    expect(redacted).not.toContain(opaque);
+    expect(redacted).toContain("[REDACTED]");
+  });
+
+  it("turns control characters into separators before bearer redaction", () => {
+    const redacted = redactJournalLine("request failed: Bearer\u0000plainOpaqueValue");
+    expect(redacted).not.toContain("plainOpaqueValue");
+    expect(redacted).toContain("Bearer [REDACTED]");
   });
 
   it("caps each line and the aggregate excerpt budget", () => {

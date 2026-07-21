@@ -67,7 +67,7 @@ const JOURNAL_LINES_PER_UNIT = 5;
 export const JOURNAL_MAX_LINE_CHARS = 512;
 export const JOURNAL_MAX_TOTAL_CHARS = 4096;
 const REDACTED = "[REDACTED]";
-const SENSITIVE_QUERY_KEY = /(?:pass(?:word|wd)?|pwd|api[_-]?key|access[_-]?token|refresh[_-]?token|auth(?:orization)?|credential|client[_-]?secret|secret|session|signature|sig|token)/i;
+const SENSITIVE_QUERY_KEY = /^(?:pass(?:word|wd)?|pwd|api[_-]?key|apikey|access[_-]?(?:token|key)|refresh[_-]?token|auth(?:orization)?|credential|client[_-]?secret|secret(?:[_-]?key)?|private[_-]?key|aws_secret_access_key|session|signature|sig|token|key|passphrase)$/i;
 
 const RESULT_VALUES: ReadonlySet<SystemdUnitResult> = new Set([
   "success",
@@ -174,8 +174,9 @@ function redactUrlSecrets(raw: string): string {
         changed = true;
       }
     }
+    const redactedSearch = url.search.replace(/%5BREDACTED%5D/gi, REDACTED);
     return changed
-      ? `${url.protocol}//${userinfo}${url.host}${url.pathname}${url.search}${url.hash}`
+      ? `${url.protocol}//${userinfo}${url.host}${url.pathname}${redactedSearch}${url.hash}`
       : raw;
   } catch {
     return raw;
@@ -184,10 +185,10 @@ function redactUrlSecrets(raw: string): string {
 
 export function redactJournalLine(raw: string): string {
   return raw
-    .replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/g, "")
+    .replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]+/g, " ")
     .replace(/\b[a-z][a-z0-9+.-]*:\/\/[^\s<>"']+/gi, (url) => redactUrlSecrets(url))
     .replace(/\b(Bearer|Basic)(\s+)[A-Za-z0-9._~+/=-]+/gi, (_match, scheme, space) => `${scheme}${space}${REDACTED}`)
-    .replace(/(["']?(?:password|passwd|pwd|api[_-]?key|x[_-]?api[_-]?key|access[_-]?token|refresh[_-]?token|client[_-]?secret|authorization|secret|session[_-]?token)["']?\s*[:=]\s*)(?:"[^"]*"|'[^']*'|[^\s,;]+)/gi, (_match, prefix) => `${prefix}${REDACTED}`)
+    .replace(/((?:^|[^A-Za-z0-9_.-])["']?(?:password|passwd|pwd|token|key|apikey|api[_-]?key|x[_-]?api[_-]?key|passphrase|auth|authorization|access[_-]?(?:token|key)|refresh[_-]?token|client[_-]?secret|secret(?:[_-]?key)?|private[_-]?key|aws_secret_access_key|session[_-]?token)["']?\s*[:=]\s*)(?:"[^"]*"|'[^']*'|[^\s,;]+)/gim, (_match, prefix) => `${prefix}${REDACTED}`)
     .replace(/\bgmk_(?:acct|cru)_live_[A-Za-z0-9_]+\b/g, REDACTED)
     .replace(/\bcol_[A-Fa-f0-9]{16,}\b/g, REDACTED)
     .replace(/\b(?:AKIA[0-9A-Z]{16}|gh[pousr]_[A-Za-z0-9]{20,}|sk-(?:proj-)?[A-Za-z0-9_-]{20,}|sk_(?:live|test)_[A-Za-z0-9]{16,}|AIza[0-9A-Za-z_-]{20,}|xox[baprs]-[A-Za-z0-9-]{10,})\b/g, REDACTED)

@@ -77,6 +77,8 @@ describe("setupPrivilegeSeparation", () => {
     expect(calls).toContainEqual(["usermod", ["-aG", "systemd-journal", SERVICE_USER]]);
     expect(calls).toContainEqual(["gpasswd", ["-d", SERVICE_USER, "adm"]]);
     expect(calls).not.toContainEqual(["usermod", ["-aG", "adm", SERVICE_USER]]);
+    expect(calls).toContainEqual(["chown", [`root:${SERVICE_USER}`, "/var/lib/crucible"]]);
+    expect(calls).not.toContainEqual(["chown", [`${SERVICE_USER}:${SERVICE_USER}`, "/etc/glassmkr/crucible.yaml"]]);
   });
 
   it("fail-safe: visudo rejection returns false and never installs the sudoers file", () => {

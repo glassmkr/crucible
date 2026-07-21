@@ -246,6 +246,27 @@ unit enables `ProtectHome`, `PrivateTmp`, `ProtectKernelTunables`,
 `ProtectControlGroups`, `LockPersonality`, and `ProtectSystem=strict`, with
 write access limited to `/var/lib/glassmkr` and `/var/lib/crucible`.
 
+`NoNewPrivileges` and `RestrictSUIDSGID` are deliberately not set because the
+collector's narrow root wrapper is reached through the setuid `sudo` binary.
+This is a residual risk: the wrapper and sudoers rule are root-owned, fixed
+action, and fail closed, but the service can still invoke that reviewed setuid
+boundary. Keep sudo's `secure_path` configured and do not grant the `glassmkr`
+user any broader sudo access.
+
+Before shipping this hardening on a distro, run the privileged-wrapper smoke
+test after `init`:
+
+```bash
+sudo npm run test:hardened-wrapper
+```
+
+The test launches a transient `User=glassmkr`, `ProtectSystem=strict` unit and
+requires a fixed privileged action to return data. This check is required on
+Ubuntu 24.04, Debian 12, and Rocky 9 because sudo may need writable runtime
+state under `/run`. A failure blocks rollout until the required narrow writable
+runtime path or `RuntimeDirectory=` setting is established. Never add
+`/etc/glassmkr` to `ReadWritePaths`; runtime configuration stays read-only.
+
 Failed-unit journal excerpts cross the host-to-dashboard data boundary. The
 feature remains enabled, but the agent exports at most five lines per unit,
 512 characters per line, and 4096 journal characters per snapshot. It redacts

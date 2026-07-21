@@ -250,6 +250,13 @@ function strictRootDirectoryFailure(deps: InitDeps, dir: string): string | null 
  * recreate the wrapper and escalate through the surviving rule.)
  */
 function revokePrivilegeSeparation(deps: InitDeps): boolean {
+  for (const tmp of [`${SUDOERS_PATH}.tmp`, `${WRAPPER_PATH}.tmp`]) {
+    try {
+      if (deps.fs.existsSync(tmp)) deps.fs.unlinkSync(tmp);
+    } catch {
+      deps.warn(`[init] could not remove stale privilege setup file ${tmp}; remove it before retrying.`);
+    }
+  }
   let grantGone = false;
   try {
     if (deps.fs.existsSync(SUDOERS_PATH)) deps.fs.unlinkSync(SUDOERS_PATH);
@@ -316,7 +323,7 @@ export function setupPrivilegeSeparation(deps: InitDeps, configPath: string): bo
   const admMembers = admGroup.status === 0 ? (admGroup.stdout.split(":")[3] ?? "").trim().split(",") : [];
   if (admMembers.includes(SERVICE_USER)) {
     const removeAdm = deps.exec("gpasswd", ["-d", SERVICE_USER, "adm"]);
-    if (removeAdm.status !== 0) return fail(`could not remove broad adm membership from '${SERVICE_USER}'`, true);
+    if (removeAdm.status !== 0) return fail(`could not remove broad adm membership from '${SERVICE_USER}'`);
   }
 
   // 3. Trust every wrapper ancestor against the FINAL groups. A
@@ -391,6 +398,30 @@ export function setupPrivilegeSeparation(deps: InitDeps, configPath: string): bo
 
   deps.log(`[init] privilege separation ready: service will run as '${SERVICE_USER}' via ${WRAPPER_PATH}.`);
   return true;
+}
+
+function stopLegacyRootUnitAfterFatalSetup(deps: InitDeps): void {
+  let existingUnit: { stdout: string; status: number | null };
+  try {
+    existingUnit = deps.exec("systemctl", ["cat", "glassmkr-crucible.service", "--no-pager"]);
+  } catch (err: any) {
+    deps.error(`[init] WARNING: could not inspect the existing service after a fatal privilege setup error: ${err?.message ?? err}. If it runs as root, stop it now with 'sudo systemctl stop glassmkr-crucible'.`);
+    return;
+  }
+  const configuredUsers = [...existingUnit.stdout.matchAll(/^\s*User\s*=\s*(\S+)\s*$/gmi)];
+  if (existingUnit.status !== 0 || configuredUsers.at(-1)?.[1].toLowerCase() !== "root") return;
+
+  let stopped = false;
+  try {
+    stopped = deps.exec("systemctl", ["stop", "glassmkr-crucible"]).status === 0;
+  } catch {
+    stopped = false;
+  }
+  if (stopped) {
+    deps.warn("[init] SECURITY: stopped the existing User=root service after fatal privilege setup failure.");
+  } else {
+    deps.error("[init] SECURITY WARNING: the existing service uses User=root and could not be stopped. Run 'sudo systemctl stop glassmkr-crucible' immediately.");
+  }
 }
 
 /**
@@ -654,6 +685,7 @@ export async function runInit(opts: InitOptions, deps: InitDeps): Promise<number
     privilegeReady = setupPrivilegeSeparation(deps, configPath);
   } catch (err) {
     deps.error(`[init] privilege setup failed closed: ${err instanceof Error ? err.message : String(err)}`);
+    stopLegacyRootUnitAfterFatalSetup(deps);
     return 10;
   }
   let serviceUser = SERVICE_USER;
