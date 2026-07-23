@@ -291,6 +291,8 @@ export function initHelp(version: string): string {
     "  5. Unless --no-start, runs systemctl enable --now glassmkr-crucible.",
     "",
     "Requires root for the filesystem and systemd writes (sudo).",
+    "If privileged wrapper setup fails, the service remains unprivileged.",
+    "Set GLASSMKR_ALLOW_ROOT_FALLBACK=1 only to explicitly accept root fallback.",
     `v${version}`,
   ].join("\n");
 }

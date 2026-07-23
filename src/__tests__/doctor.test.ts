@@ -37,11 +37,12 @@ describe("formatIpmiDoctor", () => {
     expect(out).toContain("could not open device"); // detail surfaced
   });
 
-  it("renders permission_denied with the systemd-unit-as-root pointer", () => {
+  it("renders permission_denied with narrow-wrapper repair guidance", () => {
     const cap: IpmiCapability = { available: false, reason: "permission_denied" };
     const out = formatIpmiDoctor(cap);
-    expect(out).toContain("User=root");
-    expect(out).toContain("/dev/ipmi0");
+    expect(out).toContain("privileged collector wrapper");
+    expect(out).toContain("crucible-collect ipmi-sensor");
+    expect(out).toContain("Do not");
   });
 
   it("renders execution_failed with a `mc info` reproducer and a safety warning about mc reset cold", () => {

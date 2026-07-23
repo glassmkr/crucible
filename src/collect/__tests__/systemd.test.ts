@@ -15,7 +15,13 @@ vi.mock("../../lib/exec.js", () => ({
   runDetailed: (...args: unknown[]) => runDetailedMock(...args),
 }));
 
-const { collectSystemd } = await import("../systemd.js");
+const {
+  collectSystemd,
+  redactJournalLine,
+  sanitizeJournalLines,
+  JOURNAL_MAX_LINE_CHARS,
+  JOURNAL_MAX_TOTAL_CHARS,
+} = await import("../systemd.js");
 
 beforeEach(() => {
   runMock.mockReset();
@@ -115,5 +121,71 @@ describe("collectSystemd", () => {
     expect((await collectSystemd()).error).toContain("timed out");
     runDetailedMock.mockResolvedValueOnce({ installed: false, exitCode: null, stdout: null, stderr: "", timedOut: false });
     expect((await collectSystemd()).error).toContain("not installed");
+  });
+});
+
+describe("journal excerpt data boundary", () => {
+  it("redacts authorization, password, collector-key, and JWT shapes", () => {
+    const collectorKey = ["gmk", "cru", "live", "EXAMPLEEXAMPLE000000", "ex01"].join("_");
+    const jwt = `eyJ${"a".repeat(12)}.${"b".repeat(12)}.${"c".repeat(12)}`;
+    const raw = `Authorization: Bearer top.secret password=hunter2 api_key=${collectorKey} token=${jwt} authorization=opaque`;
+    const redacted = redactJournalLine(raw);
+    expect(redacted).not.toContain("top.secret");
+    expect(redacted).not.toContain("hunter2");
+    expect(redacted).not.toContain(collectorKey);
+    expect(redacted).not.toContain(jwt);
+    expect(redacted).not.toContain("opaque");
+    expect(redacted).toContain("[REDACTED]");
+  });
+
+  it("removes URL userinfo and sensitive query values", () => {
+    const redacted = redactJournalLine("failed postgresql://alice:swordfish@example.test/db?token=secret-value&page=1");
+    expect(redacted).not.toContain("alice");
+    expect(redacted).not.toContain("swordfish");
+    expect(redacted).not.toContain("secret-value");
+    expect(redacted).toContain("[REDACTED]");
+    expect(redacted).not.toContain("%5BREDACTED%5D");
+  });
+
+  it("does not redact query keys that merely contain sensitive substrings", () => {
+    const raw = "https://example.test/?design=blue&assignee=alice&session_id=public-id";
+    expect(redactJournalLine(raw)).toBe(raw);
+  });
+
+  it("does not redact assignment keys that merely end in key", () => {
+    expect(redactJournalLine("monkey=banana hockey-key=public")).toBe("monkey=banana hockey-key=public");
+  });
+
+  it.each([
+    "token",
+    "key",
+    "apikey",
+    "passphrase",
+    "auth",
+    "secret_key",
+    "secret-key",
+    "private_key",
+    "private-key",
+    "access_key",
+    "access-key",
+    "aws_secret_access_key",
+  ])("redacts opaque values assigned to %s", (key) => {
+    const opaque = "plainOpaqueValue";
+    const redacted = redactJournalLine(`${key}=${opaque}`);
+    expect(redacted).not.toContain(opaque);
+    expect(redacted).toContain("[REDACTED]");
+  });
+
+  it("turns control characters into separators before bearer redaction", () => {
+    const redacted = redactJournalLine("request failed: Bearer\u0000plainOpaqueValue");
+    expect(redacted).not.toContain("plainOpaqueValue");
+    expect(redacted).toContain("Bearer [REDACTED]");
+  });
+
+  it("caps each line and the aggregate excerpt budget", () => {
+    const lines = sanitizeJournalLines(Array(5).fill("x".repeat(2000)), 1000);
+    expect(lines.every((line) => line.length <= JOURNAL_MAX_LINE_CHARS)).toBe(true);
+    expect(lines.reduce((sum, line) => sum + line.length, 0)).toBeLessThanOrEqual(1000);
+    expect(JOURNAL_MAX_TOTAL_CHARS).toBe(4096);
   });
 });
