@@ -86,6 +86,21 @@ describe("setupPrivilegeSeparation", () => {
     expect(files.has(`${SUDOERS_PATH}.tmp`)).toBe(false); // renamed, not left behind
   });
 
+  it("refuses a config that still carries an extended ACL after setfacl -b", () => {
+    const { deps, warns } = mockDeps((cmd, args) => {
+      if (cmd === "getent" && args[1] === "systemd-journal") return { stdout: "systemd-journal:x:190:\n", status: 0 };
+      if (cmd === "getent" && args[1] === "adm") return { stdout: "adm:x:4:\n", status: 0 };
+      if (cmd === "id" && args[0] === "-G") return { stdout: "0", status: 0 };
+      if (cmd === "id") return { stdout: "", status: 1 };
+      // The config still reports an ACL ('+') after setfacl -b (e.g. acl absent):
+      // a named-user read ACL would leak the API key, so refuse (fail closed).
+      if (cmd === "ls") return { stdout: "-rw-r-----+ 1 0 0 6 /etc/glassmkr/crucible.yaml", status: 0 };
+      return { stdout: "", status: 0 };
+    });
+    expect(setupPrivilegeSeparation(deps, "/etc/glassmkr/crucible.yaml")).toBe(false);
+    expect(warns.some((w) => /extended ACL/.test(w))).toBe(true);
+  });
+
   it("uses systemd-journal and removes only a legacy adm membership", () => {
     const calls: Array<[string, string[]]> = [];
     const { deps } = mockDeps((cmd, args) => {

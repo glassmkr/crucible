@@ -176,6 +176,19 @@ describe("journal excerpt data boundary", () => {
     expect(redacted).toContain("[REDACTED]");
   });
 
+  it.each([
+    "DATABASE_PASSWORD",
+    "SMTP_PASSWORD",
+    "MY_API_KEY",
+    "app.secret",
+    "x_secret_key",
+  ])("redacts secrets under prefixed env-var names like %s", (key) => {
+    const opaque = "plainOpaqueValue";
+    const redacted = redactJournalLine(`service crashed: ${key}=${opaque}`);
+    expect(redacted).not.toContain(opaque);
+    expect(redacted).toContain("[REDACTED]");
+  });
+
   it("turns control characters into separators before bearer redaction", () => {
     const redacted = redactJournalLine("request failed: Bearer\u0000plainOpaqueValue");
     expect(redacted).not.toContain("plainOpaqueValue");

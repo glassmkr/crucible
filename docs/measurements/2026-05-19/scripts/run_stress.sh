@@ -33,7 +33,10 @@ INTERVAL_S="${INTERVAL_S:-5}"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 OUTPUT_DIR="${OUTPUT_DIR:-/var/lib/glassmkr/measurements/stress}"
 HOST="$(hostname)"
-PROFILE_B_LOCK_FILE="/run/lock/glassmkr-crucible-stress.lock"
+# Private root-owned lock dir (NOT world-writable /run/lock, where a local user could
+# preplant the lock path as a symlink and have our open truncate the target as root).
+PROFILE_B_LOCK_DIR="/run/glassmkr-crucible"
+PROFILE_B_LOCK_FILE="${PROFILE_B_LOCK_DIR}/stress.lock"
 
 usage() {
   cat >&2 <<'EOF'
@@ -155,9 +158,17 @@ require_supported_platform() {
 
 acquire_profile_b_lock() {
   local lock_path="${1:-$PROFILE_B_LOCK_FILE}"
-  exec {PROFILE_B_LOCK_FD}>|"$lock_path" || return 1
+  # /run is root-owned (not world-writable), so a non-root user cannot create this dir;
+  # install resets an existing one to root:root 0700 so only root can place the lock.
+  install -d -o root -g root -m 0700 -- "$(dirname -- "$lock_path")" || return 1
+  if [ -L "$lock_path" ]; then
+    echo "[run_stress] refusing symlinked lock path $lock_path" >&2
+    return 1
+  fi
+  # Append (no truncation) so opening never zeroes a file; flock only needs the fd.
+  exec {PROFILE_B_LOCK_FD}>>"$lock_path" || return 1
   if ! flock -n "$PROFILE_B_LOCK_FD"; then
-    echo "[run_stress] another Profile B run holds $PROFILE_B_LOCK_FILE" >&2
+    echo "[run_stress] another Profile B run holds $lock_path" >&2
     return 1
   fi
 }

@@ -1,5 +1,6 @@
 import type { AlertResult } from "../lib/types.js";
 import { escapeTelegramHtml } from "./sanitize.js";
+import { assertEndpointResolution, fetchPinnedEndpoint, undiciFetchImpl, validateEndpoint, type EndpointPolicy } from "../lib/endpoint-policy.js";
 
 const PRIORITY_MAP: Record<string, string> = {
   raid_degraded: "P1", smart_failing: "P1", ecc_errors: "P1", psu_redundancy_loss: "P1", ipmi_fan_failure: "P1",
@@ -29,19 +30,41 @@ export async function sendTelegram(
   chatId: string,
   newAlerts: AlertResult[],
   resolvedAlerts: AlertResult[],
-  serverName: string
+  serverName: string,
+  policy: EndpointPolicy,
+  fetchImpl: typeof fetch = undiciFetchImpl,
+  resolveEndpoint: typeof assertEndpointResolution = assertEndpointResolution,
 ): Promise<boolean> {
   const message = buildTelegramMessage(newAlerts, resolvedAlerts, serverName);
   if (!message) return true;
 
+  // Route through the endpoint policy with a pinned connection and no auto-followed
+  // redirects, consistent with every other outbound path.
+  let target: URL;
   try {
-    const res = await fetch(`https://api.telegram.org/bot${botToken}/sendMessage`, {
+    target = validateEndpoint(`https://api.telegram.org/bot${botToken}/sendMessage`, policy);
+  } catch (err) {
+    console.error(`[telegram] Refusing endpoint: ${err instanceof Error ? err.message : String(err)}`);
+    return false;
+  }
+  try {
+    const { response, dispatcher } = await fetchPinnedEndpoint(target, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ chat_id: chatId, text: message, parse_mode: "HTML", disable_web_page_preview: true }),
+      redirect: "manual",
       signal: AbortSignal.timeout(10000),
-    });
-    return res.ok;
+    }, policy, fetchImpl, resolveEndpoint);
+    try {
+      await response.body?.cancel();
+      if (response.status >= 300 && response.status < 400) {
+        console.error("[telegram] Refusing redirected response");
+        return false;
+      }
+      return response.ok;
+    } finally {
+      await dispatcher.close();
+    }
   } catch {
     console.error("[telegram] Failed to send notification");
     return false;

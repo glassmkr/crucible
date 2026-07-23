@@ -26,11 +26,14 @@ export function addResponseChunkSize(current: number, chunk: Buffer | string): n
   return next;
 }
 
-export async function readDashboardResponse(response: Response, abort?: () => void): Promise<{ active_alerts?: number }> {
+// Bounded JSON read shared by the dashboard push and enrollment: reject an oversized
+// Content-Length up front, cap the streamed bytes, and parse only within the cap so a
+// hostile or self-hosted endpoint cannot exhaust memory with a large body.
+export async function readBoundedJson(response: Response, abort?: () => void): Promise<any> {
   const contentLength = response.headers.get("content-length");
   if (contentLength !== null && Number(contentLength) > MAX_PINNED_RESPONSE_BYTES) {
     abort?.();
-    throw new Error(`Dashboard response exceeded ${MAX_PINNED_RESPONSE_BYTES} bytes`);
+    throw new Error(`Response exceeded ${MAX_PINNED_RESPONSE_BYTES} bytes`);
   }
   if (!response.body) return {};
 
@@ -50,6 +53,10 @@ export async function readDashboardResponse(response: Response, abort?: () => vo
     throw err;
   }
   return JSON.parse(Buffer.concat(chunks).toString("utf8"));
+}
+
+export async function readDashboardResponse(response: Response, abort?: () => void): Promise<{ active_alerts?: number }> {
+  return readBoundedJson(response, abort);
 }
 
 export function initDashboardAgent(tlsPin?: string): void {

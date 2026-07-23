@@ -179,7 +179,9 @@ describe("buildSystemdUnit", () => {
     expect(u).toContain("PrivateTmp=yes");
     expect(u).toContain("ProtectControlGroups=yes");
     expect(u).toContain("ProtectSystem=strict");
-    expect(u).toContain("ReadWritePaths=/var/lib/glassmkr /var/lib/crucible");
+    // `-` prefix tolerates a missing state dir so a fail-closed unit never fails
+    // namespace setup (crash loop) when wrapper setup returned before creating them.
+    expect(u).toContain("ReadWritePaths=-/var/lib/glassmkr -/var/lib/crucible");
     expect(u).not.toContain("LockPersonality=");
     expect(u).not.toContain("ProtectKernelTunables=");
     expect(u).not.toContain("NoNewPrivileges=");
