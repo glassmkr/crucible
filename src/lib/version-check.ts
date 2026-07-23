@@ -2,6 +2,7 @@ import { CRUCIBLE_VERSION as CURRENT_VERSION } from "./version.js";
 import {
   assertEndpointResolution,
   fetchPinnedEndpoint,
+  undiciFetchImpl,
   validateEndpoint,
   type EndpointPolicy,
 } from "./endpoint-policy.js";
@@ -35,7 +36,7 @@ export interface VersionCheckDeps {
   resolveEndpoint: typeof assertEndpointResolution;
 }
 
-const defaultDeps: VersionCheckDeps = { fetch, resolveEndpoint: assertEndpointResolution };
+const defaultDeps: VersionCheckDeps = { fetch: undiciFetchImpl, resolveEndpoint: assertEndpointResolution };
 
 export async function checkForUpdates(
   dashboardUrl?: string,

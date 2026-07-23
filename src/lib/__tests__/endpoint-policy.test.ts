@@ -1,6 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
+import { createServer } from "node:http";
+import type { AddressInfo } from "node:net";
 import {
   assertEndpointResolution,
+  fetchPinnedEndpoint,
   isPrivateAddress,
   normalizeAllowedOrigins,
   selectPinnedAddress,
@@ -77,5 +80,44 @@ describe("endpoint policy", () => {
       4,
       () => ({ address: "127.0.0.1", family: 4 }),
     )).toThrow("private address selected");
+  });
+
+  it("completes a real round trip through the pinned dispatcher", async () => {
+    let remoteAddress = "";
+    let hostHeader = "";
+    const server = createServer((request, response) => {
+      remoteAddress = request.socket.remoteAddress ?? "";
+      hostHeader = request.headers.host ?? "";
+      response.writeHead(200, { "Content-Type": "text/plain" });
+      response.end("pinned round trip");
+    });
+    await new Promise<void>((resolve, reject) => {
+      server.once("error", reject);
+      server.listen(0, "127.0.0.1", resolve);
+    });
+
+    try {
+      const address = server.address() as AddressInfo;
+      const url = new URL(`http://pinned.test:${address.port}/probe`);
+      const { response, dispatcher } = await fetchPinnedEndpoint(
+        url,
+        { signal: AbortSignal.timeout(2000) },
+        { allowInsecure: true, allowedOrigins: [] },
+        undefined,
+        async () => [{ address: "127.0.0.1", family: 4 }],
+      );
+      try {
+        expect(response.status).toBe(200);
+        expect(await response.text()).toBe("pinned round trip");
+        expect(remoteAddress).toBe("127.0.0.1");
+        expect(hostHeader).toBe(`pinned.test:${address.port}`);
+      } finally {
+        await dispatcher.close();
+      }
+    } finally {
+      await new Promise<void>((resolve, reject) => {
+        server.close((error) => error ? reject(error) : resolve());
+      });
+    }
   });
 });

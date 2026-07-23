@@ -26,6 +26,7 @@ import {
   assertEndpointResolution,
   fetchPinnedEndpoint,
   normalizeAllowedOrigins,
+  undiciFetchImpl,
   validateEndpoint,
   type EndpointPolicy,
 } from "./lib/endpoint-policy.js";
@@ -74,7 +75,7 @@ export async function postJsonWithPolicy(
   body: unknown,
   headers: Record<string, string>,
   policy: EndpointPolicy,
-  fetchImpl: typeof fetch = fetch,
+  fetchImpl: typeof fetch = undiciFetchImpl,
   resolveEndpoint: typeof assertEndpointResolution = assertEndpointResolution,
 ): Promise<{ status: number; json: any }> {
   const enrollmentOrigin = validateEndpoint(rawUrl, policy).origin;

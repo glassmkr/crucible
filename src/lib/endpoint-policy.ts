@@ -1,6 +1,11 @@
 import { isIP, type LookupFunction } from "node:net";
 import { lookup } from "node:dns/promises";
-import { Agent, type Dispatcher } from "undici";
+import { Agent, fetch as undiciFetch, type Dispatcher } from "undici";
+
+// Node's global and package undici Request classes have different type-only
+// overloads. Pinned callers pass URL values, so bridge that declaration gap
+// once while keeping fetch and Agent from the same package instance.
+export const undiciFetchImpl = undiciFetch as unknown as typeof fetch;
 
 export interface EndpointPolicy {
   allowInsecure: boolean;
@@ -193,7 +198,7 @@ export async function fetchPinnedEndpoint(
   url: URL,
   init: RequestInit,
   policy: EndpointPolicy,
-  fetchImpl: typeof fetch = fetch,
+  fetchImpl: typeof fetch = undiciFetchImpl,
   resolveEndpoint: typeof assertEndpointResolution = assertEndpointResolution,
 ): Promise<PinnedFetchResult> {
   const addresses = await resolveEndpoint(url, policy);
