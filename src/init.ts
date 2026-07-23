@@ -34,6 +34,7 @@ import {
   assertEndpointResolution,
   createPinnedDispatcher,
   normalizeAllowedOrigins,
+  undiciFetchImpl,
   validateEndpoint,
   type EndpointPolicy,
 } from "./lib/endpoint-policy.js";
@@ -815,7 +816,7 @@ export function defaultDeps(): InitDeps {
     log: (m) => console.log(m),
     warn: (m) => console.warn(m),
     error: (m) => console.error(m),
-    fetch,
+    fetch: undiciFetchImpl,
     resolveEndpoint: assertEndpointResolution,
     readStdin: () => new Promise<string>((resolve, reject) => {
       let buf = "";

@@ -6,6 +6,7 @@ import {
   assertEndpointResolution,
   fetchPinnedEndpoint,
   normalizeAllowedOrigins,
+  undiciFetchImpl,
   validateEndpoint,
   type EndpointPolicy,
   type PinnedFetchResult,
@@ -89,7 +90,7 @@ export async function postDashboardWithPolicy(
   rawUrl: string,
   init: RequestInit,
   policy: EndpointPolicy,
-  fetchImpl: typeof fetch = fetch,
+  fetchImpl: typeof fetch = undiciFetchImpl,
   resolveEndpoint: typeof assertEndpointResolution = assertEndpointResolution,
 ): Promise<PinnedFetchResult> {
   const initialOrigin = validateEndpoint(rawUrl, policy).origin;
