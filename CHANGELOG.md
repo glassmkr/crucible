@@ -9,13 +9,60 @@ out under `### Breaking` so downstream consumers can audit.
 
 ## [Unreleased]
 
+## [0.14.6] - 2026-07-24
+
+Security hardening release. No new collectors or alert rules; this batch
+tightens the agent's filesystem, privilege, network, and output handling.
+Please read the Breaking section before upgrading.
+
+### Breaking
+
+- The configuration file is now owned `root:glassmkr` mode `0640`: readable by
+  the service, not writable by it. After upgrading, run
+  `sudo glassmkr-crucible init` once to complete the migration; it re-secures
+  ownership and mode while preserving your file's contents. Until you do, the
+  agent still starts but logs a prominent warning and sets a
+  `config_migration_required` flag in its snapshot. Symlinked, non-regular, or
+  group/other-writable config files are refused.
+- The Prometheus metrics server now binds `127.0.0.1` by default instead of
+  `0.0.0.0`. To scrape remotely, set an explicit bind address and front it with
+  an authenticated proxy or a network ACL.
+- Enrollment and dashboard/ingest endpoints now require `https` and reject
+  loopback, private, and link-local destinations by default. A self-hosted
+  dashboard on http or a private address must opt in with
+  `--allow-insecure-endpoint` (or an allowed-origins entry in the config).
+- If privileged-wrapper setup fails during `init`, the service now runs
+  unprivileged (as `glassmkr`) instead of falling back to root, and the
+  privileged collectors report unavailable until the wrapper is repaired. To
+  explicitly accept running as root, set `GLASSMKR_ALLOW_ROOT_FALLBACK=1`.
+
 ### Security
 
-- Existing service-owned configuration files remain readable during the
-  root-ownership migration, with a prominent startup warning and a snapshot
-  flag. Run `sudo glassmkr-crucible init` after upgrading to preserve the
-  content while changing the file to `root:glassmkr` mode `0640`. Unsafe
-  symlinks, non-regular files, and group/other-writable configs are refused.
+- Privileged filesystem setup uses descriptor-based, no-follow, exclusive
+  operations with ownership and ACL validation across the full directory
+  ancestry, closing symlink and time-of-check/time-of-use races.
+- Secrets are kept out of subprocess environments and argv where possible
+  (`--api-key -` / `--account-key -` read from stdin are preferred and
+  documented); external responses are size-bounded; notifier output escapes
+  control characters and cannot inject headers or markup.
+- Enrollment, dashboard push, version checks, and notifiers validate the
+  destination and pin the connection to the resolved public address,
+  mitigating SSRF and DNS-rebinding.
+- Collector failures now surface as explicitly unavailable rather than as a
+  safe or zero value, so a probe that cannot run no longer reads as healthy.
+- The systemd unit adds sandboxing (`ProtectSystem=strict`, `ProtectHome`,
+  `PrivateTmp`, `ProtectControlGroups`) compatible with the privileged wrapper;
+  failed-unit journal excerpts are redacted for common credential patterns and
+  bounded in size.
+- The publish workflow is split into an unprivileged build job and an isolated
+  publish job, with pull-request CI and scheduled full-history secret scanning
+  added.
+
+### Changed
+
+- A threshold configuration that effectively disables detection now loads with
+  a warning and a `detection_disabled` snapshot flag instead of being rejected,
+  so an upgrade never crashes on a previously-valid config.
 
 ## [0.14.5] - 2026-07-18
 
