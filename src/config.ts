@@ -1,4 +1,5 @@
 import { closeSync, constants, fstatSync, openSync, readFileSync, type Stats } from "node:fs";
+import { execFileSync } from "node:child_process";
 import { parse } from "yaml";
 import { z } from "zod";
 import { normalizeAllowedOrigins, validateEndpoint } from "./lib/endpoint-policy.js";
@@ -127,11 +128,52 @@ export function assertSecureConfigStat(path: string, stat: Pick<Stats, "uid" | "
   return true;
 }
 
-export function loadConfig(path: string): Config {
+// Runs `ls -ldn <path>` and returns its stdout. The first whitespace token
+// of that output is the symbolic mode; `ls` appends a trailing "+" to it when
+// the file carries a POSIX ACL (works without the `acl` package / getfacl,
+// which is absent on much of the fleet).
+export type LsRunner = (path: string) => string;
+
+const defaultLsRunner: LsRunner = (path) =>
+  execFileSync("ls", ["-ldn", path], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] });
+
+export interface LoadConfigDeps {
+  runLs: LsRunner;
+}
+
+const defaultLoadConfigDeps: LoadConfigDeps = { runLs: defaultLsRunner };
+
+// fstat-based checks (assertSecureConfigStat) see only uid/mode, not the
+// extended POSIX ACL. A config that is root:glassmkr 0640 but carries a named
+// ACL (e.g. `user:leaktest:r--`) still leaks the API key to that user. init
+// strips ACLs with `setfacl -b`; the runtime load must independently refuse
+// an ACL'd config rather than trust that init ran. Fail closed: if `ls` cannot
+// be run or its output is unparseable, refuse.
+export function assertNoPosixAcl(path: string, runLs: LsRunner): void {
+  let output: string;
+  try {
+    output = runLs(path);
+  } catch (err) {
+    throw new Error(`[config] Refusing config: cannot verify ACL state of ${path} via ls (${err instanceof Error ? err.message : String(err)})`);
+  }
+  const modeField = output.trim().split(/\s+/)[0];
+  // A valid symbolic mode is 10 chars (type + 9 permission bits), with an
+  // optional trailing "+" (ACL) or "." (SELinux context). Anything shorter is
+  // unparseable; fail closed.
+  if (!modeField || modeField.length < 10) {
+    throw new Error(`[config] Refusing config: unparseable ls output while checking ACL state of ${path}`);
+  }
+  if (modeField.endsWith("+")) {
+    throw new Error(`[config] Refusing config with a POSIX ACL at ${path} (ls mode ${modeField}); a named ACL can leak the API key. Strip it with 'setfacl -b ${path}' or re-run 'sudo glassmkr-crucible init'.`);
+  }
+}
+
+export function loadConfig(path: string, deps: LoadConfigDeps = defaultLoadConfigDeps): Config {
   let fd: number | undefined;
   try {
     fd = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW);
     const migrationRequired = assertSecureConfigStat(path, fstatSync(fd));
+    assertNoPosixAcl(path, deps.runLs);
     const raw = readFileSync(fd, "utf-8");
     const parsed = parse(raw);
     const config = ConfigSchema.parse(parsed) as Config;

@@ -1,4 +1,5 @@
 import { CRUCIBLE_VERSION as CURRENT_VERSION } from "./version.js";
+import { readBoundedJson } from "../push/dashboard.js";
 import {
   assertEndpointResolution,
   fetchPinnedEndpoint,
@@ -72,7 +73,11 @@ export async function checkForUpdates(
         return;
       }
       try {
-        data = await response.json() as typeof data;
+        // Bounded read (64 KiB cap, shared with the dashboard push) instead of
+        // an unbounded response.json(): the endpoint is SSRF-safe via the pinned
+        // dispatcher, but a hostile or self-hosted dashboard could still OOM the
+        // collector with a huge body.
+        data = await readBoundedJson(response) as typeof data;
       } finally {
         await dispatcher.close();
       }
