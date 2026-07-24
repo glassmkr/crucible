@@ -330,6 +330,7 @@ async function collect() {
     collection_status: collectionStatus,
   };
   if (config.config_migration_required) snapshot.config_migration_required = true;
+  if (config.detection_disabled) snapshot.detection_disabled = true;
   // Disks present but SMART-unreadable (blind spot: smartctl missing /
   // unsupported controller). Omitted when empty so older dashboards + healthy
   // hosts are unaffected. Dashboard drive_smart_unreadable rule reads this.
@@ -404,13 +405,24 @@ async function collect() {
   const elapsed = Date.now() - startTime;
   console.log(`[collector] Collected in ${elapsed}ms. Alerts: ${alertResults.length} active, ${newAlerts.length} new, ${resolvedAlerts.length} resolved`);
 
-  // Send notifications for new/resolved alerts
+  // Send notifications for new/resolved alerts. Slack + Telegram egress goes through
+  // the same endpoint policy as the dashboard (HTTPS + no private targets unless opted
+  // in) so a stale/mis-supplied webhook cannot become an SSRF. Email uses local sendmail.
   if (newAlerts.length > 0 || resolvedAlerts.length > 0) {
-    if (config.channels.telegram.enabled && config.channels.telegram.bot_token && config.channels.telegram.chat_id) {
-      await sendTelegram(config.channels.telegram.bot_token, config.channels.telegram.chat_id, newAlerts, resolvedAlerts, config.server_name);
+    let notifyPolicy: { allowInsecure: boolean; allowedOrigins: string[] } | null = null;
+    try {
+      notifyPolicy = {
+        allowInsecure: config.dashboard.allow_insecure_endpoint,
+        allowedOrigins: normalizeAllowedOrigins(config.dashboard.allowed_origins),
+      };
+    } catch (err) {
+      console.error(`[notify] invalid allowed_origins; skipping Slack/Telegram: ${err instanceof Error ? err.message : String(err)}`);
     }
-    if (config.channels.slack.enabled && config.channels.slack.webhook_url) {
-      await sendSlack(config.channels.slack.webhook_url, newAlerts, resolvedAlerts, config.server_name);
+    if (notifyPolicy && config.channels.telegram.enabled && config.channels.telegram.bot_token && config.channels.telegram.chat_id) {
+      await sendTelegram(config.channels.telegram.bot_token, config.channels.telegram.chat_id, newAlerts, resolvedAlerts, config.server_name, notifyPolicy);
+    }
+    if (notifyPolicy && config.channels.slack.enabled && config.channels.slack.webhook_url) {
+      await sendSlack(config.channels.slack.webhook_url, newAlerts, resolvedAlerts, config.server_name, notifyPolicy);
     }
     if (config.channels.email.enabled && config.channels.email.to) {
       await sendEmail(config.channels.email, newAlerts, resolvedAlerts, config.server_name);

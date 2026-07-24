@@ -35,9 +35,16 @@ describe("config bounds", () => {
     expect(config("thresholds:\n  disk_latency_hdd_ms: 999999\n")).toThrow();
   });
 
-  it("requires acknowledgement when practical detection is disabled", () => {
-    expect(config("thresholds:\n  disk_percent: 100\n")).toThrow(/acknowledge_disabled_detection/);
-    expect(config("thresholds:\n  disk_percent: 100\n  acknowledge_disabled_detection: true\n")().thresholds.disk_percent).toBe(100);
+  it("surfaces disabled detection as a flag instead of crash-looping a prev-valid config", () => {
+    // disk_percent:100 disabled that alert on 0.14.5; it must keep loading on upgrade
+    // (loadConfig throw == crash loop under Restart=always), surfaced via a flag.
+    const loaded = config("thresholds:\n  disk_percent: 100\n")();
+    expect(loaded.thresholds.disk_percent).toBe(100);
+    expect(loaded.detection_disabled).toBe(true);
+    // Acknowledged -> loads with no flag.
+    const acked = config("thresholds:\n  disk_percent: 100\n  acknowledge_disabled_detection: true\n")();
+    expect(acked.thresholds.disk_percent).toBe(100);
+    expect(acked.detection_disabled).toBeUndefined();
   });
 
   it("allows swap alerts to be disabled without a global detection acknowledgement", () => {

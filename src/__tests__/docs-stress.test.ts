@@ -73,8 +73,11 @@ describe("measurement stress runner hardening", () => {
     expect(readFileSync(marker, "utf8")).toBe("restored");
   });
 
-  it.skipIf(!existsSync("/usr/bin/flock") && !existsSync("/bin/flock"))(
-    "refuses a concurrent Profile B lock",
+  it.skipIf(
+    (!existsSync("/usr/bin/flock") && !existsSync("/bin/flock")) ||
+      (typeof process.getuid === "function" && process.getuid() !== 0),
+  )(
+    "refuses a concurrent Profile B lock (root-only: the lock dir is install -o root 0700)",
     () => {
       const lock = join(makeTempDir(), "profile-b.lock");
       const result = runSourced(

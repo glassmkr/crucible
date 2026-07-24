@@ -188,7 +188,11 @@ export function redactJournalLine(raw: string): string {
     .replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]+/g, " ")
     .replace(/\b[a-z][a-z0-9+.-]*:\/\/[^\s<>"']+/gi, (url) => redactUrlSecrets(url))
     .replace(/\b(Bearer|Basic)(\s+)[A-Za-z0-9._~+/=-]+/gi, (_match, scheme, space) => `${scheme}${space}${REDACTED}`)
-    .replace(/((?:^|[^A-Za-z0-9_.-])["']?(?:password|passwd|pwd|token|key|apikey|api[_-]?key|x[_-]?api[_-]?key|passphrase|auth|authorization|access[_-]?(?:token|key)|refresh[_-]?token|client[_-]?secret|secret(?:[_-]?key)?|private[_-]?key|aws_secret_access_key|session[_-]?token)["']?\s*[:=]\s*)(?:"[^"]*"|'[^']*'|[^\s,;]+)/gim, (_match, prefix) => `${prefix}${REDACTED}`)
+    // Prefix guard excludes letters/digits AND `-`, so `_`/`.` count as env-var
+    // separators (DATABASE_PASSWORD, MY_API_KEY, x_secret_key redact) while a
+    // hyphenated word like `hockey-key` and a suffix like `monkey` do not; the
+    // required trailing `[:=]` also keeps `tokens=` from matching `token`.
+    .replace(/((?:^|[^A-Za-z0-9-])["']?(?:password|passwd|pwd|token|key|apikey|api[_-]?key|x[_-]?api[_-]?key|passphrase|auth|authorization|access[_-]?(?:token|key)|refresh[_-]?token|client[_-]?secret|secret(?:[_-]?key)?|private[_-]?key|aws_secret_access_key|session[_-]?token)["']?\s*[:=]\s*)(?:"[^"]*"|'[^']*'|[^\s,;]+)/gim, (_match, prefix) => `${prefix}${REDACTED}`)
     .replace(/\bgmk_(?:acct|cru)_live_[A-Za-z0-9_]+\b/g, REDACTED)
     .replace(/\bcol_[A-Fa-f0-9]{16,}\b/g, REDACTED)
     .replace(/\b(?:AKIA[0-9A-Z]{16}|gh[pousr]_[A-Za-z0-9]{20,}|sk-(?:proj-)?[A-Za-z0-9_-]{20,}|sk_(?:live|test)_[A-Za-z0-9]{16,}|AIza[0-9A-Za-z_-]{20,}|xox[baprs]-[A-Za-z0-9-]{10,})\b/g, REDACTED)

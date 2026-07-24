@@ -113,8 +113,11 @@ export async function collectIpmi(vendor: Vendor = "generic", capability?: IpmiC
     }
   }
 
-  // SEL entry count
-  let selCount = 0;
+  // SEL entry count. A failed privileged probe (runPrivileged returns null) or an
+  // unparseable response leaves this null (unknown), never 0, so a partial SEL
+  // failure cannot be mistaken for a genuinely empty event log while the top-level
+  // IPMI payload stays available.
+  let selCount: number | null = null;
   const selInfo = await runPrivileged("ipmi-sel-info");
   if (selInfo) {
     const match = selInfo.match(/Entries\s*:\s*(\d+)/i);

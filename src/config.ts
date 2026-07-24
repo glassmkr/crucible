@@ -42,25 +42,22 @@ const ThresholdSchema = z.object({
   if (value.cpu_temp_warning_c >= value.cpu_temp_critical_c) {
     ctx.addIssue({ code: z.ZodIssueCode.custom, message: "cpu warning temperature must be below critical" });
   }
-  if (value.acknowledge_disabled_detection) return;
-  const disabled = [
-    value.ram_percent,
-    value.disk_percent,
-    value.iowait_percent,
-    value.nvme_wear_percent,
-    value.interface_utilization_percent,
-  ].some((threshold) => threshold >= 100)
-    || value.disk_latency_nvme_ms > 10_000
-    || value.disk_latency_hdd_ms > 10_000
-    || value.cpu_temp_warning_c > 110
-    || value.cpu_temp_critical_c > 125;
-  if (disabled) {
-    ctx.addIssue({
-      code: z.ZodIssueCode.custom,
-      message: "thresholds can disable practical detection; set acknowledge_disabled_detection: true to accept this risk",
-    });
-  }
 });
+
+type Thresholds = z.infer<typeof ThresholdSchema>;
+
+// Thresholds pushed to their limits effectively disable detection. This is NOT a
+// hard failure: configs accepted by earlier releases (e.g. a percent threshold set
+// to 100 to silence an alert) must keep loading on upgrade instead of crash-looping
+// the daemon under Restart=always. loadConfig surfaces this as a warning plus a
+// snapshot flag unless the operator has explicitly acknowledged it.
+export function thresholdsDisableDetection(t: Thresholds): boolean {
+  return [t.ram_percent, t.disk_percent, t.iowait_percent, t.nvme_wear_percent, t.interface_utilization_percent].some((v) => v >= 100)
+    || t.disk_latency_nvme_ms > 10_000
+    || t.disk_latency_hdd_ms > 10_000
+    || t.cpu_temp_warning_c > 110
+    || t.cpu_temp_critical_c > 125;
+}
 
 const ConfigSchema = z.object({
   server_name: z.string().default("unnamed-server"),
@@ -97,9 +94,11 @@ const ConfigSchema = z.object({
 
 export type Config = z.infer<typeof ConfigSchema> & {
   config_migration_required?: true;
+  detection_disabled?: true;
 };
 
 const warnedLegacyConfigPaths = new Set<string>();
+const warnedDisabledDetectionPaths = new Set<string>();
 
 export function configLoadFailureMessage(path: string, error: unknown): string {
   const detail = error instanceof Error ? error.message : String(error);
@@ -141,6 +140,13 @@ export function loadConfig(path: string): Config {
       if (!warnedLegacyConfigPaths.has(path)) {
         warnedLegacyConfigPaths.add(path);
         console.warn("[config] WARNING: config is not yet root-owned; run `sudo glassmkr-crucible init` to complete the security migration");
+      }
+    }
+    if (!config.thresholds.acknowledge_disabled_detection && thresholdsDisableDetection(config.thresholds)) {
+      config.detection_disabled = true;
+      if (!warnedDisabledDetectionPaths.has(path)) {
+        warnedDisabledDetectionPaths.add(path);
+        console.warn("[config] WARNING: thresholds effectively disable practical detection; set acknowledge_disabled_detection: true to silence this");
       }
     }
     return config;

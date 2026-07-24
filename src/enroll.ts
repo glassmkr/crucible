@@ -30,6 +30,7 @@ import {
   validateEndpoint,
   type EndpointPolicy,
 } from "./lib/endpoint-policy.js";
+import { readBoundedJson } from "./push/dashboard.js";
 
 const DEFAULT_DASHBOARD_URL = "https://app.glassmkr.com";
 
@@ -103,7 +104,9 @@ export async function postJsonWithPolicy(
     }
     let json: any = null;
     try {
-      json = await response.json();
+      // Bounded read: a hostile/self-hosted enrollment endpoint must not be able to
+      // exhaust memory with a huge chunked body during the sudo-run enroll.
+      json = await readBoundedJson(response);
     } catch {
       json = null;
     } finally {

@@ -49,6 +49,21 @@ jobs:
       id-token: write
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          fetch-depth: 0
+      - name: Refuse a tag that is not on main
+        # A v* tag grants this job publish authority; refuse to publish a commit that
+        # is not reachable from main (an unmerged/untrusted tag pointed at a modified
+        # workflow or package). Pair with a repo tag-protection ruleset restricting
+        # who may push v* tags.
+        run: |
+          set -euo pipefail
+          git fetch --no-tags origin main
+          if ! git merge-base --is-ancestor "${GITHUB_SHA}" origin/main; then
+            echo "refusing to publish: ${GITHUB_SHA} is not an ancestor of origin/main" >&2
+            exit 1
+          fi
+          echo "verified: ${GITHUB_SHA} is on origin/main"
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           # Node 24 ships with npm 11.x which has working npm Trusted Publishing.

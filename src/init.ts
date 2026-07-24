@@ -161,7 +161,9 @@ export function buildSystemdUnit(binPath: string, configPath: string, user = SER
     `PrivateTmp=yes`,
     `ProtectControlGroups=yes`,
     `ProtectSystem=strict`,
-    `ReadWritePaths=${STATE_DIR} ${REBOOT_MARKER_DIR}`,
+    // `-` prefix: tolerate a missing path so a fail-closed unprivileged unit whose
+    // state dirs were not yet created never fails namespace setup (crash loop).
+    `ReadWritePaths=-${STATE_DIR} -${REBOOT_MARKER_DIR}`,
     `Restart=always`,
     `RestartSec=10`,
     ``,
@@ -345,9 +347,34 @@ export function setupPrivilegeSeparation(deps: InitDeps, configPath: string): bo
     if (configStat.isSymbolicLink || configStat.isFile === false || configStat.uid !== 0 || configStat.gid !== serviceGids[0] || (configStat.mode & 0o777) !== 0o640) {
       return fail(`config ${configPath} failed its post-install safety check`);
     }
+    // A POSIX ACL survives chmod (chmod only adjusts the ACL mask), so a named-user
+    // read ACL on the key-bearing config would still leak it despite mode 0640.
+    // Strip all extended ACLs, then refuse if any remains or cannot be inspected.
+    deps.exec("setfacl", ["-b", configPath]);
+    const aclLs = deps.exec("ls", ["-ldn", configPath]);
+    if (aclLs.status !== 0) return fail(`could not inspect ACLs on ${configPath}`);
+    if ((aclLs.stdout.trim().split(/\s+/, 1)[0] ?? "").endsWith("+")) {
+      return fail(`${configPath} still carries an extended ACL after setfacl -b`);
+    }
   } catch (err: any) {
     return fail(`could not secure ${configPath}: ${err?.message ?? err}`);
   }
+
+  // 3b. Create the writable state dirs BEFORE the wrapper/sudoers steps so the
+  //     fail-closed unprivileged path always has them: the hardened unit's
+  //     ReadWritePaths references these, and an ordinary wrapper/sudoers failure
+  //     returns before any later step. Marker dir stays root-owned; state dir is
+  //     service-owned.
+  try { deps.fs.mkdirSync(STATE_DIR, { recursive: true, mode: 0o750 }); } catch { /* exists */ }
+  const stateChown = deps.exec("chown", ["-R", `${SERVICE_USER}:${SERVICE_USER}`, STATE_DIR]);
+  if (stateChown.status !== 0) return fail(`could not chown ${STATE_DIR} to ${SERVICE_USER} (status=${stateChown.status})`);
+  try { deps.fs.mkdirSync(REBOOT_MARKER_DIR, { recursive: true, mode: 0o2770 }); } catch { /* exists */ }
+  const markerChown = deps.exec("chown", [`root:${SERVICE_USER}`, REBOOT_MARKER_DIR]);
+  if (markerChown.status !== 0) return fail(`could not set ${REBOOT_MARKER_DIR} ownership (status=${markerChown.status})`);
+  try { deps.fs.chmodSync(REBOOT_MARKER_DIR, 0o2770); } catch (err: any) {
+    return fail(`could not set ${REBOOT_MARKER_DIR} mode: ${err?.message ?? err}`);
+  }
+
   const wrapperDir = pathDefault.dirname(WRAPPER_PATH);
   for (const dir of ancestorDirectories(wrapperDir)) {
     const problem = dirTrustFailure(deps, dir, serviceGids);
@@ -384,19 +411,6 @@ export function setupPrivilegeSeparation(deps: InitDeps, configPath: string): bo
     deps.fs.chmodSync(SUDOERS_PATH, 0o440);
   } catch (err: any) {
     return fail(`could not install sudoers ${SUDOERS_PATH}: ${err?.message ?? err}`);
-  }
-
-  // 6. Keep mutable agent state service-owned. Keep the marker directory and
-  //    config root-owned, granting only the narrow group access each needs.
-  try { deps.fs.mkdirSync(STATE_DIR, { recursive: true, mode: 0o750 }); } catch { /* exists */ }
-  const stateChown = deps.exec("chown", ["-R", `${SERVICE_USER}:${SERVICE_USER}`, STATE_DIR]);
-  if (stateChown.status !== 0) return fail(`could not chown ${STATE_DIR} to ${SERVICE_USER} (status=${stateChown.status})`);
-
-  try { deps.fs.mkdirSync(REBOOT_MARKER_DIR, { recursive: true, mode: 0o2770 }); } catch { /* exists */ }
-  const markerChown = deps.exec("chown", [`root:${SERVICE_USER}`, REBOOT_MARKER_DIR]);
-  if (markerChown.status !== 0) return fail(`could not set ${REBOOT_MARKER_DIR} ownership (status=${markerChown.status})`);
-  try { deps.fs.chmodSync(REBOOT_MARKER_DIR, 0o2770); } catch (err: any) {
-    return fail(`could not set ${REBOOT_MARKER_DIR} mode: ${err?.message ?? err}`);
   }
 
   deps.log(`[init] privilege separation ready: service will run as '${SERVICE_USER}' via ${WRAPPER_PATH}.`);
