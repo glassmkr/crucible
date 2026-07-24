@@ -1,7 +1,8 @@
-import { beforeEach, describe, it, expect, vi } from "vitest";
+import { afterEach, beforeEach, describe, it, expect, vi } from "vitest";
 import { __test_only, checkForUpdates, isOlderVersion } from "../version-check.js";
 
 beforeEach(() => __test_only.reset());
+afterEach(() => vi.restoreAllMocks());
 
 describe("isOlderVersion (update-check comparison)", () => {
   it("returns true when current is older than latest (a genuine update)", () => {
@@ -61,5 +62,37 @@ describe("checkForUpdates endpoint policy", () => {
     });
     expect(fetchImpl).toHaveBeenCalledTimes(1);
     expect(fetchImpl.mock.calls[0][1]?.redirect).toBe("manual");
+  });
+});
+
+describe("checkForUpdates bounded response", () => {
+  it("reads a normal JSON body and announces a newer version", async () => {
+    const fetchImpl = vi.fn(async () => new Response(JSON.stringify({ crucible: { latest: "99.0.0" } })));
+    const log = vi.spyOn(console, "log").mockImplementation(() => {});
+    await checkForUpdates("https://updates.example", undefined, {
+      fetch: fetchImpl as typeof fetch,
+      resolveEndpoint: async () => [{ address: "203.0.113.10", family: 4 }],
+    });
+    expect(log.mock.calls.some((c) => String(c[0]).includes("New Crucible version available: 99.0.0"))).toBe(true);
+  });
+
+  it("does not OOM or announce on an oversized body (bounded read rejects it)", async () => {
+    // 64 KiB cap + 1 byte, no content-length header so the streamed-bytes cap
+    // is what stops it. checkForUpdates swallows the resulting throw, so the
+    // assertion is that no update line is printed rather than a crash.
+    const oversized = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new Uint8Array(64 * 1024));
+        controller.enqueue(new Uint8Array(1));
+        controller.close();
+      },
+    });
+    const fetchImpl = vi.fn(async () => new Response(oversized));
+    const log = vi.spyOn(console, "log").mockImplementation(() => {});
+    await checkForUpdates("https://updates.example", undefined, {
+      fetch: fetchImpl as typeof fetch,
+      resolveEndpoint: async () => [{ address: "203.0.113.10", family: 4 }],
+    });
+    expect(log.mock.calls.some((c) => String(c[0]).includes("New Crucible version available"))).toBe(false);
   });
 });

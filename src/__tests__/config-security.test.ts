@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { assertSecureConfigStat, configLoadFailureMessage, loadConfig } from "../config.js";
+import { assertNoPosixAcl, assertSecureConfigStat, configLoadFailureMessage, loadConfig } from "../config.js";
 
 const tempDirs: string[] = [];
 
@@ -49,6 +49,40 @@ describe("assertSecureConfigStat", () => {
       .toThrow(/non-regular/);
     expect(() => assertSecureConfigStat("/etc/glassmkr/crucible.yaml", stat({ file: false })))
       .toThrow(/non-regular/);
+  });
+});
+
+describe("assertNoPosixAcl", () => {
+  it("passes a normal mode with no ACL suffix", () => {
+    expect(() => assertNoPosixAcl("/etc/glassmkr/crucible.yaml",
+      () => "-rw-r----- 1 0 1001 42 Jul 24 22:00 /etc/glassmkr/crucible.yaml")).not.toThrow();
+  });
+
+  it("rejects a mode whose ls field carries the ACL '+' suffix", () => {
+    expect(() => assertNoPosixAcl("/etc/glassmkr/crucible.yaml",
+      () => "-rw-r-----+ 1 0 1001 42 Jul 24 22:00 /etc/glassmkr/crucible.yaml"))
+      .toThrow(/POSIX ACL/);
+  });
+
+  it("fails closed when ls cannot be run", () => {
+    expect(() => assertNoPosixAcl("/etc/glassmkr/crucible.yaml", () => { throw new Error("ls: not found"); }))
+      .toThrow(/cannot verify ACL state/);
+  });
+
+  it("fails closed on unparseable ls output", () => {
+    expect(() => assertNoPosixAcl("/etc/glassmkr/crucible.yaml", () => "")).toThrow(/unparseable/);
+    expect(() => assertNoPosixAcl("/etc/glassmkr/crucible.yaml", () => "-rw-")).toThrow(/unparseable/);
+  });
+
+  it("refuses to load an ACL'd config through loadConfig", () => {
+    const dir = mkdtempSync(join(tmpdir(), "crucible-config-"));
+    tempDirs.push(dir);
+    const path = join(dir, "crucible.yaml");
+    writeFileSync(path, 'server_name: "acl-host"\n', { mode: 0o600 });
+    // Inject an ls runner that reports an ACL even though the on-disk file has
+    // none, so the reject path is exercised deterministically on any host.
+    expect(() => loadConfig(path, { runLs: () => `-rw-r-----+ 1 0 1001 24 Jul 24 22:00 ${path}` }))
+      .toThrow(/POSIX ACL/);
   });
 });
 
