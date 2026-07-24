@@ -76,7 +76,9 @@ jobs:
       - run: npm --version
       - name: Verify package artifact
         run: sha256sum -c package/SHA256SUMS
-      - run: npm publish package/*.tgz --access public --provenance
+      # Leading ./ forces npm to treat the arg as a local tarball path; a bare
+      # package/*.tgz is parsed as a GitHub owner/repo shorthand and fails.
+      - run: npm publish ./package/*.tgz --access public --provenance
 
       # Create the GitHub Release from the tag + its CHANGELOG section, so a
       # release object always exists for every published version. This used to
