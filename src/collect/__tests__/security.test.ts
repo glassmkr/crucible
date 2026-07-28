@@ -31,6 +31,7 @@ const {
   nftHasEffectiveIngressProtection,
   readKernelVulnerability,
   securityCollectionAvailability,
+  installedKernelIsNewer,
 } = await import("../security.js");
 const { allRules } = await import("../../alerts/rules.js");
 
@@ -270,5 +271,32 @@ describe("checkAutoUpdates dnf-automatic apply-vs-download (R-P2-RHEL-1)", () =>
     const r = await collectSecurity();
     expect(r.auto_updates.configured).toBe(false);
     expect(r.auto_updates.details).toMatch(/no installing timer/i);
+  });
+});
+
+// kernel_needs_reboot: the "installed is newer" decision used to be a string
+// inequality, so a host booted into a mainline or custom kernel (packaged
+// linux-image-unsigned-*, which the installed-kernel scan also used to miss)
+// alerted forever, and no reboot could clear it because GRUB boots the same
+// kernel again. Found on a real host running 6.10.0-061000-generic while apt's
+// newest was 6.8.0-136-generic.
+describe("installedKernelIsNewer", () => {
+  it("does not claim a reboot when the running kernel is newer (mainline kernel)", () => {
+    expect(installedKernelIsNewer("6.8.0-136-generic", "6.10.0-061000-generic")).toBe(false);
+  });
+  it("compares numerically, not as strings (6.10 outranks 6.8)", () => {
+    expect(installedKernelIsNewer("6.10.0-1", "6.8.0-9")).toBe(true);
+  });
+  it("still reports a genuinely newer installed kernel", () => {
+    expect(installedKernelIsNewer("6.8.0-136-generic", "6.8.0-124-generic")).toBe(true);
+  });
+  it("treats an equal kernel as no reboot needed", () => {
+    expect(installedKernelIsNewer("6.8.0-136-generic", "6.8.0-136-generic")).toBe(false);
+  });
+  it("returns false when a version has no parseable numbers", () => {
+    expect(installedKernelIsNewer("unknown", "6.8.0-136-generic")).toBe(false);
+  });
+  it("handles RHEL-style releases", () => {
+    expect(installedKernelIsNewer("5.14.0-503.40.1.el9_5.x86_64", "5.14.0-503.38.1.el9_5.x86_64")).toBe(true);
   });
 });

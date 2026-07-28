@@ -471,6 +471,32 @@ export function readKernelVulnerability(
 
 // === Kernel Reboot ===
 
+/** Is kernel release `installed` strictly newer than `running`?
+ *
+ *  Compares numeric components, so "6.10.0-136" correctly outranks "6.8.0-136";
+ *  a string compare gets this backwards because "10" sorts before "8". That bug
+ *  made kernel_needs_reboot fire forever on any host booted into a mainline or
+ *  custom kernel (packaged linux-image-unsigned-*, so it looked "newer than
+ *  installed"), and no reboot could clear it because GRUB boots the same kernel
+ *  again. Non-numeric flavour text ("-generic", ".el9_5.x86_64") is ignored.
+ *
+ *  Returns FALSE when either side has no parseable numbers, so callers keep
+ *  whatever fallback they already had instead of claiming a reboot is pending.
+ */
+export function installedKernelIsNewer(installed: string, running: string): boolean {
+  const parts = (v: string): number[] => (v.match(/\d+/g) ?? []).map(Number);
+  const i = parts(installed);
+  const r = parts(running);
+  if (i.length === 0 || r.length === 0) return false;
+  for (let n = 0; n < Math.max(i.length, r.length); n++) {
+    const iv = i[n] ?? 0;
+    const rv = r[n] ?? 0;
+    if (iv > rv) return true;
+    if (iv < rv) return false;
+  }
+  return false;
+}
+
 async function checkKernelReboot(): Promise<KernelRebootStatus | null> {
   const running = (await run("uname", ["-r"]))?.trim();
   if (!running) return null;
@@ -479,7 +505,7 @@ async function checkKernelReboot(): Promise<KernelRebootStatus | null> {
   if (existsSync("/var/run/reboot-required")) {
     // Filter to versioned images only (e.g. linux-image-6.8.0-107-generic),
     // excluding metapackages like linux-image-generic, linux-image-virtual.
-    const installed = (await run("bash", ["-c", 'dpkg -l "linux-image-*" 2>/dev/null | grep "^ii" | awk \'{print $2}\' | grep "linux-image-[0-9]" | sed "s/linux-image-//" | sort -V | tail -1']))?.trim() || "unknown";
+    const installed = (await run("bash", ["-c", 'dpkg -l "linux-image-*" 2>/dev/null | grep "^ii" | awk \'{print $2}\' | grep -E "^linux-image-(unsigned-)?[0-9]" | sed -E "s/^linux-image-(unsigned-)?//" | sort -V | tail -1']))?.trim() || "unknown";
     // /var/run/reboot-required fires for ANY package that wants a reboot
     // (libc, systemd, dbus), not just the kernel. For kernel_needs_reboot the
     // authoritative signal is whether a newer kernel is installed than the one
@@ -487,14 +513,14 @@ async function checkKernelReboot(): Promise<KernelRebootStatus | null> {
     // a non-kernel reboot flag and the rule should not fire (fleet report rec
     // #4 false positive). Only fall back to trusting the flag when we could
     // not determine the installed kernel.
-    return { running, installed, needsReboot: installed === "unknown" ? true : installed !== running };
+    return { running, installed, needsReboot: installed === "unknown" ? true : installedKernelIsNewer(installed, running) };
   }
 
   // Method 2: Compare packages (Debian/Ubuntu)
   // Same filter: only versioned images, no metapackages.
-  const debPkg = (await run("bash", ["-c", 'dpkg -l "linux-image-*" 2>/dev/null | grep "^ii" | awk \'{print $2}\' | grep "linux-image-[0-9]" | sed "s/linux-image-//" | sort -V | tail -1']))?.trim();
+  const debPkg = (await run("bash", ["-c", 'dpkg -l "linux-image-*" 2>/dev/null | grep "^ii" | awk \'{print $2}\' | grep -E "^linux-image-(unsigned-)?[0-9]" | sed -E "s/^linux-image-(unsigned-)?//" | sort -V | tail -1']))?.trim();
   if (debPkg) {
-    return { running, installed: debPkg, needsReboot: debPkg !== running };
+    return { running, installed: debPkg, needsReboot: installedKernelIsNewer(debPkg, running) };
   }
 
   // Method 3: RPM-based (RHEL/Fedora/SUSE). Modern RHEL (EL8+) ships the
@@ -507,7 +533,7 @@ async function checkKernelReboot(): Promise<KernelRebootStatus | null> {
   // installed" does not), then take the newest.
   const rpmPkg = (await run("bash", ["-c", 'rpm -q --queryformat "%{VERSION}-%{RELEASE}.%{ARCH}\\n" kernel-core kernel kernel-default 2>/dev/null | grep -E "^[0-9]" | sort -V | tail -1']))?.trim();
   if (rpmPkg) {
-    return { running, installed: rpmPkg, needsReboot: rpmPkg !== running };
+    return { running, installed: rpmPkg, needsReboot: installedKernelIsNewer(rpmPkg, running) };
   }
 
   return null;
