@@ -9,6 +9,33 @@ out under `### Breaking` so downstream consumers can audit.
 
 ## [Unreleased]
 
+## [0.14.7] - 2026-07-25
+
+A follow-up to the 0.14.6 hardening batch: a clearer failure on unsupported
+Node, a startup configuration safety check, and two false-positive fixes. No new
+collectors or alert rules.
+
+### Changed
+
+- On Node.js older than 24 the agent now exits immediately at startup with a
+  message naming the required version, instead of failing deep inside a
+  dependency and restart-looping. Node 24 or newer has been required since
+  0.14.6; this makes an unsupported runtime obvious rather than silent.
+
+### Fixed
+
+- "Reboot required for kernel update" no longer fires on a host running a
+  mainline or custom kernel that is newer than the distribution's packaged one.
+  The check now compares kernel versions numerically and recognizes
+  `linux-image-unsigned-*` packages, so a host already booted on the newest
+  kernel stays quiet while a genuine pending reboot is still reported.
+- The configuration file's ownership, permissions, and access-control list are
+  re-verified at every startup, not only during `init`: if they are widened
+  after setup to expose the file, the agent refuses to read it rather than
+  trusting a group- or other-readable config.
+- Responses to update-version checks are size-bounded, matching the other
+  outbound calls hardened in 0.14.6.
+
 ## [0.14.6] - 2026-07-24
 
 Security hardening release. No new collectors or alert rules; this batch
