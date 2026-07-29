@@ -497,6 +497,30 @@ export function installedKernelIsNewer(installed: string, running: string): bool
   return false;
 }
 
+/** RPM kernel package names to compare against, for the RUNNING kernel's family.
+ *
+ *  A host can have more than one kernel family installed at once: classically
+ *  Oracle Linux with both UEK (`kernel-uek`) and the RHEL-compatible kernel
+ *  (`kernel-core`), or SUSE (`kernel-default`). Comparing across families is
+ *  meaningless: a retained older-versioned package from a family you are NOT
+ *  running must not be read as "the installed kernel", or a genuine update to
+ *  the family you ARE running is hidden (false negative). So pick the package
+ *  family matching the running release's flavor and query only that.
+ *
+ *  The distinguishing token lives in `uname -r`:
+ *    ...el8uek...  -> kernel-uek     (Oracle UEK)
+ *    ...-default   -> kernel-default (SUSE)
+ *  Everything else (RHEL / Rocky / Alma / Fedora stock) -> kernel-core + kernel
+ *  (kernel-core on EL8+, kernel on older EL and Fedora). Only fixed literal
+ *  package names are returned; the running string is never interpolated into
+ *  the rpm command. */
+export function rpmKernelPackagesFor(running: string): string[] {
+  const r = running.toLowerCase();
+  if (r.includes("uek")) return ["kernel-uek"];
+  if (r.includes("-default")) return ["kernel-default"];
+  return ["kernel-core", "kernel"];
+}
+
 async function checkKernelReboot(): Promise<KernelRebootStatus | null> {
   const running = (await run("uname", ["-r"]))?.trim();
   if (!running) return null;
@@ -523,15 +547,17 @@ async function checkKernelReboot(): Promise<KernelRebootStatus | null> {
     return { running, installed: debPkg, needsReboot: installedKernelIsNewer(debPkg, running) };
   }
 
-  // Method 3: RPM-based (RHEL/Fedora/SUSE). Modern RHEL (EL8+) ships the
-  // kernel as `kernel-core`, not `kernel`; SUSE uses `kernel-default`.
-  // Querying only `kernel` returns the literal "package kernel is not
-  // installed" on EL8/9/10, which is truthy and != running, so the rule
-  // misfired with that string as the "installed" version (Rocky 10 false
-  // positive). Query every package that carries the kernel and keep only
-  // real version lines (they start with a digit; "package X is not
-  // installed" does not), then take the newest.
-  const rpmPkg = (await run("bash", ["-c", 'rpm -q --queryformat "%{VERSION}-%{RELEASE}.%{ARCH}\\n" kernel-core kernel kernel-default 2>/dev/null | grep -E "^[0-9]" | sort -V | tail -1']))?.trim();
+  // Method 3: RPM-based (RHEL/Fedora/SUSE/Oracle). Modern RHEL (EL8+) ships the
+  // kernel as `kernel-core`, not `kernel`; SUSE uses `kernel-default`; Oracle's
+  // UEK is `kernel-uek`. Query only the package family that matches the RUNNING
+  // kernel's flavor (see rpmKernelPackagesFor): a host can have more than one
+  // family installed, and a retained older-versioned package from a family you
+  // are NOT running must never be read as "the installed kernel" (that hid a
+  // genuine UEK update behind a stale RHCK package). Keep only real version
+  // lines (they start with a digit; "package X is not installed" does not),
+  // then take the newest.
+  const rpmPkgList = rpmKernelPackagesFor(running).join(" ");
+  const rpmPkg = (await run("bash", ["-c", `rpm -q --queryformat "%{VERSION}-%{RELEASE}.%{ARCH}\\n" ${rpmPkgList} 2>/dev/null | grep -E "^[0-9]" | sort -V | tail -1`]))?.trim();
   if (rpmPkg) {
     return { running, installed: rpmPkg, needsReboot: installedKernelIsNewer(rpmPkg, running) };
   }

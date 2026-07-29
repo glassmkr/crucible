@@ -32,6 +32,7 @@ const {
   readKernelVulnerability,
   securityCollectionAvailability,
   installedKernelIsNewer,
+  rpmKernelPackagesFor,
 } = await import("../security.js");
 const { allRules } = await import("../../alerts/rules.js");
 
@@ -300,3 +301,23 @@ describe("installedKernelIsNewer", () => {
     expect(installedKernelIsNewer("5.14.0-503.40.1.el9_5.x86_64", "5.14.0-503.38.1.el9_5.x86_64")).toBe(true);
   });
 });
+
+// rpm kernel scan must stay within the running kernel's family. Querying a
+// fixed cross-family set (kernel-core kernel kernel-default) omitted Oracle's
+// kernel-uek entirely, so on a UEK host a retained older RHCK package was read
+// as "installed" and a genuine UEK update was hidden (false negative).
+describe("rpmKernelPackagesFor", () => {
+  it("selects kernel-uek for an Oracle UEK running kernel", () => {
+    expect(rpmKernelPackagesFor("5.15.0-300.161.13.el8uek.x86_64")).toEqual(["kernel-uek"]);
+  });
+  it("selects kernel-default for a SUSE running kernel", () => {
+    expect(rpmKernelPackagesFor("6.4.0-150600.23.42-default")).toEqual(["kernel-default"]);
+  });
+  it("selects kernel-core + kernel for stock RHEL/Rocky/Alma", () => {
+    expect(rpmKernelPackagesFor("4.18.0-553.40.1.el8_10.x86_64")).toEqual(["kernel-core", "kernel"]);
+  });
+  it("does not misclassify a stock EL9 kernel as SUSE or UEK", () => {
+    expect(rpmKernelPackagesFor("5.14.0-503.40.1.el9_5.x86_64")).toEqual(["kernel-core", "kernel"]);
+  });
+});
+
