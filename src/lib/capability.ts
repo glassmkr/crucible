@@ -17,16 +17,57 @@ import { buildSubprocessEnv } from "./exec.js";
 const execFileAsync = promisify(execFile);
 
 export type IpmiCapability =
-  | { available: true; method: "ipmitool_in_band"; ipmitool_version: string | null }
-  | { available: false; reason: "no_ipmitool_binary" | "no_bmc_device" | "execution_failed" | "permission_denied" | "ipmitool_cve_2020_5208"; detail?: string };
+  | {
+      available: true;
+      method: "ipmitool_in_band";
+      ipmitool_version: string | null;
+      /** True when the version reads below MIN_SAFE_IPMITOOL_VERSION but we
+       *  collected anyway (the default since 2026-07-29). Purely advisory: many
+       *  distros backport the CVE fix without bumping the upstream version, so
+       *  this is "worth checking", NOT "vulnerable". See the block comment below. */
+      ipmitool_below_cve_floor?: boolean;
+    }
+  | {
+      available: false;
+      /** `ipmitool_cve_2020_5208` is now only produced when an operator has
+       *  explicitly set `collection.enforce_ipmitool_min_version: true`. */
+      reason: "no_ipmitool_binary" | "no_bmc_device" | "execution_failed" | "permission_denied" | "ipmitool_cve_2020_5208";
+      detail?: string;
+    };
 
-// CVE-2020-5208 (GHSA-g659-9qxw-p7cp): heap overflow in ipmitool's
-// read_fru_area_section and related parsers when handling data received
-// from a remote LAN party (a malicious or compromised BMC). Fixed in
-// ipmitool 1.8.19. The agent runs ipmitool in-band against the host BMC,
-// so a compromised BMC parsing path is a real local-blast-radius primitive
-// (audit §2.1 / catalog T-202). Below the fix version we mark IPMI
-// unavailable rather than feed BMC output to a vulnerable parser.
+// CVE-2020-5208 (GHSA-g659-9qxw-p7cp): heap overflows in ipmitool's FRU, SDR,
+// session, channel and lanp parsers when handling data received FROM a BMC.
+// Fixed upstream in ipmitool 1.8.19. The agent runs ipmitool in-band as root via
+// the sudo wrapper, so exploitation would be root RCE on the host.
+//
+// 2026-07-29: THIS IS NOW AN ADVISORY, NOT A BLOCKER, by default. Reasoning, kept
+// here because it is a deliberate loosening of a security control and must stay
+// reviewable:
+//
+//  1. It fires on SUSPICION, never on evidence, which contradicts the principle
+//     stated on isIpmitoolVersionVulnerable() below. `ipmitool -V` reports a BARE
+//     upstream version: Ubuntu 22.04 ships 1.8.18-11ubuntu2.2 and reports
+//     "1.8.18". The distro release suffix, which is where a backported fix lives,
+//     is not visible to the agent at all. RHEL changelogs cite rhbz ids rather
+//     than CVE numbers, so even a changelog grep cannot confirm patch state
+//     there. So we cannot distinguish patched from unpatched.
+//  2. On the distros where it fires, the package is normally ALREADY PATCHED.
+//     Verified 2026-07-29 on the fleet: Ubuntu 20.04 and 22.04 both carry all six
+//     upstream CVE-2020-5208 patches (one via focal-security), and neither offers
+//     any 1.8.19+ package to upgrade to. So the gate removed all BMC monitoring
+//     while protecting against nothing.
+//  3. The threat requires a COMPROMISED BMC on that same host, since access is
+//     in-band (KCS/SSIF) with no network MITM path. An attacker holding the BMC
+//     already has power control, virtual media, KVM and often DMA, i.e. they can
+//     own the host without this bug. The marginal gain is stealth, not capability.
+//  4. Cost side: stock Ubuntu 20.04/22.04 and RHEL-family 9 all pin 1.8.18, so
+//     the default behaviour silently disabled fan, PSU, SEL and IPMI-ECC
+//     monitoring on the majority of real fleets. For a hardware-monitoring
+//     product that is a worse failure than the risk it averted.
+//
+// So the default is now: collect, and report the version plus a below-floor flag
+// so the Dashboard can advise. Operators who genuinely model BMC compromise can
+// restore fail-closed with `collection.enforce_ipmitool_min_version: true`.
 export const MIN_SAFE_IPMITOOL_VERSION = "1.8.19";
 
 /**
@@ -60,6 +101,12 @@ interface DetectDeps {
    *  device-node probe is meaningless; the wrapper (which runs as root) is
    *  the real reachability test. */
   probeSensor?: () => Promise<string | null>;
+  /** Restore the pre-2026-07-29 fail-closed behaviour: refuse to collect IPMI at
+   *  all when `ipmitool -V` reads below MIN_SAFE_IPMITOOL_VERSION. Off by
+   *  default because the check cannot see distro backports and therefore fires on
+   *  suspicion rather than evidence; sourced from
+   *  `collection.enforce_ipmitool_min_version`. */
+  enforceMinVersion?: boolean;
 }
 
 async function defaultRunIpmitool(args: string[]): Promise<{ stdout: string; stderr: string }> {
@@ -73,6 +120,7 @@ async function defaultRunIpmitool(args: string[]): Promise<{ stdout: string; std
 export async function detectIpmiCapability(deps: DetectDeps = {}): Promise<IpmiCapability> {
   const runIpmitool = deps.runIpmitool ?? defaultRunIpmitool;
   const probeSensor = deps.probeSensor ?? (() => runPrivileged("ipmi-sensor"));
+  const enforceMinVersion = deps.enforceMinVersion ?? false;
 
   // Step 1: probe the ipmitool binary + version. `ipmitool -V` needs no BMC
   // access, so it works even as the unprivileged service user.
@@ -92,16 +140,15 @@ export async function detectIpmiCapability(deps: DetectDeps = {}): Promise<IpmiC
     };
   }
 
-  // Step 2: version gate (CVE-2020-5208): refuse to feed BMC output to a
-  // vulnerable ipmitool parser. Fail-closed for the IPMI capability only;
-  // every other collector is unaffected. Skipped when the version could
-  // not be parsed (we do not disable a capability we cannot positively
-  // identify as vulnerable).
-  if (isIpmitoolVersionVulnerable(ipmitoolVersion)) {
+  // Step 2: version check (CVE-2020-5208). ADVISORY BY DEFAULT since 2026-07-29;
+  // see the block comment on MIN_SAFE_IPMITOOL_VERSION for why blocking here was
+  // net-negative. Operators who model BMC compromise opt back into fail-closed.
+  const belowFloor = isIpmitoolVersionVulnerable(ipmitoolVersion);
+  if (belowFloor && enforceMinVersion) {
     return {
       available: false,
       reason: "ipmitool_cve_2020_5208",
-      detail: `ipmitool ${ipmitoolVersion} < ${MIN_SAFE_IPMITOOL_VERSION}; upgrade to close CVE-2020-5208`,
+      detail: `ipmitool ${ipmitoolVersion} < ${MIN_SAFE_IPMITOOL_VERSION}; enforcement is on (collection.enforce_ipmitool_min_version)`,
     };
   }
 
@@ -110,7 +157,13 @@ export async function detectIpmiCapability(deps: DetectDeps = {}): Promise<IpmiC
   try {
     const out = await probeSensor();
     if (out && out.trim().length > 0) {
-      return { available: true, method: "ipmitool_in_band", ipmitool_version: ipmitoolVersion };
+      return {
+        available: true,
+        method: "ipmitool_in_band",
+        ipmitool_version: ipmitoolVersion,
+        // Only set when true, so snapshots from unaffected hosts are unchanged.
+        ...(belowFloor ? { ipmitool_below_cve_floor: true } : {}),
+      };
     }
     return { available: false, reason: "no_bmc_device" };
   } catch (err: any) {
@@ -125,7 +178,12 @@ export async function detectIpmiCapability(deps: DetectDeps = {}): Promise<IpmiC
 export function formatCapabilityLine(cap: IpmiCapability): string {
   if (cap.available) {
     const v = cap.ipmitool_version ? `ipmitool ${cap.ipmitool_version}, ` : "";
-    return `IPMI: available (${v}${cap.method.replace(/_/g, " ")})`;
+    // The advisory is appended rather than replacing the line: monitoring IS
+    // working, and the operator should not read this as a failure.
+    const advisory = cap.ipmitool_below_cve_floor
+      ? `; note ipmitool reads < ${MIN_SAFE_IPMITOOL_VERSION} (CVE-2020-5208), which many distros patch without bumping the version`
+      : "";
+    return `IPMI: available (${v}${cap.method.replace(/_/g, " ")})${advisory}`;
   }
   switch (cap.reason) {
     case "no_ipmitool_binary": return "IPMI: not available (ipmitool not installed)";

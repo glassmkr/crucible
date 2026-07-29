@@ -65,6 +65,12 @@ const ConfigSchema = z.object({
   collection: z.object({
     interval_seconds: z.number().min(60).max(3600).default(300),
     ipmi: z.boolean().default(true),
+    // Restores the pre-2026-07-29 fail-closed behaviour: refuse to collect IPMI
+    // when `ipmitool -V` reads below 1.8.19 (CVE-2020-5208). Off by default
+    // because that check cannot see distro backports, so it fires on suspicion
+    // rather than evidence and silently disabled BMC monitoring on stock Ubuntu
+    // 20.04/22.04 and RHEL-family 9. Turn it on if you model BMC compromise.
+    enforce_ipmitool_min_version: z.boolean().default(false),
     smart: z.boolean().default(true),
     thermal: z.boolean().default(true),
     dmi: z.boolean().default(true),

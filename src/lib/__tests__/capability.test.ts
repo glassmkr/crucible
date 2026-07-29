@@ -47,16 +47,58 @@ describe("detectIpmiCapability", () => {
     expect(cap).toEqual({ available: true, method: "ipmitool_in_band", ipmitool_version: "1.8.19" });
   });
 
-  it("disables IPMI when ipmitool is below 1.8.19 even if the BMC answers (CVE-2020-5208)", async () => {
+  // REVERSED 2026-07-29. Blocking here was net-negative: `ipmitool -V` reports a
+  // bare upstream version (Ubuntu 22.04 ships 1.8.18-11ubuntu2.2 and reports
+  // "1.8.18"), so the check cannot see the distro backport that actually fixes the
+  // CVE, and it therefore fired on suspicion rather than evidence. On the distros
+  // where it fired the package was normally already patched, so it removed all fan,
+  // PSU, SEL and IPMI-ECC monitoring while protecting against nothing. Full
+  // reasoning in the block comment on MIN_SAFE_IPMITOOL_VERSION.
+  it("COLLECTS by default when ipmitool reads below 1.8.19, flagging it as advisory", async () => {
     const cap = await detectIpmiCapability({
       runIpmitool: async () => ({ stdout: "ipmitool version 1.8.18\n", stderr: "" }),
       probeSensor: async () => "CPU Temp | 39.000 | degrees C | ok",
+    });
+    expect(cap.available).toBe(true);
+    if (cap.available) {
+      expect(cap.ipmitool_version).toBe("1.8.18");
+      expect(cap.ipmitool_below_cve_floor).toBe(true);
+    }
+  });
+
+  it("does not set the advisory flag at or above the floor, so healthy snapshots are unchanged", async () => {
+    const cap = await detectIpmiCapability({
+      runIpmitool: async () => ({ stdout: "ipmitool version 1.8.19\n", stderr: "" }),
+      probeSensor: async () => "CPU Temp | 39.000 | degrees C | ok",
+    });
+    expect(cap.available).toBe(true);
+    if (cap.available) expect(cap.ipmitool_below_cve_floor).toBeUndefined();
+  });
+
+  it("still fails closed when an operator opts in via enforceMinVersion", async () => {
+    // The escape hatch for anyone who genuinely models BMC compromise. Removing a
+    // security control with no way to restore it would not be acceptable.
+    const cap = await detectIpmiCapability({
+      runIpmitool: async () => ({ stdout: "ipmitool version 1.8.18\n", stderr: "" }),
+      probeSensor: async () => "CPU Temp | 39.000 | degrees C | ok",
+      enforceMinVersion: true,
     });
     expect(cap.available).toBe(false);
     if (!cap.available) {
       expect(cap.reason).toBe("ipmitool_cve_2020_5208");
       expect(cap.detail).toContain("1.8.18");
+      // Names the setting, so the operator knows this was their choice.
+      expect(cap.detail).toContain("enforce_ipmitool_min_version");
     }
+  });
+
+  it("enforcement does not fire at or above the floor", async () => {
+    const cap = await detectIpmiCapability({
+      runIpmitool: async () => ({ stdout: "ipmitool version 1.8.19\n", stderr: "" }),
+      probeSensor: async () => "CPU Temp | 39.000 | degrees C | ok",
+      enforceMinVersion: true,
+    });
+    expect(cap.available).toBe(true);
   });
 
   it("no_bmc_device when the wrapped sensor probe returns nothing (no BMC / VM)", async () => {
