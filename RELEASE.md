@@ -85,7 +85,9 @@ Single source of truth for cutting a Crucible release. Lives here (the release-t
 
     `apps/site/src/lib/server/version.ts` needs **no** edit: it imports `FALLBACK_CRUCIBLE_VERSION` from `$lib/crucible-version` and re-exports it as `FALLBACK_LATEST`, so it derives its value from the first constant above. Do not hardcode a version there.
 
-11. **[dashboard] Customer-facing changelog surface**: add a dated section + sidebar link to `apps/site/src/routes/docs/changelog/+page.svelte`, and move the "Current." marker to the new version. Add a `sitemap.xml` entry only if a new URL is introduced (changelog edits reuse the existing `/docs/changelog` URL). US English, no em-dashes (the `scripts/lint-no-emdash.mjs` CI guard scans `apps/site/src`).
+    **This is now CI-enforced** (glassmkr #595, `pnpm lint:fallback-version`): the dashboard repo fails the build if the three literals disagree, or if that re-export file grows a hardcoded literal. So a half-done bump is caught by the glassmkr PR rather than shipping silently. The gate deliberately checks the literals against EACH OTHER and not against npm, because a fallback legitimately trails the CHANGELOG while a release is mid-flight.
+
+11. **[dashboard] Customer-facing changelog surface**: add a dated section + sidebar link to `apps/site/src/routes/docs/changelog/+page.svelte`, and move the "Current." marker to the new version. Add a `sitemap.xml` entry only if a new URL is introduced (changelog edits reuse the existing `/docs/changelog` URL). US English, no em-dashes (the `scripts/lint-no-emdash.mjs` CI guard scans `apps/site/src`, `apps/dashboard/src/lib/server/alerts`, and `apps/site/scripts`).
 
 ## Checklist (copy into the release PR / issue)
 
