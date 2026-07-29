@@ -9,6 +9,23 @@ out under `### Breaking` so downstream consumers can audit.
 
 ## [Unreleased]
 
+## [0.14.8] - 2026-07-29
+
+A single-fix release for kernel update detection on RPM-based hosts. No new
+collectors or alert rules, and no configuration changes.
+
+### Fixed
+
+- "Reboot required for kernel update" no longer stays silent while a genuine
+  kernel update is pending on a host that has more than one kernel family
+  installed. Oracle Linux booted on UEK is the case that matters in practice:
+  a retained RHEL-compatible `kernel-core` package could be read as the
+  installed kernel and compared against the running UEK release, so the
+  pending UEK update went unreported. The check now recognizes Oracle's
+  `kernel-uek` and compares only within the kernel family the host is actually
+  booted into. Hosts running a stock RHEL, Rocky, Alma, or Fedora kernel are
+  unaffected, as are Debian and Ubuntu hosts.
+
 ## [0.14.7] - 2026-07-25
 
 A follow-up to the 0.14.6 hardening batch: a clearer failure on unsupported
