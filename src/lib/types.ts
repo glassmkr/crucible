@@ -904,8 +904,24 @@ export interface DmiInfo {
 export type PsuRedundancyState = "fully_redundant" | "redundancy_lost" | "redundancy_degraded" | "unknown";
 
 export type IpmiCapability =
-  | { available: true; method: "ipmitool_in_band"; ipmitool_version: string | null }
-  | { available: false; reason: "no_ipmitool_binary" | "no_bmc_device" | "execution_failed" | "permission_denied" | "ipmitool_cve_2020_5208"; detail?: string };
+  | {
+      available: true;
+      method: "ipmitool_in_band";
+      ipmitool_version: string | null;
+      /** Advisory only (default since 2026-07-29): the version reads below the
+       *  CVE-2020-5208 floor but we collected anyway, because many distros
+       *  backport the fix without bumping the upstream version. Means "worth
+       *  checking", NOT "vulnerable". See lib/capability.ts for the full
+       *  reasoning. */
+      ipmitool_below_cve_floor?: boolean;
+    }
+  | {
+      available: false;
+      /** `ipmitool_cve_2020_5208` is only produced when an operator sets
+       *  `collection.enforce_ipmitool_min_version: true`. */
+      reason: "no_ipmitool_binary" | "no_bmc_device" | "execution_failed" | "permission_denied" | "ipmitool_cve_2020_5208";
+      detail?: string;
+    };
 
 export interface IpmiInfo {
   available: boolean;

@@ -229,7 +229,9 @@ let ipmiCheckCounter = 0;
 async function refreshIpmiCapability(): Promise<void> {
   if (!config.collection.ipmi) return;
   try {
-    const next = await detectIpmiCapability();
+    const next = await detectIpmiCapability({
+      enforceMinVersion: config.collection.enforce_ipmitool_min_version,
+    });
     const prevAvailable = ipmiCapability?.available;
     ipmiCapability = next;
     if (prevAvailable === undefined) {
