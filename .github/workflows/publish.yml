@@ -1,3 +1,8 @@
+# Release mechanics. If you change how this workflow publishes, what it tags, or
+# how it creates the GitHub Release, update RELEASE.md in the SAME PR (steps 6 to
+# 8 describe this file). That runbook has no test and no CI, so review is the only
+# thing that catches drift: #57 added the auto-created Release here and RELEASE.md
+# went on calling it a manual step for 16 days across 11 releases.
 name: Publish to npm
 
 on:

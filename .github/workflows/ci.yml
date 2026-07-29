@@ -1,3 +1,8 @@
+# If you change what runs on a PR here, update RELEASE.md in the SAME PR (step 6
+# tells a release which PR-level checks to poll for actual PASS). That runbook has
+# no test and no CI, so review is the only thing that catches drift: this workflow
+# arrived in #88 and RELEASE.md went on claiming the repo had no PR-level CI for
+# 8 days across 3 releases.
 name: CI
 
 on:
