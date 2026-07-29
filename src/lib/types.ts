@@ -917,8 +917,32 @@ export interface IpmiInfo {
   bmc_vendor?: BmcVendor;
   /** One-shot startup detection result; helps Dashboard surface "IPMI not
    *  available on this host" with a precise reason. Not present on
-   *  pre-detection snapshots (older agent versions). */
+   *  pre-detection snapshots (older agent versions).
+   *
+   *  NOTE this is computed ONCE at agent start. It cannot report a BMC that
+   *  dies later, which is what `bmc_device_node` + `probe` below are for. Do
+   *  not build a runtime-state rule on this field alone. */
   detection?: IpmiCapability;
+  /** Path of the IPMI character device the kernel created (`/dev/ipmi0` and
+   *  friends), or null when none is present.
+   *
+   *  Re-checked EVERY snapshot, unlike `detection`. A non-null value means this
+   *  host genuinely has a BMC, independent of whether ipmitool exists, is
+   *  patched, or can currently reach it. Null means UNDETERMINED, not "no BMC":
+   *  `ipmi_devintf` may simply not be loaded.
+   *
+   *  Exists so the Dashboard can finally separate "no BMC, correctly silent"
+   *  from "BMC present and not answering". Optional: absent on agents older
+   *  than this field. */
+  bmc_device_node?: string | null;
+  /** Outcome of THIS snapshot's IPMI collection, as opposed to the one-shot
+   *  startup `detection`.
+   *
+   *  `skipped` means the cached startup capability said unavailable so no
+   *  ipmitool process was spawned. `failed` means we did try and got nothing
+   *  back, which combined with a non-null `bmc_device_node` is the real
+   *  "BMC unreachable" signal. Optional for the same back-compat reason. */
+  probe?: { status: "ok" | "failed" | "skipped"; detail?: string };
   sensors: Array<{
     name: string;
     value: number | string;

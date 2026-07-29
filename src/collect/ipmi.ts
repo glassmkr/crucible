@@ -32,6 +32,7 @@ function parserQualityFor(bmcVendor: BmcVendor): "fleet-tested" | "stub" | "unkn
 }
 import { isPsuRedundancySensor, classifyPsuRedundancyState } from "../lib/vendor-sensors.js";
 import { filterRedundantCpuDtsSensors } from "../lib/ipmi-sensor-filter.js";
+import { findBmcDeviceNode } from "../lib/bmc-presence.js";
 
 /**
  * Collect IPMI snapshot.
@@ -44,6 +45,12 @@ import { filterRedundantCpuDtsSensors } from "../lib/ipmi-sensor-filter.js";
  *                    and back-compat).
  */
 export async function collectIpmi(vendor: Vendor = "generic", capability?: IpmiCapability): Promise<IpmiInfo> {
+  // Re-checked every snapshot, unlike `capability` which is a one-shot startup
+  // result. This is what lets the Dashboard tell "no BMC on this host" apart
+  // from "BMC present and not answering"; the capability reasons cannot express
+  // that distinction (see lib/bmc-presence.ts for the full reasoning).
+  const bmcDeviceNode = findBmcDeviceNode();
+
   if (capability && !capability.available) {
     // No probe possible — distinguish "we couldn't ask" from "BMC said
     // zero". Dashboard schema accepts both shapes; dashboard renders null
@@ -56,11 +63,19 @@ export async function collectIpmi(vendor: Vendor = "generic", capability?: IpmiC
       sel_events_recent: [],
       fans: [],
       detection: capability,
+      bmc_device_node: bmcDeviceNode,
+      probe: { status: "skipped", detail: `startup capability: ${capability.reason}` },
     };
   }
 
   const sensorRaw = await runPrivileged("ipmi-sensor");
   if (!sensorRaw) {
+    // The startup capability said IPMI was usable and this probe still came back
+    // empty, so something changed since boot: a BMC that stopped answering, a
+    // removed sudo wrapper, or a timeout. Before `probe` existed this returned
+    // available:false while `detection` still said available:true, so the
+    // Dashboard had no way to see it and the host read healthy on every
+    // IPMI-derived rule. That was finding #2 of the 2026-07-29 review.
     return {
       available: false, sensors: [],
       ecc_errors: null,
@@ -68,6 +83,8 @@ export async function collectIpmi(vendor: Vendor = "generic", capability?: IpmiC
       sel_events_recent: [],
       fans: [],
       detection: capability,
+      bmc_device_node: bmcDeviceNode,
+      probe: { status: "failed", detail: "wrapped ipmi-sensor probe returned no output" },
     };
   }
 
@@ -163,6 +180,8 @@ export async function collectIpmi(vendor: Vendor = "generic", capability?: IpmiC
     sel_events_recent: selEvents,
     fans,
     detection: capability,
+    bmc_device_node: bmcDeviceNode,
+    probe: { status: "ok" },
   };
 }
 
