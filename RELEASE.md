@@ -51,12 +51,31 @@ Single source of truth for cutting a Crucible release. Lives here (the release-t
    ```
    Only create it by hand (`gh release create vX.Y.Z --title "vX.Y.Z" --notes "<customer-facing notes>"`) if the workflow's Release step failed.
 
-9. **Fleet / customer roll.** The fix only takes effect once a host runs the new version. Roll per host **sequentially** (verify each before the next), do not parallelize across shared hosts:
+9. **Fleet / customer roll.** The fix only takes effect once a host runs the new version. Roll per host **sequentially** (verify each before the next), do not parallelize across shared hosts.
+
+   **9a. Check the host's Node version BEFORE installing.** `package.json` declares `engines: node >= 24` and that floor is enforced at runtime: since 0.14.7 `src/preflight.ts` exits with a clear message on an older Node, and 0.14.6 (no preflight yet) died at import inside `undici` and then crash-looped forever on the unit's `Restart=always`. Either way the host silently stops reporting and the dashboard shows only `server_unreachable`. Upgrade Node first, never after:
+   ```
+   node -v                        # must be >= v24
+   ```
+
+   **9b. Install, repair config, restart:**
    ```
    sudo npm install -g @glassmkr/crucible@X.Y.Z
-   sudo glassmkr-crucible init
+   sudo glassmkr-crucible init    # keyless, idempotent config repair (root:glassmkr 0640)
    sudo systemctl restart glassmkr-crucible
-   systemctl is-active glassmkr-crucible && npm ls -g @glassmkr/crucible | grep crucible
+   ```
+
+   **9c. Verify ON THE BOX. Do not trust the command having been issued** (a roll that was believed done but never applied left a host blind for 23 hours):
+   ```
+   systemctl is-active glassmkr-crucible    # want "active"; "activating" + auto-restart = crash-looping
+   node -e "console.log(require(require('child_process').execSync('npm root -g').toString().trim()+'/@glassmkr/crucible/package.json').version)"
+   ```
+   Then confirm the dashboard side: the server record's `collector_version` shows X.Y.Z and `last_seen` is advancing.
+
+   **9d. Wrapper refresh**, required on any host that ran `glassmkr-crucible init` (the agent runs unprivileged behind a sudo wrapper) whenever the release ADDS a privileged action. Skip it and the new collector silently returns null:
+   ```
+   sudo node -e "const cp=require('child_process');const p=require(cp.execSync('npm root -g').toString().trim()+'/@glassmkr/crucible/dist/lib/privileged.js');require('fs').writeFileSync(p.WRAPPER_PATH,p.WRAPPER_SCRIPT,{mode:0o755})"
+   grep -c <new-action-name> /usr/local/sbin/crucible-collect    # expect >= 1
    ```
 
 10. **[dashboard] Bump ALL THREE version-fallback constants in lockstep** (only after npm publish is live; they must always point at a real, published release). This is the step most easily missed, the dashboard one was 7 minor releases stale (0.6.6) before the 0.13.6 release caught it:
@@ -78,6 +97,8 @@ Single source of truth for cutting a Crucible release. Lives here (the release-t
 - [ ] tag created on the squash-merged `main` commit and pushed
 - [ ] `npm view @glassmkr/crucible version` shows the new version
 - [ ] GitHub Release verified with `gh release view vX.Y.Z` (auto-created by publish.yml)
-- [ ] fleet/customers rolled (or roll scheduled)
+- [ ] target hosts confirmed on Node >= 24 BEFORE any install
+- [ ] fleet/customers rolled (or roll scheduled), each verified on the box
+- [ ] wrapper refreshed on wrapper hosts (only if the release added a privileged action)
 - [ ] [dashboard] all three fallback constants bumped in lockstep
 - [ ] [dashboard] /docs/changelog entry + "Current." marker moved
