@@ -9,6 +9,44 @@ out under `### Breaking` so downstream consumers can audit.
 
 ## [Unreleased]
 
+## [0.14.9] - 2026-07-30
+
+Restores BMC monitoring on hosts where it had been switched off, and makes an
+unreachable BMC visible for the first time. No new alert rules and no breaking
+changes; one new optional configuration key.
+
+### Changed
+
+- **IPMI monitoring is no longer disabled because of the `ipmitool` version.**
+  Previously, if the installed `ipmitool` reported a version below 1.8.19, the
+  agent refused to use it at all because of CVE-2020-5208, which meant no fan,
+  power-supply, System Event Log or IPMI-derived memory-error monitoring on that
+  host. That check could not tell a genuinely unpatched build from a patched one:
+  `ipmitool -V` reports only the upstream version number, while Debian, Ubuntu
+  and Red Hat all ship the security fix inside a 1.8.18 package without changing
+  that number. Stock Ubuntu 20.04 and 22.04 and RHEL-family 9 are all in that
+  position, so hardware monitoring was being turned off on hosts that were never
+  exposed, and no upgrade was available to satisfy the check.
+
+  The agent now collects normally and reports the situation instead, so you can
+  judge it: the snapshot carries `ipmi.detection.ipmitool_below_cve_floor` when
+  the version reads below 1.8.19. If you would rather keep the previous
+  fail-closed behavior, set `collection.enforce_ipmitool_min_version: true` in
+  `/etc/glassmkr/crucible.yaml`.
+
+### Added
+
+- **An unreachable BMC can now be detected.** Each snapshot reports
+  `ipmi.bmc_device_node`, the `/dev/ipmi*` device the kernel created (or null),
+  and `ipmi.probe`, the outcome of that snapshot's own collection. Together these
+  distinguish a host that has no BMC, where silence is correct, from a host whose
+  BMC has stopped answering, which previously looked identical. The earlier
+  capability field is a one-shot check performed at agent start, so a BMC that
+  failed later could not be reported at all.
+
+- New optional configuration key `collection.enforce_ipmitool_min_version`
+  (default `false`), described above.
+
 ## [0.14.8] - 2026-07-29
 
 A single-fix release for kernel update detection on RPM-based hosts. No new
