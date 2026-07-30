@@ -9,6 +9,36 @@ out under `### Breaking` so downstream consumers can audit.
 
 ## [Unreleased]
 
+### Security
+
+- **An `ipmitool` whose version cannot be parsed is no longer treated as safe.** The
+  check that decides whether to run `ipmitool` as root classified an unrecognisable
+  version string, such as a vendor build reporting `vendor-build`, as "not known to be
+  vulnerable" and skipped both the package-origin check and the strict
+  `enforce_ipmitool_min_version` setting. An unidentifiable build could therefore run
+  with root privileges. Unrecognisable now takes the same path as too-old: it runs only
+  if a distribution package owns the binary.
+- **The version is now read from the binary that actually runs as root.** The version
+  check resolved `ipmitool` through the agent's own `PATH`, while privileged execution
+  resolves it through sudo's separate, fixed path. On a host where those disagree, the
+  check could approve one file while a different, older one ran as root.
+- **A `dpkg` diversion no longer counts as package ownership.** `dpkg-query` can print
+  diagnostic lines before its answer, and those were misread as a package name, so a
+  diverted binary, which is precisely how an unpatched file gets placed at a packaged
+  location, was reported as distribution-owned. Ownership is now matched to the exact
+  path, and any diversion affecting it disqualifies the binary.
+
+### Fixed
+
+- Prerelease and malformed Node version strings (`22.19.0-rc.1`, `v24junk`) were read
+  as satisfying the minimum supported version. They are now rejected, since a
+  prerelease precedes its final release and may lack the API the agent needs.
+- `glassmkr-crucible doctor ipmi` now accepts `--config <path>`. Without it the
+  diagnostic always read the default configuration, so on a host started with a custom
+  path it could report IPMI as working while the service was correctly refusing.
+- The em-dash build guard now also catches escaped forms (`\u2014`, `&mdash;`), which
+  produce the character at runtime while leaving the source file ASCII.
+
 ## [0.14.12] - 2026-07-30
 
 ### Changed

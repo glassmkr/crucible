@@ -15,7 +15,7 @@ if (cliArgs.mode === "version" || cliArgs.mode === "help") {
 }
 if (cliArgs.mode === "doctor-ipmi") {
   const { runDoctorIpmi } = await import("./doctor.js");
-  console.log(await runDoctorIpmi());
+  console.log(await runDoctorIpmi(cliArgs.configPath));
   process.exit(0);
 }
 if (cliArgs.mode === "init") {

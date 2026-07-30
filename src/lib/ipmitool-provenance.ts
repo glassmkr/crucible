@@ -99,6 +99,28 @@ export function resolveIpmitoolPath(deps: ProvenanceDeps = {}): string | null {
 }
 
 /**
+ * Owning package from `dpkg-query -S` output, or null.
+ *
+ * Requires a line of the form `<packages>: <path>` whose path matches EXACTLY, so a
+ * diagnostic line or an answer about a different file cannot be mistaken for the
+ * package name. `<packages>` may be a comma-separated list when several packages
+ * ship the path; the first is enough to establish distro origin. Exported for tests.
+ */
+export function parseDpkgOwner(stdout: string, path: string): string | null {
+  for (const line of stdout.split("\n")) {
+    const idx = line.lastIndexOf(": ");
+    if (idx <= 0) continue;
+    const left = line.slice(0, idx).trim();
+    const right = line.slice(idx + 2).trim();
+    if (right !== path) continue;
+    const pkg = left.split(",")[0]?.trim();
+    if (!pkg || /\s/.test(pkg)) continue; // a real package name has no whitespace
+    return pkg;
+  }
+  return null;
+}
+
+/**
  * Attribute the root-executed ipmitool to a distro package.
  *
  * FAILS CLOSED BY DESIGN: every unknown (no binary found, no package manager
@@ -119,11 +141,34 @@ export async function attributeIpmitool(deps: ProvenanceDeps = {}): Promise<Ipmi
     };
   }
 
-  // Debian family. `dpkg-query -S` resolves a path to its owning package and
-  // exits non-zero when nothing owns it; the second call adds the EVR.
+  // Debian family. `dpkg-query -S` resolves a path to its owning package and exits
+  // non-zero when nothing owns it; the second call adds the EVR.
+  //
+  // PARSE IT PROPERLY, and treat a DIVERSION as disqualifying. `dpkg-query -S` can
+  // prefix its answer with diagnostics such as
+  //   local diversion from: /usr/bin/ipmitool
+  //   local diversion to: /usr/bin/ipmitool.distrib
+  // and a naive `stdout.split(":")[0]` read "local diversion from" as the package
+  // name and reported attributed:true. That is not a cosmetic parse bug: a dpkg
+  // diversion is exactly how an unpatched binary gets placed AT the packaged path
+  // while the real packaged file is moved aside, so the naive parse handed the root
+  // wrapper the one file it was built to refuse. Adversarial review 2026-07-30,
+  // finding #3.
+  //
+  // So: if any diversion line mentions this path, we cannot trust path -> package
+  // and report UNATTRIBUTED. Otherwise we require a line whose right-hand side is
+  // EXACTLY the queried path, and take its left-hand side as the owning package.
   try {
     const { stdout } = await run("dpkg-query", ["-S", path]);
-    const pkg = stdout.split(":")[0]?.trim();
+    if (/^\s*(local diversion|diversion by)\b/im.test(stdout)) {
+      return {
+        path,
+        attributed: false,
+        package: null,
+        detail: `${path} is subject to a dpkg diversion, so the packaged file has been moved aside and the file at this path cannot be attributed to it`,
+      };
+    }
+    const pkg = parseDpkgOwner(stdout, path);
     if (pkg) {
       let evr = "";
       try {

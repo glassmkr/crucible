@@ -202,3 +202,23 @@ describe("enroll endpoint policy parsing", () => {
     ]);
   });
 });
+
+describe("doctor ipmi --config (adversarial review 2026-07-30, finding #8)", () => {
+  it("threads an explicit --config through instead of discarding it", () => {
+    // Returning "" made doctor always read the DEFAULT path, so on a host started
+    // with --config it could report IPMI available while the service was correctly
+    // refusing to collect. That is precisely the disagreement doctor exists to catch.
+    const { result } = parseCliArgs(["doctor", "ipmi", "--config", "/etc/acme/crucible.yaml"], "0.0.0");
+    expect(result.mode).toBe("doctor-ipmi");
+    expect(result.configPath).toBe("/etc/acme/crucible.yaml");
+  });
+
+  it("accepts --config=<path> and -c", () => {
+    expect(parseCliArgs(["doctor", "ipmi", "--config=/tmp/a.yaml"], "0.0.0").result.configPath).toBe("/tmp/a.yaml");
+    expect(parseCliArgs(["doctor", "ipmi", "-c", "/tmp/b.yaml"], "0.0.0").result.configPath).toBe("/tmp/b.yaml");
+  });
+
+  it("leaves configPath empty when none is given, so the default plus legacy fallback applies", () => {
+    expect(parseCliArgs(["doctor", "ipmi"], "0.0.0").result.configPath).toBe("");
+  });
+});

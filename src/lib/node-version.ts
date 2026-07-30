@@ -47,7 +47,16 @@ export const MIN_NODE_VERSION = "22.19.0";
  * can fail closed.
  */
 export function parseNodeVersion(version: string): [number, number, number] | null {
-  const match = /^v?(\d+)(?:\.(\d+))?(?:\.(\d+))?/.exec(version.trim());
+  // ANCHORED AT BOTH ENDS, deliberately. Unanchored, this silently discarded any
+  // suffix, so "22.19.0-rc.1", "22.19.0-nightly20260730", "22.19.0garbage" and
+  // "v24junk" all parsed as satisfying the floor. A prerelease PRECEDES its release
+  // in semver and may not carry the undici API at all, which would put us back at
+  // the original import-time crash-loop that this guard exists to prevent, and a
+  // string like "v24junk" is not a version we should be interpreting at any level.
+  // Rejecting means failing closed, which is the right direction here: server hosts
+  // run distro or NodeSource builds, never nightlies, so the practical cost is
+  // approximately zero. Adversarial review 2026-07-30, finding #7.
+  const match = /^v?(\d+)(?:\.(\d+))?(?:\.(\d+))?$/.exec(version.trim());
   if (!match) return null;
   const parts = [match[1], match[2], match[3]].map((p) => (p === undefined ? 0 : Number(p)));
   if (parts.some((n) => !Number.isInteger(n))) return null;
