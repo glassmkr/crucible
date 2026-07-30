@@ -17,7 +17,10 @@ describe("isIpmitoolVersionVulnerable (CVE-2020-5208, fixed in 1.8.19)", () => {
     expect(isIpmitoolVersionVulnerable("1.9.0")).toBe(false);
     expect(isIpmitoolVersionVulnerable("2.0.0")).toBe(false);
   });
-  it("does not gate an unknown/unparseable version (fail-open on identification)", () => {
+  // NB this wrapper collapses "unknown" to false BY DESIGN; the gate itself does not
+  // fail open on unknown any more, see classifyIpmitoolVersion and the finding-#1
+  // tests below. Do not read this case as "an unparseable version is waved through".
+  it("reports false for an unknown/unparseable version (the wrapper's narrow contract)", () => {
     expect(isIpmitoolVersionVulnerable(null)).toBe(false);
     expect(isIpmitoolVersionVulnerable("")).toBe(false);
     expect(isIpmitoolVersionVulnerable("unknown")).toBe(false);
@@ -31,7 +34,7 @@ describe("isIpmitoolVersionVulnerable (CVE-2020-5208, fixed in 1.8.19)", () => {
 describe("detectIpmiCapability", () => {
   it("returns no_ipmitool_binary when neither device nor binary exist (Pi)", async () => {
     const cap = await detectIpmiCapability({
-      runIpmitool: async () => { const e: any = new Error("not found"); e.code = "ENOENT"; throw e; },
+      runIpmitool: async (_bin: string) => { const e: any = new Error("not found"); e.code = "ENOENT"; throw e; },
       probeSensor: async () => null,
     });
     expect(cap).toEqual({ available: false, reason: "no_ipmitool_binary" });
@@ -41,7 +44,7 @@ describe("detectIpmiCapability", () => {
     // §2.1: availability comes from the wrapper (runs as root), not a direct
     // /dev/ipmi0 stat the unprivileged service user can't do.
     const cap = await detectIpmiCapability({
-      runIpmitool: async () => ({ stdout: "ipmitool version 1.8.19\n", stderr: "" }),
+      runIpmitool: async (_bin: string) => ({ stdout: "ipmitool version 1.8.19\n", stderr: "" }),
       probeSensor: async () => "CPU Temp | 39.000 | degrees C | ok",
     });
     expect(cap).toEqual({ available: true, method: "ipmitool_in_band", ipmitool_version: "1.8.19" });
@@ -60,7 +63,7 @@ describe("detectIpmiCapability", () => {
   // database, which would make these tests depend on the machine running them.
   it("COLLECTS when a below-floor ipmitool is owned by a distro package", async () => {
     const cap = await detectIpmiCapability({
-      runIpmitool: async () => ({ stdout: "ipmitool version 1.8.18\n", stderr: "" }),
+      runIpmitool: async (_bin: string) => ({ stdout: "ipmitool version 1.8.18\n", stderr: "" }),
       probeSensor: async () => "CPU Temp | 39.000 | degrees C | ok",
       attributeProvenance: async () => ({
         path: "/usr/bin/ipmitool",
@@ -83,7 +86,7 @@ describe("detectIpmiCapability", () => {
     // a source or vendor build is genuinely unpatched, and the wrapper would exec
     // it as ROOT every snapshot. Distro backport reasoning does not cover it.
     const cap = await detectIpmiCapability({
-      runIpmitool: async () => ({ stdout: "ipmitool version 1.8.18\n", stderr: "" }),
+      runIpmitool: async (_bin: string) => ({ stdout: "ipmitool version 1.8.18\n", stderr: "" }),
       probeSensor: async () => "CPU Temp | 39.000 | degrees C | ok",
       attributeProvenance: async () => ({
         path: "/usr/local/bin/ipmitool",
@@ -108,7 +111,7 @@ describe("detectIpmiCapability", () => {
     // Hosts on 1.8.19+ must pay nothing for the gate: no package-manager execs.
     let called = false;
     const cap = await detectIpmiCapability({
-      runIpmitool: async () => ({ stdout: "ipmitool version 1.8.19\n", stderr: "" }),
+      runIpmitool: async (_bin: string) => ({ stdout: "ipmitool version 1.8.19\n", stderr: "" }),
       probeSensor: async () => "CPU Temp | 39.000 | degrees C | ok",
       attributeProvenance: async () => {
         called = true;
@@ -122,7 +125,7 @@ describe("detectIpmiCapability", () => {
   it("enforcement short-circuits BEFORE provenance, so an opt-in never depends on dpkg", async () => {
     let called = false;
     const cap = await detectIpmiCapability({
-      runIpmitool: async () => ({ stdout: "ipmitool version 1.8.18\n", stderr: "" }),
+      runIpmitool: async (_bin: string) => ({ stdout: "ipmitool version 1.8.18\n", stderr: "" }),
       probeSensor: async () => "CPU Temp | 39.000 | degrees C | ok",
       enforceMinVersion: true,
       attributeProvenance: async () => {
@@ -136,7 +139,7 @@ describe("detectIpmiCapability", () => {
 
   it("does not set the advisory flag at or above the floor, so healthy snapshots are unchanged", async () => {
     const cap = await detectIpmiCapability({
-      runIpmitool: async () => ({ stdout: "ipmitool version 1.8.19\n", stderr: "" }),
+      runIpmitool: async (_bin: string) => ({ stdout: "ipmitool version 1.8.19\n", stderr: "" }),
       probeSensor: async () => "CPU Temp | 39.000 | degrees C | ok",
     });
     expect(cap.available).toBe(true);
@@ -147,7 +150,7 @@ describe("detectIpmiCapability", () => {
     // The escape hatch for anyone who genuinely models BMC compromise. Removing a
     // security control with no way to restore it would not be acceptable.
     const cap = await detectIpmiCapability({
-      runIpmitool: async () => ({ stdout: "ipmitool version 1.8.18\n", stderr: "" }),
+      runIpmitool: async (_bin: string) => ({ stdout: "ipmitool version 1.8.18\n", stderr: "" }),
       probeSensor: async () => "CPU Temp | 39.000 | degrees C | ok",
       enforceMinVersion: true,
     });
@@ -162,7 +165,7 @@ describe("detectIpmiCapability", () => {
 
   it("enforcement does not fire at or above the floor", async () => {
     const cap = await detectIpmiCapability({
-      runIpmitool: async () => ({ stdout: "ipmitool version 1.8.19\n", stderr: "" }),
+      runIpmitool: async (_bin: string) => ({ stdout: "ipmitool version 1.8.19\n", stderr: "" }),
       probeSensor: async () => "CPU Temp | 39.000 | degrees C | ok",
       enforceMinVersion: true,
     });
@@ -171,7 +174,7 @@ describe("detectIpmiCapability", () => {
 
   it("no_bmc_device when the wrapped sensor probe returns nothing (no BMC / VM)", async () => {
     const cap = await detectIpmiCapability({
-      runIpmitool: async () => ({ stdout: "ipmitool version 1.8.19", stderr: "" }),
+      runIpmitool: async (_bin: string) => ({ stdout: "ipmitool version 1.8.19", stderr: "" }),
       probeSensor: async () => null,
     });
     expect(cap.available).toBe(false);
@@ -180,7 +183,7 @@ describe("detectIpmiCapability", () => {
 
   it("no_bmc_device on empty (whitespace-only) sensor output", async () => {
     const cap = await detectIpmiCapability({
-      runIpmitool: async () => ({ stdout: "ipmitool version 1.8.19", stderr: "" }),
+      runIpmitool: async (_bin: string) => ({ stdout: "ipmitool version 1.8.19", stderr: "" }),
       probeSensor: async () => "   \n  ",
     });
     expect(cap.available).toBe(false);
@@ -189,7 +192,7 @@ describe("detectIpmiCapability", () => {
 
   it("captures ipmitool version when present", async () => {
     const cap = await detectIpmiCapability({
-      runIpmitool: async () => ({ stdout: "ipmitool version 1.8.21-rc1\n", stderr: "" }),
+      runIpmitool: async (_bin: string) => ({ stdout: "ipmitool version 1.8.21-rc1\n", stderr: "" }),
       probeSensor: async () => "CPU Temp | 39.000 | degrees C | ok",
     });
     expect(cap.available).toBe(true);
@@ -213,5 +216,80 @@ describe("formatCapabilityLine", () => {
   it("formats permission denied", () => {
     expect(formatCapabilityLine({ available: false, reason: "permission_denied", detail: "/dev/ipmi0 not readable" }))
       .toBe("IPMI: not available (/dev/ipmi0 not readable)");
+  });
+});
+
+describe("detectIpmiCapability: adversarial review 2026-07-30 round 3", () => {
+  const attributed = async () => ({
+    path: "/usr/bin/ipmitool", attributed: true,
+    package: "ipmitool 1.8.18-11ubuntu2.2", detail: "owned",
+  });
+
+  it("FINDING #1: an unparseable version must not bypass the gate", async () => {
+    // `ipmitool version vendor-build` used to classify as at-or-above the floor, so
+    // provenance was skipped and enforcement ignored, handing an unidentifiable
+    // vendor build to the root wrapper.
+    let provenanceConsulted = false;
+    const cap = await detectIpmiCapability({
+      runIpmitool: async (_bin: string) => ({ stdout: "ipmitool version vendor-build\n", stderr: "" }),
+      probeSensor: async () => "CPU Temp | 39.000 | degrees C | ok",
+      resolveRootPath: () => "/usr/local/bin/ipmitool",
+      attributeProvenance: async () => {
+        provenanceConsulted = true;
+        return { path: "/usr/local/bin/ipmitool", attributed: false, package: null, detail: "owned by nothing" };
+      },
+    });
+    expect(provenanceConsulted).toBe(true);
+    expect(cap.available).toBe(false);
+    if (!cap.available) expect(cap.reason).toBe("ipmitool_cve_2020_5208");
+  });
+
+  it("FINDING #1: an unparseable version is REFUSED under enforcement", async () => {
+    const cap = await detectIpmiCapability({
+      runIpmitool: async (_bin: string) => ({ stdout: "ipmitool version vendor-build\n", stderr: "" }),
+      probeSensor: async () => "CPU Temp | 39.000 | degrees C | ok",
+      enforceMinVersion: true,
+      attributeProvenance: async () => { throw new Error("must not be consulted"); },
+    });
+    expect(cap.available).toBe(false);
+    if (!cap.available) expect(cap.detail).toContain("unrecognisable version");
+  });
+
+  it("FINDING #1: an unparseable version still collects when distro-owned", async () => {
+    // The cost of failing closed must not land on real fleets with odd version strings.
+    const cap = await detectIpmiCapability({
+      runIpmitool: async (_bin: string) => ({ stdout: "ipmitool version 1.8.18-csv\n", stderr: "" }),
+      probeSensor: async () => "CPU Temp | 39.000 | degrees C | ok",
+      attributeProvenance: attributed,
+    });
+    expect(cap.available).toBe(true);
+  });
+
+  it("FINDING #2: probes the version on the binary sudo would run, not $PATH", async () => {
+    // The exact scenario: 1.8.19 first on the service PATH, unowned 1.8.18 first on
+    // sudo's secure_path. Judging the wrong file passed the gate.
+    const seen: string[] = [];
+    const cap = await detectIpmiCapability({
+      resolveRootPath: () => "/usr/local/bin/ipmitool",
+      runIpmitool: async (bin: string) => {
+        seen.push(bin);
+        return { stdout: bin === "/usr/local/bin/ipmitool" ? "ipmitool version 1.8.18\n" : "ipmitool version 1.8.19\n", stderr: "" };
+      },
+      probeSensor: async () => "CPU Temp | 39.000 | degrees C | ok",
+      attributeProvenance: async () => ({ path: "/usr/local/bin/ipmitool", attributed: false, package: null, detail: "owned by nothing" }),
+    });
+    expect(seen).toEqual(["/usr/local/bin/ipmitool"]);
+    expect(cap.available).toBe(false);
+  });
+
+  it("FINDING #2: falls back to bare ipmitool only when secure_path has no match", async () => {
+    // Root-direct installs (no sudo wrapper) resolve through the agent's own PATH.
+    const seen: string[] = [];
+    await detectIpmiCapability({
+      resolveRootPath: () => null,
+      runIpmitool: async (bin: string) => { seen.push(bin); return { stdout: "ipmitool version 1.8.19\n", stderr: "" }; },
+      probeSensor: async () => "CPU Temp | 39.000 | degrees C | ok",
+    });
+    expect(seen).toEqual(["ipmitool"]);
   });
 });

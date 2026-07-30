@@ -20,8 +20,20 @@ import { join } from "node:path";
 
 const ROOT = "src";
 const BANNED = [
-  { ch: "—", name: "em-dash" },
-  { ch: "–", name: "en-dash" },
+  { ch: "\u2014", name: "em-dash" },
+  { ch: "\u2013", name: "en-dash" },
+];
+
+// Also catch the ESCAPED forms, which produce the banned character at runtime while
+// the source file contains only ASCII. A literal-character scan passes
+// `const s = "\u2014"` and the customer still sees an em-dash. Adversarial review
+// 2026-07-30, finding #10. Covers JS/TS unicode escapes in both notations plus the
+// HTML entities, since these strings reach both a terminal and a web page.
+const BANNED_ESCAPES = [
+  { re: /\\u2014|\\u\{2014\}/i, name: "escaped em-dash (\\u2014)" },
+  { re: /\\u2013|\\u\{2013\}/i, name: "escaped en-dash (\\u2013)" },
+  { re: /&mdash;|&#8212;|&#x2014;/i, name: "HTML em-dash entity" },
+  { re: /&ndash;|&#8211;|&#x2013;/i, name: "HTML en-dash entity" },
 ];
 
 function walk(dir) {
@@ -42,6 +54,11 @@ for (const file of walk(ROOT)) {
   lines.forEach((line, i) => {
     for (const { ch, name } of BANNED) {
       if (line.includes(ch)) findings.push({ file, line: i + 1, name, text: line.trim().slice(0, 100) });
+    }
+    for (const { re, name } of BANNED_ESCAPES) {
+      // Skip this file's own pattern table, which necessarily contains them.
+      if (file.endsWith("lint-no-emdash.mjs")) break;
+      if (re.test(line)) findings.push({ file, line: i + 1, name, text: line.trim().slice(0, 100) });
     }
   });
 }

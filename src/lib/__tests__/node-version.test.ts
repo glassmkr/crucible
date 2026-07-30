@@ -81,3 +81,27 @@ describe("oldNodeMessage", () => {
     expect(msg).not.toContain("\n");
   });
 });
+
+describe("parseNodeVersion: trailing garbage and prereleases (review 2026-07-30 #7)", () => {
+  it("REJECTS prereleases, which precede their release and may lack the undici API", () => {
+    // Unanchored, these all parsed as [22,19,0] and satisfied the floor, which could
+    // put us back at the import-time crash-loop the guard exists to prevent.
+    for (const v of ["22.19.0-rc.1", "22.19.0-nightly20260730", "24.0.0-pre"]) {
+      expect(parseNodeVersion(v)).toBeNull();
+      expect(nodeMeetsMinimum(v)).toBe(false);
+    }
+  });
+
+  it("REJECTS trailing garbage rather than silently truncating it", () => {
+    for (const v of ["22.19.0garbage", "v24junk", "22.19.0 extra"]) {
+      expect(parseNodeVersion(v)).toBeNull();
+      expect(nodeMeetsMinimum(v)).toBe(false);
+    }
+  });
+
+  it("still accepts every real process.versions.node shape", () => {
+    for (const v of ["22.19.0", "22.22.2", "24.18.0", "v25.9.0", "24", "22.19"]) {
+      expect(parseNodeVersion(v)).not.toBeNull();
+    }
+  });
+});

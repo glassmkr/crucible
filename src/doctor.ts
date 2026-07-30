@@ -135,9 +135,16 @@ export function formatIpmiDoctor(cap: Awaited<ReturnType<typeof detectIpmiCapabi
  */
 export function readEnforceFlag(
   load: typeof loadConfig = loadConfig,
+  configPath?: string,
 ): { enforce: boolean; note: string | null } {
   try {
-    const cfg = load(resolveConfigPathWithLegacyFallback(DEFAULT_CONFIG_PATH));
+    // An explicit --config wins; only the default path gets the legacy fallback,
+    // since that fallback exists to find /etc/glassmkr/collector.yaml and would be
+    // wrong to apply to an operator's chosen path.
+    const resolved = configPath && configPath.length > 0
+      ? configPath
+      : resolveConfigPathWithLegacyFallback(DEFAULT_CONFIG_PATH);
+    const cfg = load(resolved);
     return { enforce: cfg.collection.enforce_ipmitool_min_version, note: null };
   } catch (err: any) {
     const why = err?.code === "EACCES" || err?.code === "EPERM"
@@ -148,8 +155,8 @@ export function readEnforceFlag(
 }
 
 /** Run the doctor subcommand. Returns the formatted report. */
-export async function runDoctorIpmi(): Promise<string> {
-  const { enforce, note } = readEnforceFlag();
+export async function runDoctorIpmi(configPath?: string): Promise<string> {
+  const { enforce, note } = readEnforceFlag(loadConfig, configPath);
   const cap = await detectIpmiCapability({ enforceMinVersion: enforce });
   const report = formatIpmiDoctor(cap);
   return note ? `${report}\n\nNote: ${note}.` : report;

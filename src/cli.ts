@@ -128,7 +128,19 @@ export function parseCliArgs(argv: string[], version: string): { result: CliArgs
       return { result: { mode: "help", configPath: "" }, output: doctorHelp(version) };
     }
     if (argv[1] === "ipmi") {
-      return { result: { mode: "doctor-ipmi", configPath: "" }, output: null };
+      // Honour --config. `doctor ipmi` reads collection.enforce_ipmitool_min_version
+      // so it reports what the RUNNING agent does, and the agent may have been
+      // started with a non-default config path. Returning "" made doctor always read
+      // the default path, so on a host using --config it could report IPMI available
+      // while the service was correctly refusing to collect. That is the exact
+      // disagreement doctor exists to prevent. Adversarial review 2026-07-30 #8.
+      let doctorConfig = "";
+      for (let i = 2; i < argv.length; i++) {
+        if ((argv[i] === "--config" || argv[i] === "-c") && argv[i + 1]) { doctorConfig = argv[i + 1]; break; }
+        const eq = /^--config=(.+)$/.exec(argv[i] ?? "");
+        if (eq) { doctorConfig = eq[1]; break; }
+      }
+      return { result: { mode: "doctor-ipmi", configPath: doctorConfig }, output: null };
     }
     return {
       result: { mode: "help", configPath: "" },
@@ -353,6 +365,11 @@ function doctorHelp(version: string): string {
     "",
     "Usage:",
     "  glassmkr-crucible doctor ipmi    Diagnose IPMI capability + show fixes",
+    "",
+    "Options:",
+    "  --config <path>   Read this config instead of the default. Pass the same",
+    "                    path the service uses, so the diagnostic reflects the",
+    "                    settings the running agent actually applies.",
     "",
     "Each topic runs the same probes the agent uses internally and prints",
     "structured output plus actionable per-failure-mode guidance. The",

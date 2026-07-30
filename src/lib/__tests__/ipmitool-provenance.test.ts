@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import {
   resolveIpmitoolPath,
   attributeIpmitool,
+  parseDpkgOwner,
   SECURE_PATH_DIRS,
 } from "../ipmitool-provenance.js";
 
@@ -136,5 +137,44 @@ describe("attributeIpmitool", () => {
       },
     });
     expect(p.attributed).toBe(false);
+  });
+});
+
+describe("dpkg output parsing (adversarial review 2026-07-30, finding #3)", () => {
+  it("does NOT attribute when a dpkg DIVERSION applies to the path", async () => {
+    // A diversion is how an unpatched binary is placed AT the packaged path while the
+    // real packaged file is moved aside, so this is the attack the gate exists to stop.
+    // The naive parse read "local diversion from" as the package name.
+    const p = await attributeIpmitool({
+      exists: (x) => x === "/usr/bin/ipmitool",
+      run: async (cmd, args) => {
+        if (cmd === "dpkg-query" && args[0] === "-S") {
+          return { stdout: "local diversion from: /usr/bin/ipmitool\nlocal diversion to: /usr/bin/ipmitool.distrib\n" };
+        }
+        throw new Error("unexpected");
+      },
+    });
+    expect(p.attributed).toBe(false);
+    expect(p.package).toBeNull();
+    expect(p.detail).toMatch(/diversion/i);
+  });
+
+  it("still attributes correctly when a diversion line concerns ANOTHER package", async () => {
+    // dpkg emits diversion diagnostics about other files too; those must not
+    // disqualify an otherwise clean ownership answer for our path.
+    expect(parseDpkgOwner("diversion by other-pkg from: /usr/bin/somethingelse\nipmitool: /usr/bin/ipmitool\n", "/usr/bin/ipmitool"))
+      .toBe("ipmitool");
+  });
+
+  it("rejects a diagnostic line as a package name", () => {
+    expect(parseDpkgOwner("local diversion from: /usr/bin/ipmitool\n", "/usr/bin/ipmitool")).toBeNull();
+  });
+
+  it("ignores an ownership answer about a DIFFERENT path", () => {
+    expect(parseDpkgOwner("otherpkg: /usr/bin/other\n", "/usr/bin/ipmitool")).toBeNull();
+  });
+
+  it("takes the first package when several ship the same path", () => {
+    expect(parseDpkgOwner("pkg-a, pkg-b: /usr/bin/ipmitool\n", "/usr/bin/ipmitool")).toBe("pkg-a");
   });
 });

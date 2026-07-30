@@ -13,7 +13,7 @@ import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { runPrivileged } from "./privileged.js";
 import { buildSubprocessEnv } from "./exec.js";
-import { attributeIpmitool, type IpmitoolProvenance } from "./ipmitool-provenance.js";
+import { attributeIpmitool, resolveIpmitoolPath, type IpmitoolProvenance } from "./ipmitool-provenance.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -22,11 +22,12 @@ export type IpmiCapability =
       available: true;
       method: "ipmitool_in_band";
       ipmitool_version: string | null;
-      /** True when the version reads below MIN_SAFE_IPMITOOL_VERSION but we
-       *  collected anyway. Since 2026-07-30 this is only ever set when the binary
-       *  was POSITIVELY attributed to a distro package, so it means "your distro
-       *  almost certainly backported the fix without bumping the version", NOT
-       *  "vulnerable". Unattributable below-floor builds now fail closed. */
+      /** True when we could not PROVE the binary is at or above
+       *  MIN_SAFE_IPMITOOL_VERSION, either because it reads below the floor or
+       *  because its version string was unparseable, and we collected anyway. Only
+       *  ever set when the binary was POSITIVELY attributed to a distro package, so
+       *  it means "your distro almost certainly backported the fix without bumping
+       *  the version", NOT "vulnerable". Unattributable builds fail closed. */
       ipmitool_below_cve_floor?: boolean;
       /** The distro package owning the root-executed binary, including the EVR
        *  (`ipmitool 1.8.18-11ubuntu2.2`). Only set alongside
@@ -96,28 +97,48 @@ export const MIN_SAFE_IPMITOOL_VERSION = "1.8.19";
 
 /**
  * True iff `version` is a parseable ipmitool version strictly below
- * MIN_SAFE_IPMITOOL_VERSION. Unknown/unparseable versions return false
- * (we do not disable a capability we cannot positively identify as
- * vulnerable). Pure; unit-tested.
+ * MIN_SAFE_IPMITOOL_VERSION. Kept as a thin wrapper for readability at call
+ * sites that only care about the below-floor case; callers deciding whether to
+ * hand the binary to root must use classifyIpmitoolVersion() instead, because
+ * this collapses "unknown" into false. Pure; unit-tested.
  */
 export function isIpmitoolVersionVulnerable(version: string | null): boolean {
-  if (!version) return false;
+  return classifyIpmitoolVersion(version) === "below_floor";
+}
+
+/**
+ * Three-way, because "we could not tell" is NOT the same as "safe".
+ *
+ * The old two-way version returned false for an unparseable version, on the
+ * principle that we should not disable a capability we cannot positively identify
+ * as vulnerable. That was defensible while the gate was version-only, but once
+ * provenance existed it became a hole: `ipmitool version vendor-build` parsed as
+ * unknown, was treated as at-or-above the floor, and so skipped provenance AND
+ * `enforce_ipmitool_min_version` entirely, handing an unidentifiable vendor build
+ * to the root wrapper. Adversarial review 2026-07-30, finding #1.
+ *
+ * `unknown` now routes to exactly the same place as `below_floor`: prove distro
+ * origin or do not run as root. A distro-packaged build with a strange version
+ * string therefore still collects, which keeps the cost off real fleets.
+ */
+export function classifyIpmitoolVersion(version: string | null): "below_floor" | "at_or_above" | "unknown" {
+  if (!version) return "unknown";
   const min = [1, 8, 19];
   const parts = version.split(/[.\-+]/).map((p) => parseInt(p, 10));
-  if (parts.length === 0 || Number.isNaN(parts[0])) return false; // unparseable
+  if (parts.length === 0 || Number.isNaN(parts[0])) return "unknown";
   for (let i = 0; i < min.length; i++) {
     const p = Number.isNaN(parts[i]) ? 0 : (parts[i] ?? 0);
-    if (p < min[i]) return true;
-    if (p > min[i]) return false;
+    if (p < min[i]) return "below_floor";
+    if (p > min[i]) return "at_or_above";
   }
-  return false; // equal or greater
+  return "at_or_above"; // exactly equal
 }
 
 interface DetectDeps {
   /** Override for tests. Runs `ipmitool -V` (direct; works unprivileged).
    *  Returns stdout or throws with err.code. Used only for the version /
    *  CVE gate. */
-  runIpmitool?: (args: string[]) => Promise<{ stdout: string; stderr: string }>;
+  runIpmitool?: (bin: string, args: string[]) => Promise<{ stdout: string; stderr: string }>;
   /** Override for tests. The WRAPPED sensor probe (`sudo crucible-collect
    *  ipmi-sensor`). Returns stdout, or null on any failure. This is the
    *  availability signal: under the §2.1 unprivileged model the agent user
@@ -134,10 +155,12 @@ interface DetectDeps {
   /** Override for tests. Distro-package attribution of the root-executed
    *  ipmitool; consulted ONLY when the version reads below the CVE floor. */
   attributeProvenance?: () => Promise<IpmitoolProvenance>;
+  /** Override for tests. Resolves the binary sudo's secure_path would run as root. */
+  resolveRootPath?: () => string | null;
 }
 
-async function defaultRunIpmitool(args: string[]): Promise<{ stdout: string; stderr: string }> {
-  const { stdout, stderr } = await execFileAsync("ipmitool", args, {
+async function defaultRunIpmitool(bin: string, args: string[]): Promise<{ stdout: string; stderr: string }> {
+  const { stdout, stderr } = await execFileAsync(bin, args, {
     timeout: 2000,
     env: buildSubprocessEnv(),
   });
@@ -149,12 +172,27 @@ export async function detectIpmiCapability(deps: DetectDeps = {}): Promise<IpmiC
   const probeSensor = deps.probeSensor ?? (() => runPrivileged("ipmi-sensor"));
   const enforceMinVersion = deps.enforceMinVersion ?? false;
   const attributeProvenance = deps.attributeProvenance ?? (() => attributeIpmitool());
+  const resolveRootPath = deps.resolveRootPath ?? (() => resolveIpmitoolPath());
+
+  // WHICH binary are we judging? It must be the one that runs AS ROOT, or the gate
+  // inspects one file and the wrapper executes another. The wrapper does
+  // `exec ipmitool` under sudo, so sudo's secure_path decides, and /usr/local/bin
+  // precedes /usr/bin there. Probing bare "ipmitool" instead used the AGENT's
+  // ambient PATH: with 1.8.19 first on the service PATH and an unowned 1.8.18 first
+  // on sudo's, the version check passed, provenance was skipped, and the unpatched
+  // one ran as root. Adversarial review 2026-07-30, finding #2.
+  //
+  // Falling back to bare "ipmitool" is deliberate and only for hosts with no match
+  // in the secure_path list, which in practice means the root-direct installs (no
+  // sudo wrapper) where the agent's own PATH IS the resolution root will use.
+  const rootPath = resolveRootPath();
+  const probeTarget = rootPath ?? "ipmitool";
 
   // Step 1: probe the ipmitool binary + version. `ipmitool -V` needs no BMC
   // access, so it works even as the unprivileged service user.
   let ipmitoolVersion: string | null = null;
   try {
-    const { stdout } = await runIpmitool(["-V"]);
+    const { stdout } = await runIpmitool(probeTarget, ["-V"]);
     const m = stdout.match(/ipmitool version (\S+)/);
     ipmitoolVersion = m ? m[1] : null;
   } catch (err: any) {
@@ -172,14 +210,18 @@ export async function detectIpmiCapability(deps: DetectDeps = {}): Promise<IpmiC
   // fail-closed for everything else; see the block comment on
   // MIN_SAFE_IPMITOOL_VERSION. Attribution is only queried when the version
   // already reads below the floor, so hosts on 1.8.19+ pay nothing for it.
-  const belowFloor = isIpmitoolVersionVulnerable(ipmitoolVersion);
+  const versionClass = classifyIpmitoolVersion(ipmitoolVersion);
+  const unproven = versionClass !== "at_or_above"; // below the floor OR unparseable
   let provenance: IpmitoolProvenance | null = null;
-  if (belowFloor) {
+  if (unproven) {
+    const versionPhrase = versionClass === "below_floor"
+      ? `ipmitool ${ipmitoolVersion} < ${MIN_SAFE_IPMITOOL_VERSION}`
+      : `ipmitool reported an unrecognisable version (${ipmitoolVersion ?? "no version output"}), so it cannot be shown to be at or above ${MIN_SAFE_IPMITOOL_VERSION}`;
     if (enforceMinVersion) {
       return {
         available: false,
         reason: "ipmitool_cve_2020_5208",
-        detail: `ipmitool ${ipmitoolVersion} < ${MIN_SAFE_IPMITOOL_VERSION}; enforcement is on (collection.enforce_ipmitool_min_version)`,
+        detail: `${versionPhrase}; enforcement is on (collection.enforce_ipmitool_min_version)`,
       };
     }
     provenance = await attributeProvenance();
@@ -187,7 +229,7 @@ export async function detectIpmiCapability(deps: DetectDeps = {}): Promise<IpmiC
       return {
         available: false,
         reason: "ipmitool_cve_2020_5208",
-        detail: `ipmitool ${ipmitoolVersion} < ${MIN_SAFE_IPMITOOL_VERSION} and ${provenance.detail}; refusing to run it as root`,
+        detail: `${versionPhrase} and ${provenance.detail}; refusing to run it as root`,
       };
     }
   }
@@ -202,8 +244,8 @@ export async function detectIpmiCapability(deps: DetectDeps = {}): Promise<IpmiC
         method: "ipmitool_in_band",
         ipmitool_version: ipmitoolVersion,
         // Only set when true, so snapshots from unaffected hosts are unchanged.
-        ...(belowFloor ? { ipmitool_below_cve_floor: true } : {}),
-        ...(belowFloor && provenance?.package ? { ipmitool_package: provenance.package } : {}),
+        ...(unproven ? { ipmitool_below_cve_floor: true } : {}),
+        ...(unproven && provenance?.package ? { ipmitool_package: provenance.package } : {}),
       };
     }
     return { available: false, reason: "no_bmc_device" };
