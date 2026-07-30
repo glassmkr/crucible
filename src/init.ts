@@ -157,7 +157,26 @@ export function buildSystemdUnit(binPath: string, configPath: string, user = SER
     // NoNewPrivileges (see systemd.exec) are deliberately omitted. systemd forces
     // NoNewPrivileges=yes for them, and NoNewPrivileges=no cannot override
     // that implication. Classic sudo needs its setuid transition here.
-    `ProtectHome=yes`,
+    // read-only, NOT yes. `ProtectHome=yes` makes /home, /root and /run/user appear
+    // EMPTY inside the service namespace, and GNU df omits filesystems it cannot
+    // reach, so a real filesystem mounted anywhere under /home produced no DiskInfo
+    // at all: no capacity alert, no inode alert, no read-only alert, silently. For a
+    // disk-monitoring product that is a product failure, not a hardening win.
+    // Adversarial review 2026-07-30, finding #5.
+    //
+    // `read-only` keeps the part that matters, the service still cannot WRITE there
+    // (verified: `touch /home/<fs>/x` -> "Read-only file system"), while letting it
+    // see that the filesystem exists and how full it is. Measured on a real host with
+    // a loopback filesystem under /home: df inside the sandbox counted 0 of it under
+    // `yes` and 1 under `read-only`.
+    //
+    // Exposure this adds, stated plainly: the service can now READ file contents under
+    // /home and /root. No collector does: nothing in src/collect reads either path, so
+    // this grants visibility we do not use, and it is the smallest change that stops
+    // silently dropping a monitored filesystem. If that trade is ever unwanted, the
+    // alternative is reporting such mounts as present-but-unmeasured, which needs an
+    // agent-plus-dashboard contract change.
+    `ProtectHome=read-only`,
     `PrivateTmp=yes`,
     `ProtectControlGroups=yes`,
     `ProtectSystem=strict`,

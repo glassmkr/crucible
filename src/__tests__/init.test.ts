@@ -175,7 +175,11 @@ describe("buildSystemdUnit", () => {
     expect(u).toContain("User=glassmkr");
     // Lock this against systemd's NNP implication trap. These directives
     // break the setuid sudo wrapper even if NoNewPrivileges=no is explicit.
-    expect(u).toContain("ProtectHome=yes");
+    // read-only, not yes: `yes` hides /home entirely, so GNU df omitted any real
+    // filesystem mounted there and every disk alert silently missed it (adversarial
+    // review 2026-07-30 #5). read-only still blocks writes.
+    expect(u).toContain("ProtectHome=read-only");
+    expect(u).not.toContain("ProtectHome=yes");
     expect(u).toContain("PrivateTmp=yes");
     expect(u).toContain("ProtectControlGroups=yes");
     expect(u).toContain("ProtectSystem=strict");
