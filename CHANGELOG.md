@@ -37,6 +37,14 @@ out under `### Breaking` so downstream consumers can audit.
 
 ### Fixed
 
+- **A throttled push no longer looks like a failure.** The dashboard accepts one
+  snapshot per server per 55 seconds, and the agent pushes immediately when it
+  starts, so the first push after a restart often arrives inside the window left by
+  the previous one and is correctly rejected with HTTP 429. The agent logged that
+  at error level as "Push failed", which is indistinguishable from a real problem;
+  it now says plainly that the push was throttled, that this is expected after a
+  restart, and that the next cycle will land. Nothing about the throttling itself
+  changed, and no data is lost: the next snapshot carries current state.
 - One customer-visible string contained an em-dash, against our own house style:
   the placeholder summary reported for Adaptec RAID controllers, which travels in
   the snapshot to the dashboard. Cleaned up, along with the same character in
