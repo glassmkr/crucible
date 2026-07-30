@@ -314,7 +314,7 @@ Dashboard evaluates 65 alert rules server-side across 9 categories (storage, zfs
 ## Requirements
 
 - Linux (any distribution: Ubuntu, Debian, RHEL, Rocky, Alma, Arch, Alpine)
-- Node.js 24+
+- Node.js 22.19.0 or newer (Node 22 LTS is supported; the floor is undici 8's own engines.node)
 - Root access for installation of the narrow privileged wrapper; the daemon runs as `glassmkr`
 - Optional: `smartmontools` for SMART data, `ipmitool` for IPMI data, `zfsutils-linux` for ZFS pools
 
