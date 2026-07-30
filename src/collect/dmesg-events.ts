@@ -14,7 +14,7 @@
 // AER format varies across kernel versions (5.x vs 6.x has distinct
 // shapes); XFS error patterns vary by mount option set. Adding both
 // would double the test surface without delivering proportional
-// operational value — accept-rate signal from the three included
+// operational value: accept-rate signal from the three included
 // classes is high. Future Crucible release picks them up if customer
 // signal warrants.
 //

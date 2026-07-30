@@ -11,7 +11,7 @@ describe("isPsuSensor", () => {
   it("matches PS<N> with space or underscore separator across vendors (glassmkr#29)", () => {
     // Fleet data: Supermicro H12SST uses "PS1 Status", Dell iDRAC uses
     // "PS1 Status", Gigabyte MC12-LE0/MZ62-HD0/R292-4S1 use "PS1_Status".
-    // The pre-fix regex was Dell-gated which was wrong — all three
+    // The pre-fix regex was Dell-gated which was wrong; all three
     // vendor families use this shape on real BMCs.
     expect(isPsuSensor("PS1 Status", "dell")).toBe(true);
     expect(isPsuSensor("PS1 Status", "supermicro")).toBe(true);

@@ -2,7 +2,7 @@
 // diagnostic that reports the same capability probes the agent runs at
 // startup, plus actionable per-failure-mode guidance. Output is plain
 // text; pipe-friendly. Exit code 0 on success regardless of probe
-// result — the diagnostic itself succeeded, even when the probes say
+// result: the diagnostic itself succeeded, even when the probes say
 // "no BMC here".
 //
 // Currently covers `doctor ipmi`. Future sub-areas (`doctor security`,
@@ -95,7 +95,7 @@ export function formatIpmiDoctor(cap: Awaited<ReturnType<typeof detectIpmiCapabi
       out.push("    too old for this BMC's IPMI 2.0 dialect");
       out.push("");
       out.push("DO NOT run `sudo ipmitool mc reset cold` without confirming first");
-      out.push("with your vendor — some BMCs can hang past the reset.");
+      out.push("with your vendor; some BMCs can hang past the reset.");
       break;
     case "ipmitool_cve_2020_5208":
       out.push("Crucible will not run this ipmitool as root. It reports a version");

@@ -120,7 +120,7 @@ export function parseCliArgs(argv: string[], version: string): { result: CliArgs
     return { result: { mode: "enroll", configPath: "", enroll: flags }, output: null };
   }
 
-  // Subcommand dispatch: `doctor <topic>` — read-only diagnostic.
+  // Subcommand dispatch: `doctor <topic>`: read-only diagnostic.
   // Currently only `doctor ipmi` is implemented; placeholder for future
   // topics (security, network) without changing the CLI shape.
   if (argv[0] === "doctor") {

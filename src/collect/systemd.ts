@@ -37,7 +37,7 @@ export interface SystemdFailedUnit {
   /** SubState (more granular than ActiveState; e.g. "auto-restart"). */
   sub_state: string;
   /** NRestarts from systemctl show; cumulative since last successful
-   *  start. Crude flapping signal — service_flapping rule's primary
+   *  start. Crude flapping signal; service_flapping rule's primary
    *  history source remains cross-snapshot, but this is the per-snap
    *  number a single emission carries. */
   n_restarts: number;
@@ -121,7 +121,7 @@ export async function collectSystemd(extraExcludes: string[] = []): Promise<Syst
   // For each failed unit, collect the last N journal lines + structured
   // properties (C12). Per-unit failure is tolerated (an unreadable
   // journal or a missing property doesn't drop the entire snapshot)
-  // — we surface an empty journal array or `unknown` result for the
+  // we surface an empty journal array or `unknown` result for the
   // affected unit so the receiver knows we tried.
   const journal_excerpts: Record<string, string[]> = {};
   const failed_unit_details: Record<string, SystemdFailedUnit> = {};

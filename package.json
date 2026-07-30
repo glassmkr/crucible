@@ -30,7 +30,8 @@
     "start": "node dist/index.js",
     "test": "vitest run",
     "test:hardened-wrapper": "bash scripts/smoke-hardened-wrapper.sh",
-    "clean": "rm -rf dist"
+    "clean": "rm -rf dist",
+    "lint:emdash": "node scripts/lint-no-emdash.mjs"
   },
   "keywords": [
     "monitoring",

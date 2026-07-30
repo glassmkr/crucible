@@ -28,7 +28,7 @@ import type { Vendor } from "./types.js";
  * filter, so the per-PSU rule path never even reached them.
  * glassmkr#29 component.
  *
- * `PS Redundancy` (aggregate sensor) is excluded — see
+ * `PS Redundancy` (aggregate sensor) is excluded; see
  * `isPsuRedundancySensor`.
  */
 export function isPsuSensor(name: string, _vendor: Vendor): boolean {
@@ -84,13 +84,13 @@ export function classifyPsuRedundancyState(valueOrStatus: string): "fully_redund
  *   bit 7 (0x80): Power Supply Inactive (standby; not delivering power)
  *
  * `mask` is the discrete-state assertion mask Crucible reads from the 4th
- * column of `ipmitool sensor` for discrete sensors — which bits this BMC's
+ * column of `ipmitool sensor` for discrete sensors: which bits this BMC's
  * firmware can assert. When the mask doesn't include the Presence bit, a
  * Reading of 0x0 is ambiguous (PSU healthy with no events, OR PSU absent).
  * In that case we under-report (return `ok`) rather than over-report.
  * glassmkr#29.
  *
- * `vendor` is currently advisory — bit meanings are IPMI-standard across
+ * `vendor` is currently advisory: bit meanings are IPMI-standard across
  * the bare-metal vendors we've observed on the validation fleet
  * (Supermicro, Gigabyte, ASRockRack); the BMC-to-BMC variation is in the
  * mask, not the bit semantics. Kept as a parameter for future per-vendor

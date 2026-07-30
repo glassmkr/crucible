@@ -318,7 +318,7 @@ async function collectZypper(distro: CveDistro): Promise<CveSnapshot> {
  * Format (columns: Repository | Name | Category | Severity | Status):
  *   SLES15-SP6-Updates | SUSE-SLE-...-1234 | security | critical | needed
  *
- * We restrict to security patches whose name contains "kernel" — best
+ * We restrict to security patches whose name contains "kernel"; best
  * effort; zypper doesn't surface a "package" column the same way dnf
  * does, so the kernel match is on the patch name itself.
  */

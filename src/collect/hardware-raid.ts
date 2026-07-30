@@ -11,7 +11,7 @@
 // For each installed CLI, queries the controller state and returns
 // a normalized HardwareRaidController. The vendor-specific output
 // formats vary considerably; this module's parsers are intentionally
-// conservative — they extract a state string ("Optimal", "Degraded",
+// conservative; they extract a state string ("Optimal", "Degraded",
 // etc.) plus an optional degraded_disks counter when the vendor output
 // makes it easy to find. The dashboard's raid_degraded evaluator pages
 // on any state != "Optimal"; that's the contract.
@@ -33,7 +33,7 @@ import { runPrivileged } from "../lib/privileged.js";
 import type { HardwareRaidSnapshot, HardwareRaidController } from "../lib/types.js";
 
 async function scrapePerccli(): Promise<HardwareRaidController[]> {
-  // perccli /c0 show all J — JSON output for controller 0.
+  // perccli /c0 show all J: JSON output for controller 0.
   // Multi-controller hosts are rare; query c0 only and let follow-ups
   // expand if a customer surfaces multi-controller hardware.
   const raw = await runPrivileged("raid-perccli", [], 10000);
@@ -73,7 +73,7 @@ async function scrapeStorcli(): Promise<HardwareRaidController[]> {
 }
 
 async function scrapeSsacli(): Promise<HardwareRaidController[]> {
-  // ssacli ctrl all show — text format. Conservative: extract one
+  // ssacli ctrl all show: text format. Conservative: extract one
   // line per "in slot X" entry; status reported on a "Controller Status"
   // line. Real parsing lands when an HPE customer surfaces.
   const raw = await runPrivileged("raid-ssacli", [], 10000);
@@ -120,7 +120,7 @@ async function scrapeArcconf(): Promise<HardwareRaidController[]> {
         controller_id: m[1],
         state: "Unknown",
         degraded_disks: null,
-        raw_summary: "arcconf parsing pending — surface a customer with Adaptec hardware",
+        raw_summary: "arcconf parsing pending; surface a customer with Adaptec hardware",
       });
     }
   }

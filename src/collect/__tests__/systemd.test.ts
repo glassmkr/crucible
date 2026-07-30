@@ -2,7 +2,7 @@
 //   - The happy path: no failed units, no journalctl calls
 //   - Failed units are listed
 //   - journal_excerpts is populated per failed unit (Codex
-//     experiment 2026-05-12 P2 — closes the seam between "service
+//     experiment 2026-05-12 P2: closes the seam between "service
 //     failed" and "what went wrong" without forcing the customer
 //     to SSH to the box)
 

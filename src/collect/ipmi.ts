@@ -73,7 +73,7 @@ export async function collectIpmi(vendor: Vendor = "generic", capability?: IpmiC
     bmcDeviceNode !== null;
 
   if (capability && !capability.available && !contradictsDeviceNode) {
-    // No probe possible — distinguish "we couldn't ask" from "BMC said
+    // No probe possible: distinguish "we couldn't ask" from "BMC said
     // zero". Dashboard schema accepts both shapes; dashboard renders null
     // as "no signal" not "0 errors observed". glassmkr#29.
     return {
@@ -174,7 +174,7 @@ export async function collectIpmi(vendor: Vendor = "generic", capability?: IpmiC
   const selEvents = selEventsRaw.map((e) => ({ ...e, parser_quality: selParserQuality }));
 
   // ECC errors from SEL events (Dell iDRAC reports memory ECC only via SEL).
-  // Counts ALL events since last SEL clear, not just the recent window —
+  // Counts ALL events since last SEL clear, not just the recent window;
   // re-parse the full SEL elist for accurate cumulative counts.
   const selEccCounts = await collectSelEccCounts();
 

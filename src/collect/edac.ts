@@ -17,7 +17,7 @@
 // back to its IPMI-SEL path.
 //
 // On hosts where EDAC is loaded but counters stay at zero, this
-// collector emits zero counters — that's the correct baseline.
+// collector emits zero counters; that's the correct baseline.
 
 import { join } from "node:path";
 import { readDirSafe, readFileInt, readFileTrim } from "../lib/parse.js";

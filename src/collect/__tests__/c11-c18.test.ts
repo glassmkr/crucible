@@ -433,7 +433,7 @@ describe("C18 dmesg: parseDmesgOutput by event class", () => {
 
 describe("C11-C18 combined capability gates", () => {
   it("none of the new collectors throw on non-Linux dev hosts", () => {
-    // softnet is sync; others are async — async failures already
+    // softnet is sync; others are async; async failures already
     // tolerated via try/catch in index.ts; we just verify the sync one.
     expect(() => collectSoftnet()).not.toThrow();
   });

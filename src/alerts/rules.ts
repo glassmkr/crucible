@@ -53,7 +53,7 @@ export interface AlertRule {
  * Stable, ordered list of every rule ID this collector ships. Exported as
  * a public API so downstream tooling (Glassmkr's drift validator, Dashboard's
  * UI registry) can verify both sides agree on what exists. When you add
- * or remove a rule, this list updates automatically — but RULES.json in
+ * or remove a rule, this list updates automatically, but RULES.json in
  * the Glassmkr monorepo is hand-maintained and must be updated separately.
  */
 export const ALL_RULE_IDS: readonly string[] = [
@@ -336,7 +336,7 @@ export const allRules: AlertRule[] = [
   //      classifier (covers Supermicro `PSU1 Status`, HPE `Power Supply 1`,
   //      Dell `PS1 Status`). If 2+ PSUs and any has failed/absent, fire.
   //   B. Aggregate redundancy state (Dell `PS Redundancy` only today): if
-  //      anything other than fully_redundant or unknown, fire — even when
+  //      anything other than fully_redundant or unknown, fire, even when
   //      individual PS sensors look OK. This catches "redundancy degraded"
   //      cases the per-PSU path would miss.
   { type: "psu_redundancy_loss", evaluate(snap) {
