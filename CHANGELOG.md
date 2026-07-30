@@ -9,6 +9,45 @@ out under `### Breaking` so downstream consumers can audit.
 
 ## [Unreleased]
 
+## [0.14.10] - 2026-07-30
+
+### Security
+
+- The CVE-2020-5208 version check now decides on where the `ipmitool` binary came
+  from, instead of on the version number alone. A build below 1.8.19 that a dpkg or
+  rpm package owns is collected from as before, because that is where distro
+  backports live; a build below 1.8.19 that **no package owns** (compiled from
+  source, a vendor tarball, a hand-installed binary) is refused, because nothing
+  backported a fix into it and Crucible runs `ipmitool` as root through its
+  privileged wrapper. 0.14.9 ran both kinds. `/usr/local/bin` precedes `/usr/bin`
+  in sudo's default `secure_path`, so a local build shadows the packaged one; the
+  refusal message names the exact path.
+- Snapshots from below-floor hosts now carry the owning package and its version
+  (`ipmitool 1.8.18-11ubuntu2.2`). That release suffix is where the backported fix
+  lives and is the one thing `ipmitool -V` does not report.
+- Unknown keys under `collection:` are now logged by name at startup. They were
+  silently discarded, so a typo such as `enforce_ipmitool_min_versions` left
+  fail-closed enforcement off while appearing to enable it. Unknown keys are still
+  ignored rather than rejected, so a stray key can never stop the agent from
+  starting.
+
+### Fixed
+
+- A BMC that was already dead when the agent started is now reported. IPMI
+  capability is detected once at startup and refreshed hourly, and collection
+  short-circuited on a cached `no_bmc_device`, so such a host reported
+  `probe: skipped` forever and the dashboard's BMC-unreadable alert could not fire
+  for the case it exists for. Worse, a BMC that died mid-run had its alert
+  auto-resolve at the next refresh while still dead. Collection now re-probes when
+  the cached reason says no BMC but a `/dev/ipmi*` node exists, which is
+  self-contradictory. Hosts genuinely without a BMC still skip the probe entirely,
+  and a host whose ipmitool was refused is never re-probed.
+- `doctor ipmi` now reads `collection.enforce_ipmitool_min_version`, so it reports
+  what the running agent actually does rather than probing with defaults, and it
+  explains the CVE reason code instead of printing it bare with no guidance. When
+  the config is unreadable, which is normal for a non-root user given it is
+  `root:glassmkr 0640`, it says so instead of silently assuming the default.
+
 ## [0.14.9] - 2026-07-30
 
 Restores BMC monitoring on hosts where it had been switched off, and makes an

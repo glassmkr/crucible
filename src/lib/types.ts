@@ -908,16 +908,20 @@ export type IpmiCapability =
       available: true;
       method: "ipmitool_in_band";
       ipmitool_version: string | null;
-      /** Advisory only (default since 2026-07-29): the version reads below the
-       *  CVE-2020-5208 floor but we collected anyway, because many distros
-       *  backport the fix without bumping the upstream version. Means "worth
-       *  checking", NOT "vulnerable". See lib/capability.ts for the full
-       *  reasoning. */
+      /** Advisory only: the version reads below the CVE-2020-5208 floor but we
+       *  collected anyway. Since 2026-07-30 this is set ONLY when the binary was
+       *  positively attributed to a distro package, whose backport policy is the
+       *  patch story. Means "worth checking", NOT "vulnerable". See
+       *  lib/capability.ts for the full reasoning. */
       ipmitool_below_cve_floor?: boolean;
+      /** Distro package owning the root-executed binary, with the EVR that
+       *  `ipmitool -V` hides. Only set alongside ipmitool_below_cve_floor. */
+      ipmitool_package?: string;
     }
   | {
       available: false;
-      /** `ipmitool_cve_2020_5208` is only produced when an operator sets
+      /** `ipmitool_cve_2020_5208` is produced when the version reads below the
+       *  floor AND no distro package owns the binary, or when an operator sets
        *  `collection.enforce_ipmitool_min_version: true`. */
       reason: "no_ipmitool_binary" | "no_bmc_device" | "execution_failed" | "permission_denied" | "ipmitool_cve_2020_5208";
       detail?: string;

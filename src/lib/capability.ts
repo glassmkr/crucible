@@ -13,6 +13,7 @@ import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { runPrivileged } from "./privileged.js";
 import { buildSubprocessEnv } from "./exec.js";
+import { attributeIpmitool, type IpmitoolProvenance } from "./ipmitool-provenance.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -22,15 +23,22 @@ export type IpmiCapability =
       method: "ipmitool_in_band";
       ipmitool_version: string | null;
       /** True when the version reads below MIN_SAFE_IPMITOOL_VERSION but we
-       *  collected anyway (the default since 2026-07-29). Purely advisory: many
-       *  distros backport the CVE fix without bumping the upstream version, so
-       *  this is "worth checking", NOT "vulnerable". See the block comment below. */
+       *  collected anyway. Since 2026-07-30 this is only ever set when the binary
+       *  was POSITIVELY attributed to a distro package, so it means "your distro
+       *  almost certainly backported the fix without bumping the version", NOT
+       *  "vulnerable". Unattributable below-floor builds now fail closed. */
       ipmitool_below_cve_floor?: boolean;
+      /** The distro package owning the root-executed binary, including the EVR
+       *  (`ipmitool 1.8.18-11ubuntu2.2`). Only set alongside
+       *  ipmitool_below_cve_floor, and it is the evidence that justifies it: this
+       *  release suffix is exactly what `ipmitool -V` hides. */
+      ipmitool_package?: string;
     }
   | {
       available: false;
-      /** `ipmitool_cve_2020_5208` is now only produced when an operator has
-       *  explicitly set `collection.enforce_ipmitool_min_version: true`. */
+      /** `ipmitool_cve_2020_5208` is produced when the version reads below the
+       *  floor AND the binary is not owned by any distro package, or when an
+       *  operator has set `collection.enforce_ipmitool_min_version: true`. */
       reason: "no_ipmitool_binary" | "no_bmc_device" | "execution_failed" | "permission_denied" | "ipmitool_cve_2020_5208";
       detail?: string;
     };
@@ -68,6 +76,22 @@ export type IpmiCapability =
 // So the default is now: collect, and report the version plus a below-floor flag
 // so the Dashboard can advise. Operators who genuinely model BMC compromise can
 // restore fail-closed with `collection.enforce_ipmitool_min_version: true`.
+//
+// 2026-07-30, NARROWED after an adversarial review argued the loosening had gone
+// one step too far. Points 1-4 above are about DISTRO-PACKAGED ipmitool, and they
+// hold. They say nothing about a source build, a vendor tarball or a hand-compiled
+// binary, and the loosened gate ran those as root too, unattended, every snapshot.
+// Point 3's "the attacker already owns the host" reasoning does NOT extend to that
+// case: holding the BMC is not the same as holding root on the running OS, so
+// executing genuinely unpatched parsers as root adds a capability rather than
+// merely removing stealth.
+//
+// So below-floor now splits on EVIDENCE OF ORIGIN (lib/ipmitool-provenance.ts):
+//   - owned by a dpkg/rpm package -> collect, advisory only. The distro's backport
+//     policy is the patch story, and this is the common real-fleet case.
+//   - owned by nothing            -> FAIL CLOSED. No backport story exists, so we
+//     refuse to hand it root.
+// `enforce_ipmitool_min_version: true` still forces closed regardless of origin.
 export const MIN_SAFE_IPMITOOL_VERSION = "1.8.19";
 
 /**
@@ -107,6 +131,9 @@ interface DetectDeps {
    *  suspicion rather than evidence; sourced from
    *  `collection.enforce_ipmitool_min_version`. */
   enforceMinVersion?: boolean;
+  /** Override for tests. Distro-package attribution of the root-executed
+   *  ipmitool; consulted ONLY when the version reads below the CVE floor. */
+  attributeProvenance?: () => Promise<IpmitoolProvenance>;
 }
 
 async function defaultRunIpmitool(args: string[]): Promise<{ stdout: string; stderr: string }> {
@@ -121,6 +148,7 @@ export async function detectIpmiCapability(deps: DetectDeps = {}): Promise<IpmiC
   const runIpmitool = deps.runIpmitool ?? defaultRunIpmitool;
   const probeSensor = deps.probeSensor ?? (() => runPrivileged("ipmi-sensor"));
   const enforceMinVersion = deps.enforceMinVersion ?? false;
+  const attributeProvenance = deps.attributeProvenance ?? (() => attributeIpmitool());
 
   // Step 1: probe the ipmitool binary + version. `ipmitool -V` needs no BMC
   // access, so it works even as the unprivileged service user.
@@ -140,16 +168,28 @@ export async function detectIpmiCapability(deps: DetectDeps = {}): Promise<IpmiC
     };
   }
 
-  // Step 2: version check (CVE-2020-5208). ADVISORY BY DEFAULT since 2026-07-29;
-  // see the block comment on MIN_SAFE_IPMITOOL_VERSION for why blocking here was
-  // net-negative. Operators who model BMC compromise opt back into fail-closed.
+  // Step 2: version check (CVE-2020-5208). Advisory for DISTRO-PACKAGED binaries,
+  // fail-closed for everything else; see the block comment on
+  // MIN_SAFE_IPMITOOL_VERSION. Attribution is only queried when the version
+  // already reads below the floor, so hosts on 1.8.19+ pay nothing for it.
   const belowFloor = isIpmitoolVersionVulnerable(ipmitoolVersion);
-  if (belowFloor && enforceMinVersion) {
-    return {
-      available: false,
-      reason: "ipmitool_cve_2020_5208",
-      detail: `ipmitool ${ipmitoolVersion} < ${MIN_SAFE_IPMITOOL_VERSION}; enforcement is on (collection.enforce_ipmitool_min_version)`,
-    };
+  let provenance: IpmitoolProvenance | null = null;
+  if (belowFloor) {
+    if (enforceMinVersion) {
+      return {
+        available: false,
+        reason: "ipmitool_cve_2020_5208",
+        detail: `ipmitool ${ipmitoolVersion} < ${MIN_SAFE_IPMITOOL_VERSION}; enforcement is on (collection.enforce_ipmitool_min_version)`,
+      };
+    }
+    provenance = await attributeProvenance();
+    if (!provenance.attributed) {
+      return {
+        available: false,
+        reason: "ipmitool_cve_2020_5208",
+        detail: `ipmitool ${ipmitoolVersion} < ${MIN_SAFE_IPMITOOL_VERSION} and ${provenance.detail}; refusing to run it as root`,
+      };
+    }
   }
 
   // Step 3: reachability via the WRAPPED sensor probe. Non-empty output means
@@ -163,6 +203,7 @@ export async function detectIpmiCapability(deps: DetectDeps = {}): Promise<IpmiC
         ipmitool_version: ipmitoolVersion,
         // Only set when true, so snapshots from unaffected hosts are unchanged.
         ...(belowFloor ? { ipmitool_below_cve_floor: true } : {}),
+        ...(belowFloor && provenance?.package ? { ipmitool_package: provenance.package } : {}),
       };
     }
     return { available: false, reason: "no_bmc_device" };
@@ -181,7 +222,7 @@ export function formatCapabilityLine(cap: IpmiCapability): string {
     // The advisory is appended rather than replacing the line: monitoring IS
     // working, and the operator should not read this as a failure.
     const advisory = cap.ipmitool_below_cve_floor
-      ? `; note ipmitool reads < ${MIN_SAFE_IPMITOOL_VERSION} (CVE-2020-5208), which many distros patch without bumping the version`
+      ? `; note ipmitool reads < ${MIN_SAFE_IPMITOOL_VERSION} (CVE-2020-5208)${cap.ipmitool_package ? `, but it is the distro package ${cap.ipmitool_package}, and distros backport this fix without bumping the upstream version` : ", which many distros patch without bumping the version"}`
       : "";
     return `IPMI: available (${v}${cap.method.replace(/_/g, " ")})${advisory}`;
   }

@@ -106,6 +106,30 @@ export type Config = z.infer<typeof ConfigSchema> & {
 
 const warnedLegacyConfigPaths = new Set<string>();
 const warnedDisabledDetectionPaths = new Set<string>();
+const warnedUnknownKeyPaths = new Set<string>();
+
+/**
+ * Keys the operator wrote under `collection:` that the schema does not define.
+ *
+ * WHY. Zod object schemas STRIP unknown keys by default, so
+ * `enforce_ipmitool_min_versions: true` (or any other near-miss) parses cleanly
+ * and silently leaves the setting at its `false` default. That turns a typo into a
+ * silently disabled security control, which an adversarial review flagged on
+ * 2026-07-30 as finding #4.
+ *
+ * NOT `.strict()`, deliberately, though the review offered it as an option: a
+ * strict parse throws, and a config that throws stops the agent from starting at
+ * all. A host that goes silent is the worse failure here, and we have already lost
+ * a box for 23 hours to exactly that shape of problem. A warning names the typo
+ * without ever being able to take monitoring down.
+ *
+ * Exported for unit tests; pure.
+ */
+export function unknownCollectionKeys(rawCollection: unknown): string[] {
+  if (!rawCollection || typeof rawCollection !== "object" || Array.isArray(rawCollection)) return [];
+  const known = new Set(Object.keys(ConfigSchema.shape.collection.removeDefault().shape));
+  return Object.keys(rawCollection as Record<string, unknown>).filter((k) => !known.has(k));
+}
 
 export function configLoadFailureMessage(path: string, error: unknown): string {
   const detail = error instanceof Error ? error.message : String(error);
@@ -189,6 +213,14 @@ export function loadConfig(path: string, deps: LoadConfigDeps = defaultLoadConfi
         warnedLegacyConfigPaths.add(path);
         console.warn("[config] WARNING: config is not yet root-owned; run `sudo glassmkr-crucible init` to complete the security migration");
       }
+    }
+    const strayKeys = unknownCollectionKeys((parsed as any)?.collection);
+    if (strayKeys.length > 0 && !warnedUnknownKeyPaths.has(path)) {
+      warnedUnknownKeyPaths.add(path);
+      console.warn(
+        `[config] WARNING: ignoring unknown key(s) under collection: ${strayKeys.join(", ")}. ` +
+        "These were dropped, so any setting you expected them to change is still at its default. Check for a typo.",
+      );
     }
     if (!config.thresholds.acknowledge_disabled_detection && thresholdsDisableDetection(config.thresholds)) {
       config.detection_disabled = true;

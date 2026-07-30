@@ -54,16 +54,84 @@ describe("detectIpmiCapability", () => {
   // where it fired the package was normally already patched, so it removed all fan,
   // PSU, SEL and IPMI-ECC monitoring while protecting against nothing. Full
   // reasoning in the block comment on MIN_SAFE_IPMITOOL_VERSION.
-  it("COLLECTS by default when ipmitool reads below 1.8.19, flagging it as advisory", async () => {
+  // NARROWED 2026-07-30: the advisory now requires POSITIVE evidence of distro
+  // origin. Provenance is injected explicitly in every below-floor test below,
+  // because the default implementation reads the real filesystem and package
+  // database, which would make these tests depend on the machine running them.
+  it("COLLECTS when a below-floor ipmitool is owned by a distro package", async () => {
     const cap = await detectIpmiCapability({
       runIpmitool: async () => ({ stdout: "ipmitool version 1.8.18\n", stderr: "" }),
       probeSensor: async () => "CPU Temp | 39.000 | degrees C | ok",
+      attributeProvenance: async () => ({
+        path: "/usr/bin/ipmitool",
+        attributed: true,
+        package: "ipmitool 1.8.18-11ubuntu2.2",
+        detail: "/usr/bin/ipmitool is owned by dpkg package ipmitool 1.8.18-11ubuntu2.2",
+      }),
     });
     expect(cap.available).toBe(true);
     if (cap.available) {
       expect(cap.ipmitool_version).toBe("1.8.18");
       expect(cap.ipmitool_below_cve_floor).toBe(true);
+      // The EVR is the evidence for collecting anyway, so it must reach the snapshot.
+      expect(cap.ipmitool_package).toBe("ipmitool 1.8.18-11ubuntu2.2");
     }
+  });
+
+  it("FAILS CLOSED on a below-floor ipmitool that no distro package owns", async () => {
+    // The hole the 2026-07-29 loosening opened (finding #2, 2026-07-30 review):
+    // a source or vendor build is genuinely unpatched, and the wrapper would exec
+    // it as ROOT every snapshot. Distro backport reasoning does not cover it.
+    const cap = await detectIpmiCapability({
+      runIpmitool: async () => ({ stdout: "ipmitool version 1.8.18\n", stderr: "" }),
+      probeSensor: async () => "CPU Temp | 39.000 | degrees C | ok",
+      attributeProvenance: async () => ({
+        path: "/usr/local/bin/ipmitool",
+        attributed: false,
+        package: null,
+        detail: "/usr/local/bin/ipmitool is not owned by any dpkg or rpm package, so it is a source, vendor or hand-installed build with no distro backport guarantee",
+      }),
+    });
+    expect(cap.available).toBe(false);
+    if (!cap.available) {
+      expect(cap.reason).toBe("ipmitool_cve_2020_5208");
+      // Must name the offending path: /usr/local/bin SHADOWS /usr/bin in sudo's
+      // secure_path, and an operator cannot act on this without knowing which file.
+      expect(cap.detail).toContain("/usr/local/bin/ipmitool");
+      expect(cap.detail).toContain("refusing to run it as root");
+      // Must NOT read as the operator's own opt-in; this one is our decision.
+      expect(cap.detail).not.toContain("enforce_ipmitool_min_version");
+    }
+  });
+
+  it("does not consult provenance at all at or above the floor", async () => {
+    // Hosts on 1.8.19+ must pay nothing for the gate: no package-manager execs.
+    let called = false;
+    const cap = await detectIpmiCapability({
+      runIpmitool: async () => ({ stdout: "ipmitool version 1.8.19\n", stderr: "" }),
+      probeSensor: async () => "CPU Temp | 39.000 | degrees C | ok",
+      attributeProvenance: async () => {
+        called = true;
+        return { path: null, attributed: false, package: null, detail: "should not run" };
+      },
+    });
+    expect(cap.available).toBe(true);
+    expect(called).toBe(false);
+  });
+
+  it("enforcement short-circuits BEFORE provenance, so an opt-in never depends on dpkg", async () => {
+    let called = false;
+    const cap = await detectIpmiCapability({
+      runIpmitool: async () => ({ stdout: "ipmitool version 1.8.18\n", stderr: "" }),
+      probeSensor: async () => "CPU Temp | 39.000 | degrees C | ok",
+      enforceMinVersion: true,
+      attributeProvenance: async () => {
+        called = true;
+        return { path: "/usr/bin/ipmitool", attributed: true, package: "ipmitool 1.8.18-1", detail: "" };
+      },
+    });
+    expect(cap.available).toBe(false);
+    expect(called).toBe(false);
   });
 
   it("does not set the advisory flag at or above the floor, so healthy snapshots are unchanged", async () => {
