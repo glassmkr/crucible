@@ -51,7 +51,28 @@ export async function collectIpmi(vendor: Vendor = "generic", capability?: IpmiC
   // that distinction (see lib/bmc-presence.ts for the full reasoning).
   const bmcDeviceNode = findBmcDeviceNode();
 
-  if (capability && !capability.available) {
+  // A cached-unavailable capability normally means "do not waste execs asking",
+  // but there is one combination where obeying the cache HIDES the fault we most
+  // want to see. `detection` is a ONE-SHOT startup probe (refreshed hourly), so a
+  // BMC that was already dead when the agent started lands `no_bmc_device` and
+  // every snapshot thereafter said `probe: skipped` without ever touching the BMC.
+  // The dashboard therefore could not fire its BMC-unreadable rule for the exact
+  // case that rule exists for, and a BMC that died mid-run auto-RESOLVED at the
+  // next hourly refresh while still dead, which reads as "fixed". 2026-07-30
+  // review finding #1.
+  //
+  // `no_bmc_device` plus a live device node is self-contradictory: the kernel
+  // enumerated an IPMI controller, so something IS there. Re-probe in exactly that
+  // case, which turns the silent `skipped` into an honest `failed`. The other
+  // reasons (no binary, permission denied, CVE) are host-side faults where
+  // probing cannot succeed, so they keep short-circuiting and cost nothing.
+  const contradictsDeviceNode =
+    capability !== undefined &&
+    !capability.available &&
+    capability.reason === "no_bmc_device" &&
+    bmcDeviceNode !== null;
+
+  if (capability && !capability.available && !contradictsDeviceNode) {
     // No probe possible — distinguish "we couldn't ask" from "BMC said
     // zero". Dashboard schema accepts both shapes; dashboard renders null
     // as "no signal" not "0 errors observed". glassmkr#29.
@@ -70,9 +91,12 @@ export async function collectIpmi(vendor: Vendor = "generic", capability?: IpmiC
 
   const sensorRaw = await runPrivileged("ipmi-sensor");
   if (!sensorRaw) {
-    // The startup capability said IPMI was usable and this probe still came back
-    // empty, so something changed since boot: a BMC that stopped answering, a
-    // removed sudo wrapper, or a timeout. Before `probe` existed this returned
+    // Either the startup capability said IPMI was usable and this probe still came
+    // back empty (a BMC that stopped answering, a removed sudo wrapper, a timeout),
+    // or we deliberately re-probed a cached `no_bmc_device` because a device node
+    // exists and it failed again, confirming a present-but-unreadable BMC rather
+    // than an absent one. Both are the same reportable fact, so they share this
+    // branch. Before `probe` existed this returned
     // available:false while `detection` still said available:true, so the
     // Dashboard had no way to see it and the host read healthy on every
     // IPMI-derived rule. That was finding #2 of the 2026-07-29 review.

@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { assertNoPosixAcl, assertSecureConfigStat, configLoadFailureMessage, loadConfig } from "../config.js";
+import { assertNoPosixAcl, assertSecureConfigStat, configLoadFailureMessage, loadConfig, unknownCollectionKeys } from "../config.js";
 
 const tempDirs: string[] = [];
 
@@ -118,5 +118,38 @@ describe("loadConfig", () => {
 
     expect(() => loadConfig(path)).toThrow();
     expect(readFileSync(target, "utf8")).toBe('server_name: "target"\n');
+  });
+});
+
+describe("unknownCollectionKeys (2026-07-30 review finding #4)", () => {
+  it("names a typo'd security setting instead of silently dropping it", () => {
+    // The reported failure: Zod object schemas STRIP unknown keys, so this parses
+    // clean and leaves enforce_ipmitool_min_version at its false default. The
+    // operator believes they enabled fail-closed; nothing tells them otherwise.
+    expect(unknownCollectionKeys({ enforce_ipmitool_min_versions: true }))
+      .toEqual(["enforce_ipmitool_min_versions"]);
+  });
+
+  it("accepts every key the schema really defines", () => {
+    expect(unknownCollectionKeys({
+      ipmi: true,
+      enforce_ipmitool_min_version: true,
+      smart: true,
+      thermal: true,
+      dmi: true,
+    })).toEqual([]);
+  });
+
+  it("reports several strays at once", () => {
+    expect(unknownCollectionKeys({ ipmi: true, smrt: true, thermalz: false }).sort())
+      .toEqual(["smrt", "thermalz"]);
+  });
+
+  it("is quiet on absent, empty or non-object collection blocks", () => {
+    expect(unknownCollectionKeys(undefined)).toEqual([]);
+    expect(unknownCollectionKeys(null)).toEqual([]);
+    expect(unknownCollectionKeys({})).toEqual([]);
+    expect(unknownCollectionKeys("nope")).toEqual([]);
+    expect(unknownCollectionKeys(["ipmi"])).toEqual([]);
   });
 });

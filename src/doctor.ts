@@ -8,7 +8,9 @@
 // Currently covers `doctor ipmi`. Future sub-areas (`doctor security`,
 // `doctor network`) would slot in next to it.
 
-import { detectIpmiCapability } from "./lib/capability.js";
+import { detectIpmiCapability, MIN_SAFE_IPMITOOL_VERSION } from "./lib/capability.js";
+import { loadConfig } from "./config.js";
+import { DEFAULT_CONFIG_PATH, resolveConfigPathWithLegacyFallback } from "./cli.js";
 
 /** Format the IPMI detection result + actionable fix guidance. */
 export function formatIpmiDoctor(cap: Awaited<ReturnType<typeof detectIpmiCapability>>): string {
@@ -19,6 +21,22 @@ export function formatIpmiDoctor(cap: Awaited<ReturnType<typeof detectIpmiCapabi
     out.push(`  Result:        [OK] IPMI detected via ${cap.method}`);
     if (cap.ipmitool_version) {
       out.push(`  ipmitool:      ${cap.ipmitool_version}`);
+    }
+    // The below-floor advisory belongs here above all: `doctor ipmi` is what an
+    // operator runs when IPMI looks wrong, and it used to omit this entirely
+    // (2026-07-30 review finding #5), so the one place designed to explain IPMI
+    // state was the one place that did not mention the CVE gate.
+    if (cap.ipmitool_below_cve_floor) {
+      out.push(`  CVE-2020-5208: version reads below ${MIN_SAFE_IPMITOOL_VERSION}, collecting anyway`);
+      if (cap.ipmitool_package) {
+        out.push(`  Package:       ${cap.ipmitool_package} (distro-owned)`);
+        out.push("");
+        out.push("  Your distro backports this fix without bumping the upstream");
+        out.push("  version, so the package above is almost certainly patched. The");
+        out.push("  release suffix is the part `ipmitool -V` does not show you.");
+        out.push("  Verify: zcat /usr/share/doc/ipmitool/changelog.Debian.gz | grep -i 5208");
+        out.push("      or: rpm -q --changelog ipmitool | grep -i 5208");
+      }
     }
     out.push("");
     out.push("Crucible will collect:");
@@ -79,13 +97,60 @@ export function formatIpmiDoctor(cap: Awaited<ReturnType<typeof detectIpmiCapabi
       out.push("DO NOT run `sudo ipmitool mc reset cold` without confirming first");
       out.push("with your vendor — some BMCs can hang past the reset.");
       break;
+    case "ipmitool_cve_2020_5208":
+      out.push("Crucible will not run this ipmitool as root. It reports a version");
+      out.push(`below ${MIN_SAFE_IPMITOOL_VERSION} (CVE-2020-5208: heap overflows parsing BMC`);
+      out.push("responses) and either no distro package owns the binary, or you have");
+      out.push("set collection.enforce_ipmitool_min_version: true.");
+      out.push("");
+      out.push("Which one it is, is in the Detail line above. If it names a path:");
+      out.push("  that file is a source, vendor or hand-installed build, so no distro");
+      out.push("  backport covers it. Note /usr/local/bin precedes /usr/bin in sudo's");
+      out.push("  secure_path, so a local build SHADOWS the packaged one.");
+      out.push("");
+      out.push("Fix, in order of preference:");
+      out.push("  1. Use your distro's package and remove the unowned binary:");
+      out.push("       command -v ipmitool          # which one wins today");
+      out.push("       sudo apt install ipmitool    # or dnf/pacman/apk");
+      out.push("  2. Build or install 1.8.19 or newer, which fixes the CVE upstream.");
+      out.push("  3. If this host has no BMC to monitor, set collection.ipmi: false.");
+      out.push("");
+      out.push("Distro-packaged 1.8.18 is NOT blocked: those are patched by backport");
+      out.push("and Crucible collects from them with an advisory instead.");
+      break;
   }
 
   return out.join("\n");
 }
 
+/**
+ * Read `collection.enforce_ipmitool_min_version` so the doctor probes with the
+ * SAME settings the agent uses. Without this the doctor could report IPMI as
+ * available on a host where the running agent is refusing to collect, which is
+ * the opposite of useful (2026-07-30 review finding #5).
+ *
+ * Best-effort on purpose. The config is root:glassmkr 0640, so an ordinary user
+ * running `doctor ipmi` cannot read it, and a diagnostic must never fail because
+ * of that. Unreadable config falls back to the shipped default (false) and says so.
+ */
+export function readEnforceFlag(
+  load: typeof loadConfig = loadConfig,
+): { enforce: boolean; note: string | null } {
+  try {
+    const cfg = load(resolveConfigPathWithLegacyFallback(DEFAULT_CONFIG_PATH));
+    return { enforce: cfg.collection.enforce_ipmitool_min_version, note: null };
+  } catch (err: any) {
+    const why = err?.code === "EACCES" || err?.code === "EPERM"
+      ? "config is not readable by this user (it is root:glassmkr 0640); re-run with sudo for a config-aware result"
+      : `config could not be read (${String(err?.code ?? err?.message ?? err).slice(0, 80)})`;
+    return { enforce: false, note: why };
+  }
+}
+
 /** Run the doctor subcommand. Returns the formatted report. */
 export async function runDoctorIpmi(): Promise<string> {
-  const cap = await detectIpmiCapability();
-  return formatIpmiDoctor(cap);
+  const { enforce, note } = readEnforceFlag();
+  const cap = await detectIpmiCapability({ enforceMinVersion: enforce });
+  const report = formatIpmiDoctor(cap);
+  return note ? `${report}\n\nNote: ${note}.` : report;
 }
