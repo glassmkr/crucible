@@ -722,6 +722,12 @@ export interface DiskInfo {
   percent_used: number;
   fstype?: string;
   options?: string;
+  /** Crucible 0.14.11+. Set only when the HOST mount table (/proc/1/mounts) could
+   *  not be read, so `options` came from this process's own mount namespace and may
+   *  describe the systemd sandbox instead of the host. `ProtectSystem=strict`
+   *  remounts `/` read-only in that namespace, so an unflagged consumer would read
+   *  a healthy host as read-only. Never assert filesystem state when this is set. */
+  options_unreliable?: true;
   inodes_total?: number;
   inodes_used?: number;
   inodes_free?: number;

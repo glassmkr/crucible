@@ -9,6 +9,31 @@ out under `### Breaking` so downstream consumers can audit.
 
 ## [Unreleased]
 
+## [0.14.11] - 2026-07-30
+
+### Fixed
+
+- **`filesystem_readonly` no longer fires on healthy hosts.** The agent reported
+  its own mount namespace instead of the host's. Its systemd unit sets
+  `ProtectSystem=strict`, which remounts `/` read-only **inside the service's
+  namespace**, and the disk collector read `/proc/mounts` (which is
+  `/proc/self/mounts`). It therefore shipped `ro` for `/` on hosts whose root was
+  perfectly writable, and the dashboard raised a CRITICAL "filesystem remounted
+  read-only, likely I/O errors or corruption" on 19 of 21 hosts in our own fleet.
+  The only hosts unaffected were the two still running the pre-hardening unit. No
+  data was ever at risk; the filesystems were fine and the alert was wrong.
+
+  The collector now reads `/proc/1/mounts`, which is outside every service
+  sandbox. Where that cannot be read (`hidepid`, `ProtectProc=invisible`,
+  `ProcSubset=pid`), it falls back to its own namespace and marks the mount
+  options unreliable so the dashboard abstains rather than asserting a filesystem
+  state it cannot actually see. A genuinely read-only filesystem still alerts.
+
+  Because the hardened unit is written by `glassmkr-crucible init`, it reached
+  hosts through ordinary version upgrades, so most fleets on a recent agent are
+  affected. Upgrading clears the alert on the next collection cycle; no manual
+  resolve is needed.
+
 ## [0.14.10] - 2026-07-30
 
 ### Security
