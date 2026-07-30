@@ -89,6 +89,12 @@ Single source of truth for cutting a Crucible release. Lives here (the release-t
 
 11. **[dashboard] Customer-facing changelog surface**: add a dated section + sidebar link to `apps/site/src/routes/docs/changelog/+page.svelte`, and move the "Current." marker to the new version. Add a `sitemap.xml` entry only if a new URL is introduced (changelog edits reuse the existing `/docs/changelog` URL). US English, no em-dashes (the `scripts/lint-no-emdash.mjs` CI guard scans `apps/site/src`, `apps/dashboard/src/lib/server/alerts`, and `apps/site/scripts`).
 
+12. **[dashboard] If the release ADDS OR REMOVES AN ALERT RULE, the advertised rule count moves too**, and it is claimed in far more places than anyone expects: 83 sites across 26 files as of 2026-07-30, including all 8 `/vs/*` and all 4 `/for-*` pages. CI-enforced since glassmkr #603 (`pnpm lint:rule-count`), which checks the site copy against the length of the generated `rules.json` and skips an explicit list of dated pages (`/blog/*`, `/docs/changelog`) whose numbers were true at publication.
+    - Read the canonical count from `apps/dashboard/src/lib/server/alerts/fix-workflow/__tests__/coverage.test.ts`; never trust a number quoted in prose, including one quoted here.
+    - The matcher is easy to make too STRICT, and that direction fails silently: two attempts during #603 under-matched and looked green, and a stale `62` had survived two prior hand reconciles on `/docs/rules` itself. If you touch the matcher, plant a known-bad fixture and confirm it FAILS.
+    - The gate also fails on ZERO matches, so a broken matcher cannot report OK.
+    - Rule additions have their own checklist beyond the count: see the `glassmkr-rule-change` skill, notably the `gen-rules.mjs` CATEGORY map, which is enforced by `pnpm lint:rule-category` since glassmkr #599 (before that it failed at DEPLOY, not at PR CI).
+
 ## Checklist (copy into the release PR / issue)
 
 - [ ] Fix merged to main, green
