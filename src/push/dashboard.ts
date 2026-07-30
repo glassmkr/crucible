@@ -166,6 +166,17 @@ export async function pushToDashboard(
       if (response.ok) {
         const data = await readDashboardResponse(response, () => controller.abort());
         console.log(`[dashboard] Push successful. Active alerts: ${data.active_alerts ?? 0}`);
+      } else if (response.status === 429) {
+        // NOT an error, and logging it as one was the actual defect here. The
+        // dashboard accepts one snapshot per server per 55s, and the agent pushes
+        // IMMEDIATELY on startup, so a restart lands inside the window left by the
+        // pre-restart push. The dashboard cannot know a restart happened; it just
+        // sees two pushes close together and correctly throttles the second.
+        // Self-healing: the next scheduled cycle is well outside the window.
+        // Observed on 2 of 20 hosts during the 2026-07-30 rolls, where it read as
+        // a push failure and cost real time to chase.
+        await response.body?.cancel();
+        console.log("[dashboard] Push throttled (HTTP 429): the dashboard accepts one snapshot per server per 55s and this one arrived inside that window, which is expected right after a restart. The next cycle will land.");
       } else {
         await response.body?.cancel();
         console.error(`[dashboard] Push failed: ${response.status} ${response.statusText}`);
@@ -237,6 +248,12 @@ function pushWithAgent(
             console.log(`[dashboard] Push successful (pinned). Active alerts: ${parsed.active_alerts ?? 0}`);
           } catch { /* ignore parse errors */ }
           finish(true);
+        } else if (res.statusCode === 429) {
+          // Same throttle, same reasoning as the non-pinned path above. Kept in
+          // both because the pinned path is what TLS-pinned installs actually use,
+          // and a fix in only one of them would look fixed while still shouting.
+          console.log("[dashboard] Push throttled (HTTP 429, pinned): one snapshot per server per 55s; expected right after a restart, the next cycle will land.");
+          finish(false);
         } else {
           console.error(`[dashboard] Push failed (pinned): ${res.statusCode}`);
           finish(false);
