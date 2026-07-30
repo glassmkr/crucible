@@ -9,6 +9,8 @@ out under `### Breaking` so downstream consumers can audit.
 
 ## [Unreleased]
 
+## [0.14.13] - 2026-07-30
+
 ### Security
 
 - **An `ipmitool` whose version cannot be parsed is no longer treated as safe.** The
@@ -38,6 +40,14 @@ out under `### Breaking` so downstream consumers can audit.
   path it could report IPMI as working while the service was correctly refusing.
 - The em-dash build guard now also catches escaped forms (`\u2014`, `&mdash;`), which
   produce the character at runtime while leaving the source file ASCII.
+- **A filesystem mounted under `/home` is monitored again.** The service ran with
+  `ProtectHome=yes`, which makes `/home` appear empty inside its own sandbox, and `df`
+  omits filesystems it cannot reach. Any real filesystem mounted there was therefore
+  absent from the snapshot entirely, so it had no capacity, inode, or read-only alerts
+  at all, silently. The service now uses `ProtectHome=read-only`, which still prevents
+  it writing anywhere under `/home` or `/root` but lets it see that the filesystem
+  exists and how full it is. This takes effect after `glassmkr-crucible init` rewrites
+  the service unit, which the documented upgrade sequence already does.
 
 ## [0.14.12] - 2026-07-30
 
