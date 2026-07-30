@@ -9,6 +9,32 @@ out under `### Breaking` so downstream consumers can audit.
 
 ## [Unreleased]
 
+## [0.14.12] - 2026-07-30
+
+### Changed
+
+- **Node.js 22 LTS is supported again.** The minimum is now Node **22.19.0**,
+  lowered from 24. Versions 0.14.6 through 0.14.11 refused to start on any Node
+  older than 24, which excluded the whole of the current LTS line for no real
+  reason and could leave a host stuck on an old agent with no way forward except a
+  Node upgrade.
+
+  The floor exists because of one dependency: `undici` calls `markAsUncloneable`
+  when it is imported, and on a Node that lacks that symbol the agent cannot even
+  load. The original guard was set from a crash seen on Node 20 and compared only
+  the major version, so it could not express the real boundary and was rounded up
+  to 24. Node 22.19.0 is `undici`'s own declared minimum, and Node 22 was verified
+  end to end before this change: `undici` imports, HTTPS requests through it
+  succeed, and the CLI runs correctly.
+
+  Nothing else in the agent needed a newer Node. If you upgraded Node purely to
+  satisfy the old requirement, that was not wasted (newer is still fine), but it
+  is no longer necessary. Node 22.4 and older, including Node 20, are still
+  refused, because they genuinely cannot load the agent.
+
+  The check now compares the full version rather than the major alone, so
+  22.19.0 correctly ranks above 22.9.0.
+
 ## [0.14.11] - 2026-07-30
 
 ### Fixed

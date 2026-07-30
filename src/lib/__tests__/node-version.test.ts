@@ -1,54 +1,82 @@
 import { describe, expect, it } from "vitest";
-import { MIN_NODE_MAJOR, nodeMajorMeetsMinimum, oldNodeMessage, parseNodeMajor } from "../node-version.js";
+import { MIN_NODE_VERSION, nodeMeetsMinimum, oldNodeMessage, parseNodeVersion } from "../node-version.js";
 
-describe("parseNodeMajor", () => {
-  it("reads the major from process.versions.node-style strings", () => {
-    expect(parseNodeMajor("20.11.1")).toBe(20);
-    expect(parseNodeMajor("24.0.0")).toBe(24);
-    expect(parseNodeMajor("v25.9.0")).toBe(25);
-    expect(parseNodeMajor("  18.19.0  ")).toBe(18);
+describe("parseNodeVersion", () => {
+  it("reads major.minor.patch from process.versions.node-style strings", () => {
+    expect(parseNodeVersion("20.11.1")).toEqual([20, 11, 1]);
+    expect(parseNodeVersion("22.22.2")).toEqual([22, 22, 2]);
+    expect(parseNodeVersion("v25.9.0")).toEqual([25, 9, 0]);
+    expect(parseNodeVersion("  18.19.0  ")).toEqual([18, 19, 0]);
   });
 
-  it("returns null for anything unrecognisable (so callers fail closed)", () => {
-    expect(parseNodeMajor("")).toBeNull();
-    expect(parseNodeMajor("not-a-version")).toBeNull();
-    expect(parseNodeMajor("v24")).toBeNull(); // no dot after major
+  it("treats a missing minor or patch as zero rather than unparseable", () => {
+    // The old major-only parser required a dot and returned null for "v24",
+    // failing closed on a legitimate version string.
+    expect(parseNodeVersion("v24")).toEqual([24, 0, 0]);
+    expect(parseNodeVersion("22.19")).toEqual([22, 19, 0]);
+  });
+
+  it("returns null for anything with no leading integer (so callers fail closed)", () => {
+    expect(parseNodeVersion("")).toBeNull();
+    expect(parseNodeVersion("not-a-version")).toBeNull();
+    expect(parseNodeVersion("vNext")).toBeNull();
   });
 });
 
-describe("nodeMajorMeetsMinimum", () => {
-  it("rejects a Node older than the required major (the crash case)", () => {
-    // undici@8 crashes at import on Node < 24; the preflight must exit before
-    // that import, so this is the guard that stops it.
-    expect(nodeMajorMeetsMinimum("20.11.1")).toBe(false);
-    expect(nodeMajorMeetsMinimum("22.4.0")).toBe(false);
+describe("nodeMeetsMinimum", () => {
+  it("compares components NUMERICALLY, so 22.19 outranks 22.9", () => {
+    // Why this is not a string compare: as strings, "22.9.0" >= "22.19.0" is
+    // true, which would wave through a Node too old to import undici.
+    expect(nodeMeetsMinimum("22.9.0")).toBe(false);
+    expect(nodeMeetsMinimum("22.19.0")).toBe(true);
+    expect(nodeMeetsMinimum("22.100.0")).toBe(true);
   });
 
-  it("accepts the required major and newer", () => {
-    expect(nodeMajorMeetsMinimum("24.0.0")).toBe(true);
-    expect(nodeMajorMeetsMinimum("v25.9.0")).toBe(true);
+  it("accepts the Node 22 LTS releases the old major-only floor wrongly rejected", () => {
+    // 22.22.2 is the version that held a fleet box back for days. Verified on
+    // real hardware 2026-07-30: undici imports, a live HTTPS request through its
+    // Agent returns 200, and the CLI runs correctly. Refusing it was the bug,
+    // and a major-only comparison could not express the real boundary at all.
+    expect(nodeMeetsMinimum("22.22.2")).toBe(true);
+    expect(nodeMeetsMinimum("22.19.0")).toBe(true);
+  });
+
+  it("still rejects the Nodes that genuinely cannot import undici", () => {
+    expect(nodeMeetsMinimum("20.11.1")).toBe(false); // the prod box that found the crash
+    expect(nodeMeetsMinimum("22.4.0")).toBe(false);  // below undici's declared floor
+    expect(nodeMeetsMinimum("18.19.0")).toBe(false);
+  });
+
+  it("accepts everything above the floor", () => {
+    expect(nodeMeetsMinimum("24.0.0")).toBe(true);
+    expect(nodeMeetsMinimum("v25.9.0")).toBe(true);
   });
 
   it("treats an unparseable version as too old (fail closed)", () => {
-    expect(nodeMajorMeetsMinimum("garbage")).toBe(false);
+    expect(nodeMeetsMinimum("garbage")).toBe(false);
+    expect(nodeMeetsMinimum("")).toBe(false);
   });
 
-  it("honours a custom minimum", () => {
-    expect(nodeMajorMeetsMinimum("20.0.0", 20)).toBe(true);
-    expect(nodeMajorMeetsMinimum("19.0.0", 20)).toBe(false);
+  it("fails closed when the MINIMUM itself is unparseable", () => {
+    // Stops a typo in the constant from silently disabling the whole guard.
+    expect(nodeMeetsMinimum("24.0.0", "not-a-version")).toBe(false);
   });
 
-  it("defaults to MIN_NODE_MAJOR", () => {
-    expect(MIN_NODE_MAJOR).toBe(24);
-    expect(nodeMajorMeetsMinimum(`${MIN_NODE_MAJOR}.0.0`)).toBe(true);
-    expect(nodeMajorMeetsMinimum(`${MIN_NODE_MAJOR - 1}.9.9`)).toBe(false);
+  it("honours a custom minimum and treats exact equality as met", () => {
+    expect(nodeMeetsMinimum("20.0.0", "20.0.0")).toBe(true);
+    expect(nodeMeetsMinimum("19.9.9", "20.0.0")).toBe(false);
+  });
+
+  it("defaults to MIN_NODE_VERSION, which tracks undici's own engines.node", () => {
+    expect(MIN_NODE_VERSION).toBe("22.19.0");
+    expect(nodeMeetsMinimum(MIN_NODE_VERSION)).toBe(true);
   });
 });
 
 describe("oldNodeMessage", () => {
   it("names both the requirement and the running version on one line", () => {
     const msg = oldNodeMessage("20.11.1");
-    expect(msg).toContain("Node.js 24 or newer");
+    expect(msg).toContain("Node.js 22.19.0 or newer");
     expect(msg).toContain("20.11.1");
     expect(msg).not.toContain("\n");
   });
