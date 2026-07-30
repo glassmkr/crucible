@@ -178,7 +178,7 @@ details partner lacp pdu:
 `;
 
 // Same bond, but one slave's partner has lost sync (port_state 0x33 = 51,
-// bits set: 0, 1, 4, 5 — synchronization bit 3 cleared).
+// bits set: 0, 1, 4, 5; synchronization bit 3 cleared).
 const LACP_PARTNER_DESYNC = LACP_HEALTHY_BOND.replace(
   /port state: 63\s*$/m,
   "port state: 51",

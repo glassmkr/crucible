@@ -664,7 +664,7 @@ describe("psu_redundancy_loss bitmask path (regression for glassmkr#29)", () => 
     expect(psuRule.evaluate(snap, baseThresholds)).toEqual([]);
   });
 
-  it("does NOT fire on bit 7 (Inactive) alone — backup PSU in standby is not a failure", () => {
+  it("does NOT fire on bit 7 (Inactive) alone: backup PSU in standby is not a failure", () => {
     const snap = emptySnap();
     snap.dmi = { available: true, vendor: "supermicro", raw_vendor: "Supermicro", product_name: "X11", bios_version: null, bios_date: null, is_virtual: false };
     snap.ipmi = {

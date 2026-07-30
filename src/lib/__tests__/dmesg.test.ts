@@ -67,7 +67,7 @@ describe("readDmesg", () => {
   it("omits the timeout arg entirely when timeoutMs is unset (run's default applies)", async () => {
     runMock.mockResolvedValueOnce("x\n");
     await readDmesg();
-    // run was called with exactly (cmd, args) — no third positional.
+    // run was called with exactly (cmd, args); no third positional.
     expect(runMock.mock.calls[0].length).toBe(2);
   });
 });

@@ -24,7 +24,7 @@ describe("formatIpmiDoctor", () => {
     expect(out).toContain("sudo dnf install ipmitool");
     expect(out).toContain("sudo pacman -S ipmitool");
     expect(out).toContain("sudo apk add ipmitool");
-    // Specifically the "no restart needed" promise — this is the
+    // Specifically the "no restart needed" promise: this is the
     // customer-visible payoff of the 0.9.4 re-detect change.
     expect(out).toContain("No agent restart needed");
   });

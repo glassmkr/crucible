@@ -35,6 +35,13 @@ out under `### Breaking` so downstream consumers can audit.
   The check now compares the full version rather than the major alone, so
   22.19.0 correctly ranks above 22.9.0.
 
+### Fixed
+
+- One customer-visible string contained an em-dash, against our own house style:
+  the placeholder summary reported for Adaptec RAID controllers, which travels in
+  the snapshot to the dashboard. Cleaned up, along with the same character in
+  internal comments, and the repo now fails its build if one reappears.
+
 ## [0.14.11] - 2026-07-30
 
 ### Fixed

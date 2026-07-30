@@ -298,7 +298,7 @@ const NVIDIA_SMI_CSV_FIELDS = [
   // `nvidia-smi --help-query-gpu` on driver 550.163.01. v0.13.0 shipped
   // with `retired_pages.double_bit_ecc.count` (extrapolated from the
   // single-bit name); nvidia-smi rejects the unknown field, prints the
-  // error to stderr, and exits 0 with empty stdout — Crucible then
+  // error to stderr, and exits 0 with empty stdout; Crucible then
   // reports "no GPU rows" and marks tier1 unavailable even though the
   // host has working nvidia-smi. Discovered 2026-05-20 on the val-L4
   // validation host.
@@ -644,7 +644,7 @@ async function collectTier2(): Promise<Tier2Snapshot | { available: false; reaso
 }
 
 // ---------------------------------------------------------------------------
-// Tier 3 (Redfish OEM) — stub per Simon's locked decision
+// Tier 3 (Redfish OEM): stub per Simon's locked decision
 // ---------------------------------------------------------------------------
 
 async function collectTier3Stub(

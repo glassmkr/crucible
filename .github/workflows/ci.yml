@@ -25,4 +25,10 @@ jobs:
       - run: npm ci --ignore-scripts
       - run: npm run build
       - run: npx vitest run
+      # The no-em-dash convention covers this repo too, but only the dashboard
+      # repo enforced it until 2026-07-30. 29 had accumulated here, and one had
+      # already shipped in a customer-visible snapshot string (hardware-raid's
+      # raw_summary). Comments count: a comment dash is what eventually gets
+      # copied into a message.
+      - run: npm run lint:emdash
       - run: npm audit --omit=dev

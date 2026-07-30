@@ -4,16 +4,16 @@
 //
 // Three independent signals corroborate a reboot:
 //
-//   - /sys/fs/pstore/    — persistent storage records the kernel
+//   - /sys/fs/pstore/    : persistent storage records the kernel
 //     wrote during the previous shutdown / panic. Presence of
 //     dmesg-* records indicates the prior kernel left a forensic
 //     trail before halting.
 //
-//   - /var/crash/        — kdump's vmcore dump from the prior
+//   - /var/crash/        : kdump's vmcore dump from the prior
 //     kernel panic. Path varies by distro; check the standard
 //     location plus the systemd default.
 //
-//   - wtmp                — accounting log. `last reboot -F` shows
+//   - wtmp                : accounting log. `last reboot -F` shows
 //     `reboot system boot ...` events plus optional `shutdown`
 //     events that preceded them. A clean shutdown (poweroff/halt)
 //     produces a `shutdown` record; a hard reset or power loss

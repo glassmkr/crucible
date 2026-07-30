@@ -120,7 +120,7 @@ describe("runDetailed", () => {
     expect(res.stderr.trim()).toBe("bar");
   });
 
-  it("captures stderr even on exit 0 — the silent-no-op detection path", async () => {
+  it("captures stderr even on exit 0: the silent-no-op detection path", async () => {
     // This is the v0.13.0 / v0.13.2 shape: tool returns success exit
     // code but stderr says the field is unknown. runDetailed must
     // capture the stderr so the caller can apply looksLikeFieldRenameError.
