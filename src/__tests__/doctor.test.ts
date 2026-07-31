@@ -132,3 +132,25 @@ describe("readEnforceFlag", () => {
     expect(note).toContain("could not be read");
   });
 });
+
+describe("readEnforceFlag: an explicit --config must not silently default (round 4, #6)", () => {
+  it("marks an unreadable EXPLICIT config as fatal rather than assuming enforcement is off", () => {
+    // An operator whose config sets enforce_ipmitool_min_version: true could have a
+    // malformed or briefly unreadable file and get a probe run with enforcement OFF,
+    // exercising a below-floor binary they had deliberately blocked.
+    const r = readEnforceFlag((() => { throw new Error("bad yaml"); }) as any, "/etc/acme/crucible.yaml");
+    expect(r.fatal).toBe(true);
+    expect(r.enforce).toBe(false);
+  });
+
+  it("keeps the DEFAULT path best-effort, since it is unreadable by design for non-root", () => {
+    const r = readEnforceFlag((() => { const e: any = new Error("denied"); e.code = "EACCES"; throw e; }) as any);
+    expect(r.fatal).toBeUndefined();
+    expect(r.note).toContain("re-run with sudo");
+  });
+
+  it("reads the flag normally when the config loads", () => {
+    const r = readEnforceFlag((() => ({ collection: { enforce_ipmitool_min_version: true } })) as any, "/etc/acme/x.yaml");
+    expect(r).toEqual({ enforce: true, note: null });
+  });
+});

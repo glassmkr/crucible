@@ -20,6 +20,7 @@
 // hijacked by tampering with the script.
 
 import { run, runDetailed, type RunDetailedResult } from "./exec.js";
+import { resolveIpmitoolPath } from "./ipmitool-provenance.js";
 import { existsSync } from "fs";
 
 export const SERVICE_USER = "glassmkr";
@@ -133,12 +134,27 @@ export function isAllowedSmartType(type: string): boolean {
  * constrained as the wrapper. Returns null for an action we won't run
  * directly (unknown, or a rejected smart/ethtool argument).
  */
-function directCommand(action: PrivilegedAction, args: string[]): { cmd: string; args: string[] } | null {
+export function directCommand(action: PrivilegedAction, args: string[]): { cmd: string; args: string[] } | null {
+  // ipmitool is invoked by ABSOLUTE PATH here, resolved the same way the CVE gate
+  // resolves it. On a root-direct host (no wrapper) this fallback used to exec a
+  // bare "ipmitool" through root's ambient PATH, while the gate validated the first
+  // match in SECURE_PATH_DIRS. With, say, PATH=/opt/vendor/bin:/usr/bin and a
+  // vulnerable /opt/vendor/bin/ipmitool, the gate approved /usr/bin/ipmitool and
+  // this ran the vendor one as root: the check and the execution naming different
+  // files, which is the same defect as the previous round's version-probe hole, on
+  // the other execution path. Adversarial review round 4, finding #1.
+  //
+  // The wrapper path needs no equivalent change: it execs under sudo, whose
+  // secure_path is exactly the list SECURE_PATH_DIRS mirrors.
+  //
+  // Falling back to the bare name when nothing is found keeps behaviour unchanged on
+  // a host with no ipmitool in those directories, where the exec fails either way.
+  const ipmitool = resolveIpmitoolPath() ?? "ipmitool";
   switch (action) {
-    case "ipmi-sensor": return { cmd: "ipmitool", args: ["sensor"] };
-    case "ipmi-sel-info": return { cmd: "ipmitool", args: ["sel", "info"] };
-    case "ipmi-sel-elist": return { cmd: "ipmitool", args: ["sel", "elist"] };
-    case "ipmi-fan": return { cmd: "ipmitool", args: ["sdr", "type", "Fan"] };
+    case "ipmi-sensor": return { cmd: ipmitool, args: ["sensor"] };
+    case "ipmi-sel-info": return { cmd: ipmitool, args: ["sel", "info"] };
+    case "ipmi-sel-elist": return { cmd: ipmitool, args: ["sel", "elist"] };
+    case "ipmi-fan": return { cmd: ipmitool, args: ["sdr", "type", "Fan"] };
     case "smart-scan": return { cmd: "smartctl", args: ["--scan-open"] };
     case "smart": {
       const dev = args[0] ?? "";

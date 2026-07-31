@@ -30,8 +30,10 @@ const BANNED = [
 // 2026-07-30, finding #10. Covers JS/TS unicode escapes in both notations plus the
 // HTML entities, since these strings reach both a terminal and a web page.
 const BANNED_ESCAPES = [
-  { re: /\\u2014|\\u\{2014\}/i, name: "escaped em-dash (\\u2014)" },
-  { re: /\\u2013|\\u\{2013\}/i, name: "escaped en-dash (\\u2013)" },
+  // `\u{0*2014}` because a code-point escape may carry leading zeros:
+  // "\u{00002014}" is a valid em-dash and slipped past the exact-spelling match.
+  { re: /\\u2014|\\u\{0*2014\}/i, name: "escaped em-dash (\\u2014)" },
+  { re: /\\u2013|\\u\{0*2013\}/i, name: "escaped en-dash (\\u2013)" },
   { re: /&mdash;|&#8212;|&#x2014;/i, name: "HTML em-dash entity" },
   { re: /&ndash;|&#8211;|&#x2013;/i, name: "HTML en-dash entity" },
 ];

@@ -178,3 +178,19 @@ describe("dpkg output parsing (adversarial review 2026-07-30, finding #3)", () =
     expect(parseDpkgOwner("pkg-a, pkg-b: /usr/bin/ipmitool\n", "/usr/bin/ipmitool")).toBe("pkg-a");
   });
 });
+
+describe("locale forcing (review round 4, finding #3)", () => {
+  it("runs package-manager queries with an explicit C locale", async () => {
+    // dpkg localises its output, including the diversion diagnostics this module
+    // keys on, and buildSubprocessEnv only DEFAULTS LC_ALL, so a service env that
+    // sets it is inherited. Under a translated locale the diversion marker never
+    // matches and a diverted binary is attributed to the package it displaced.
+    // This asserts the intent at the only place a unit test can see it: the real
+    // runner is exercised via defaultRun, so we assert the module does not rely on
+    // the ambient locale by checking the source of truth it passes down.
+    const mod = await import("node:fs");
+    const src = mod.readFileSync(new URL("../ipmitool-provenance.ts", import.meta.url), "utf-8");
+    expect(src).toMatch(/LC_ALL:\s*"C"/);
+    expect(src).toMatch(/LANG:\s*"C"/);
+  });
+});

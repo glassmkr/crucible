@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
 import {
+  classifyIpmitoolVersion,
   detectIpmiCapability,
   formatCapabilityLine,
   isIpmitoolVersionVulnerable,
@@ -291,5 +292,36 @@ describe("detectIpmiCapability: adversarial review 2026-07-30 round 3", () => {
       probeSensor: async () => "CPU Temp | 39.000 | degrees C | ok",
     });
     expect(seen).toEqual(["ipmitool"]);
+  });
+});
+
+describe("classifyIpmitoolVersion: strict parsing (review round 4, finding #2)", () => {
+  it("does NOT treat a prerelease OF THE FLOOR as at-or-above", () => {
+    // A prerelease PRECEDES its release, so 1.8.19-rc.1 need not contain the fix.
+    // split+parseInt compared it equal to 1.8.19 and waved it through.
+    expect(classifyIpmitoolVersion("1.8.19-rc.1")).toBe("unknown");
+    expect(classifyIpmitoolVersion("1.8.19-beta")).toBe("unknown");
+  });
+
+  it("does NOT let a garbage string outrank the floor", () => {
+    // parseInt("2vendor") === 2, so this classified as at_or_above.
+    expect(classifyIpmitoolVersion("2vendor")).toBe("unknown");
+    expect(classifyIpmitoolVersion("vendor-build")).toBe("unknown");
+    expect(classifyIpmitoolVersion("1.8")).toBe("unknown");
+  });
+
+  it("still accepts a bare release at the floor and anything above it", () => {
+    expect(classifyIpmitoolVersion("1.8.19")).toBe("at_or_above");
+    expect(classifyIpmitoolVersion("1.8.20")).toBe("at_or_above");
+    // Core strictly above the floor is safe even with a suffix: 1.9.0-rc still
+    // contains a fix that landed in 1.8.19.
+    expect(classifyIpmitoolVersion("1.9.0-rc")).toBe("at_or_above");
+  });
+
+  it("still classifies real distro builds below the floor correctly", () => {
+    // These are the strings real fleet hosts report, and they must keep collecting.
+    expect(classifyIpmitoolVersion("1.8.18")).toBe("below_floor");
+    expect(classifyIpmitoolVersion("1.8.18-11ubuntu2.2")).toBe("below_floor");
+    expect(classifyIpmitoolVersion("1.8.18-csv")).toBe("below_floor"); // Rocky 9 reports this
   });
 });
