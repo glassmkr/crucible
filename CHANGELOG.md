@@ -9,6 +9,8 @@ out under `### Breaking` so downstream consumers can audit.
 
 ## [Unreleased]
 
+## [0.14.14] - 2026-07-31
+
 ### Security
 
 - **Closes two more ways the root-execution check could inspect a different binary
