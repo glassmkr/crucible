@@ -136,7 +136,7 @@ export function formatIpmiDoctor(cap: Awaited<ReturnType<typeof detectIpmiCapabi
 export function readEnforceFlag(
   load: typeof loadConfig = loadConfig,
   configPath?: string,
-): { enforce: boolean; note: string | null } {
+): { enforce: boolean; note: string | null; fatal?: true } {
   try {
     // An explicit --config wins; only the default path gets the legacy fallback,
     // since that fallback exists to find /etc/glassmkr/collector.yaml and would be
@@ -150,13 +150,36 @@ export function readEnforceFlag(
     const why = err?.code === "EACCES" || err?.code === "EPERM"
       ? "config is not readable by this user (it is root:glassmkr 0640); re-run with sudo for a config-aware result"
       : `config could not be read (${String(err?.code ?? err?.message ?? err).slice(0, 80)})`;
+    // An EXPLICIT --config that cannot be read is an error, not a default. Silently
+    // falling back to enforce=false meant an operator whose config sets
+    // `enforce_ipmitool_min_version: true` could have a malformed or briefly
+    // unreadable file and get a probe run with enforcement OFF, exercising a
+    // below-floor binary they had deliberately blocked. Adversarial review round 4,
+    // finding #6. The DEFAULT path keeps the best-effort behaviour, because it is
+    // unreadable by design for a non-root user and a diagnostic must still work.
+    if (configPath && configPath.length > 0) {
+      return { enforce: false, note: why, fatal: true };
+    }
     return { enforce: false, note: why };
   }
 }
 
 /** Run the doctor subcommand. Returns the formatted report. */
 export async function runDoctorIpmi(configPath?: string): Promise<string> {
-  const { enforce, note } = readEnforceFlag(loadConfig, configPath);
+  const { enforce, note, fatal } = readEnforceFlag(loadConfig, configPath);
+  if (fatal) {
+    // Do NOT probe. Reporting IPMI state under settings we could not read is worse
+    // than reporting nothing, because the operator asked about a SPECIFIC config.
+    return [
+      "IPMI capability check: not run.",
+      "",
+      `The configuration you named could not be read: ${note}.`,
+      "",
+      `Fix the file or the permissions on ${configPath}, then re-run. Running without`,
+      "--config would report on the default configuration instead, which is not the",
+      "one you asked about and may enforce differently.",
+    ].join("\n");
+  }
   const cap = await detectIpmiCapability({ enforceMinVersion: enforce });
   const report = formatIpmiDoctor(cap);
   return note ? `${report}\n\nNote: ${note}.` : report;

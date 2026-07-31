@@ -76,7 +76,15 @@ export interface ProvenanceDeps {
 async function defaultRun(cmd: string, args: string[]): Promise<{ stdout: string }> {
   const { stdout } = await execFileAsync(cmd, args, {
     timeout: 5000,
-    env: buildSubprocessEnv(),
+    // FORCE the C locale. dpkg-query localises its output, including the diversion
+    // diagnostics this module keys on, and dpkg's own manual tells you to fix the
+    // locale before machine-parsing it. buildSubprocessEnv defaults LC_ALL with `??`,
+    // so a service environment that already sets LC_ALL is INHERITED: under, say,
+    // LC_ALL=fr_FR.UTF-8 the diversion lines are translated, the marker match fails,
+    // and a diverted binary is attributed to the package it displaced. Passing it
+    // explicitly overrides that default rather than falling back to it.
+    // Adversarial review round 4, finding #3.
+    env: buildSubprocessEnv({ LC_ALL: "C", LANG: "C", LANGUAGE: "C" }),
   });
   return { stdout };
 }

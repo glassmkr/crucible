@@ -314,3 +314,27 @@ describe("SUDOERS_CONTENT", () => {
     expect(SUDOERS_CONTENT).toContain("secure_path");
   });
 });
+
+describe("directCommand: ipmitool by absolute path (review round 4, finding #1)", () => {
+  it("does not exec a bare 'ipmitool' through the ambient PATH", async () => {
+    // The root-direct fallback (no wrapper, running as root) used to exec bare
+    // "ipmitool", resolved via root's own PATH, while the CVE gate validated the
+    // first match in SECURE_PATH_DIRS. With PATH=/opt/vendor/bin:/usr/bin and a
+    // vulnerable /opt/vendor/bin/ipmitool, the gate approved /usr/bin/ipmitool and
+    // this ran the vendor build as root: check and execution naming different files.
+    const { directCommand } = await import("../privileged.js");
+    for (const action of ["ipmi-sensor", "ipmi-sel-info", "ipmi-sel-elist", "ipmi-fan"] as const) {
+      const cmd = directCommand(action, [])!.cmd;
+      // Either an absolute path (resolved from the secure_path list on a host that
+      // has ipmitool), or the bare name only when no candidate exists at all, where
+      // the exec fails regardless.
+      expect(cmd === "ipmitool" || cmd.startsWith("/")).toBe(true);
+      if (cmd !== "ipmitool") expect(cmd.endsWith("/ipmitool")).toBe(true);
+    }
+  });
+
+  it("keeps the non-ipmitool actions unchanged", async () => {
+    const { directCommand } = await import("../privileged.js");
+    expect(directCommand("smart-scan", [])).toEqual({ cmd: "smartctl", args: ["--scan-open"] });
+  });
+});

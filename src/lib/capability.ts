@@ -123,15 +123,25 @@ export function isIpmitoolVersionVulnerable(version: string | null): boolean {
  */
 export function classifyIpmitoolVersion(version: string | null): "below_floor" | "at_or_above" | "unknown" {
   if (!version) return "unknown";
+  // STRICT numeric core. The previous `split` + `parseInt` was permissive in both
+  // directions: `parseInt("2vendor")` gave 2 so a garbage string outranked the floor,
+  // and `1.8.19-rc.1` compared equal to 1.8.19 and passed, even though a prerelease
+  // PRECEDES its release and need not contain the fix. Both skipped provenance and
+  // enforcement entirely. Adversarial review round 4, finding #2.
+  const m = /^(\d+)\.(\d+)\.(\d+)(.*)$/.exec(version.trim());
+  if (!m) return "unknown";
+  const core = [Number(m[1]), Number(m[2]), Number(m[3])];
+  const suffix = m[4];
   const min = [1, 8, 19];
-  const parts = version.split(/[.\-+]/).map((p) => parseInt(p, 10));
-  if (parts.length === 0 || Number.isNaN(parts[0])) return "unknown";
-  for (let i = 0; i < min.length; i++) {
-    const p = Number.isNaN(parts[i]) ? 0 : (parts[i] ?? 0);
-    if (p < min[i]) return "below_floor";
-    if (p > min[i]) return "at_or_above";
+  for (let i = 0; i < 3; i++) {
+    if (core[i] < min[i]) return "below_floor";
+    if (core[i] > min[i]) return "at_or_above"; // e.g. 1.9.0-rc still contains the fix
   }
-  return "at_or_above"; // exactly equal
+  // Core is EXACTLY the floor. A bare "1.8.19" is the fixed release; anything with a
+  // suffix could be a prerelease of it, and we cannot tell "-rc.1" from a distro
+  // "-4" here, so we decline to call it safe and let provenance decide. In practice
+  // `ipmitool -V` prints a bare upstream version, so this costs real hosts nothing.
+  return suffix === "" ? "at_or_above" : "unknown";
 }
 
 interface DetectDeps {

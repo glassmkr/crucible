@@ -9,6 +9,30 @@ out under `### Breaking` so downstream consumers can audit.
 
 ## [Unreleased]
 
+### Security
+
+- **Closes two more ways the root-execution check could inspect a different binary
+  than the one that runs.** On a host with no privileged helper, where the agent runs
+  as root directly, the check validated the binary found on a fixed system path while
+  execution resolved `ipmitool` through root's own environment, so those could be
+  different files. Execution now uses the same absolute path the check validated.
+  Separately, the version comparison accepted strings it should not have: a
+  prerelease of the fixed version, which comes BEFORE that version and need not
+  contain the fix, and malformed strings such as `2vendor` both counted as new
+  enough and skipped the origin check entirely. Both are now treated as unverifiable,
+  which requires the binary to come from a distribution package.
+- **Package-ownership checks now run with a fixed locale.** `dpkg` translates its
+  output, including the diversion notices this check relies on, and the agent
+  inherited whatever locale the service was started with. Under a translated locale
+  those notices were missed, so a diverted binary could be credited to the package it
+  displaced.
+
+### Fixed
+
+- The em-dash build guard missed code-point escapes written with leading zeros.
+- `pnpm validate:rules` (dashboard repo) now parses every alert-rule file, so a
+  malformed rule is reported by the rule validator rather than only by the test suite.
+
 ## [0.14.13] - 2026-07-30
 
 ### Security
