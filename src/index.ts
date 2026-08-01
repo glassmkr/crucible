@@ -100,6 +100,7 @@ import { collectSmart } from "./collect/smart.js";
 import { collectNetwork } from "./collect/network.js";
 import { collectRaid } from "./collect/raid.js";
 import { collectIpmi } from "./collect/ipmi.js";
+import { collectChassis } from "./collect/chassis.js";
 import { collectOsAlerts } from "./collect/os-alerts.js";
 import { evaluateAlerts } from "./alerts/evaluator.js";
 import { updateAlertState } from "./alerts/state.js";
@@ -296,7 +297,7 @@ async function collect() {
   }
   ipmiCheckCounter++;
 
-  const [system, cpu, memory, disks, smartResult, network, raid, ipmi, osAlerts] = await Promise.all([
+  const [system, cpu, memory, disks, smartResult, network, raid, ipmi, osAlerts, chassis] = await Promise.all([
     collectSystem(),
     collectCpu(),
     collectMemory(),
@@ -306,6 +307,9 @@ async function collect() {
     collectRaid(),
     config.collection.ipmi ? collectIpmi(cachedDmi?.vendor ?? "generic", ipmiCapability) : Promise.resolve(emptyIpmi),
     collectOsAlerts(),
+    // Chassis power provenance. Gated behind the same collection.ipmi switch and the
+    // same capability probe as the rest of IPMI, so a BMC-less host spends nothing.
+    config.collection.ipmi && ipmiCapability?.available ? collectChassis() : Promise.resolve(null),
   ]);
 
   const collectionStatus: CollectionStatusMap = {};
@@ -327,6 +331,8 @@ async function collect() {
     collector_version: PKG_VERSION,
     timestamp: new Date().toISOString(),
     system, cpu, memory, disks, smart: smartResult.smart, network, raid, ipmi, os_alerts: osAlerts,
+    // Omitted entirely when null, so a BMC-less host's snapshot is unchanged.
+    ...(chassis ? { chassis } : {}),
     security: securityResult,
     dmi: cachedDmi,
     collection_status: collectionStatus,
