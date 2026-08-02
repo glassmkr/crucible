@@ -9,7 +9,25 @@ out under `### Breaking` so downstream consumers can audit.
 
 ## [Unreleased]
 
-## [0.15.0] - 2026-08-02
+## [0.15.1] - 2026-08-02
+
+### Fixed
+
+- **A `--config` path that does not exist is now an error instead of a silent fall back to defaults.** Naming a
+  configuration file that is missing, most often a typo, was reported as "using defaults" and the agent carried on
+  under settings the operator never chose. On a host configured to enforce the minimum `ipmitool` version that
+  meant the enforcement was quietly off. Both the daemon and `glassmkr-crucible doctor ipmi` now stop and say so.
+  Starting with no `--config` at all is unchanged and still supported: it is only an explicitly named path that
+  must exist.
+- **`glassmkr-crucible doctor ipmi` now exits non-zero when it refuses to run.** When the named configuration
+  cannot be read the command declines to probe, which was correct, but it still exited zero, so a script wrapping
+  it read the refusal as a clean bill of health.
+- **Chassis readings that the controller did not supply are reported as unknown rather than as "no fault".**
+  A controller that answered with an error, a truncated reply, or wording the agent does not recognise produced a
+  confident "no power event, no overload, no power fault" from data that said nothing at all. Each reading is now
+  reported independently and an absent one stays unknown. A genuinely empty power event, which is the common and
+  healthy reading, is still distinguished from a missing one. Nothing consumes these readings yet, so this changes
+  no alert.
 
 ### Added
 
