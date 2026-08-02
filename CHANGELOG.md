@@ -9,6 +9,27 @@ out under `### Breaking` so downstream consumers can audit.
 
 ## [Unreleased]
 
+## [0.15.0] - 2026-08-02
+
+### Added
+
+- **Chassis power provenance.** The agent now records what the BMC says about the last
+  chassis power event and the last restart cause, from `ipmitool chassis status` and
+  `ipmitool chassis restart_cause`. This is the first piece of the reboot root-cause
+  work, whose goal is to answer "why did this server restart" instead of leaving it to
+  guesswork.
+
+  **It reports what the hardware said and draws no conclusion.** That is deliberate.
+  The last-power-event value is a set of independent flags rather than a single verdict,
+  and a completely healthy server can report an AC-failure flag, so reading it as "the
+  data centre lost power" would be wrong. Likewise the restart cause names the management
+  path a reset arrived through, not the person or system that triggered it. Interpretation
+  belongs in a later release, once the behaviour has been checked across vendors.
+
+  **This release adds privileged actions, so the collector wrapper must be refreshed**
+  during the upgrade, otherwise these two values are silently empty. `glassmkr-crucible
+  init` does this for you; see the upgrade steps in the release notes.
+
 ## [0.14.14] - 2026-07-31
 
 ### Security
