@@ -154,3 +154,36 @@ describe("readEnforceFlag: an explicit --config must not silently default (round
     expect(r).toEqual({ enforce: true, note: null });
   });
 });
+
+describe("readEnforceFlag: a MISSING explicit --config is fatal too (round 5, #2)", () => {
+  // Round 4 closed the unreadable case but not the missing one, because loadConfig
+  // converts ENOENT into defaults before any caller sees it. The commonest operator
+  // mistake, a typo in the path, therefore silently disabled the version gate:
+  // `doctor ipmi --config /typo.yaml` printed "using defaults", probed with
+  // enforcement OFF, and exited 0.
+  it("passes mustExist for an explicit path so ENOENT can reach the fatal branch", () => {
+    let sawOpts: any;
+    const load = ((_p: string, _d: unknown, opts: unknown) => {
+      sawOpts = opts;
+      const e: any = new Error("no such file");
+      e.code = "ENOENT";
+      throw e;
+    }) as any;
+    const r = readEnforceFlag(load, "/etc/acme/typo.yaml");
+    expect(sawOpts).toEqual({ mustExist: true });
+    expect(r.fatal).toBe(true);
+    expect(r.enforce).toBe(false);
+    expect(r.note).toContain("no such file");
+  });
+
+  it("does NOT set mustExist for the default path, where a missing file is supported", () => {
+    let sawOpts: any;
+    const load = ((_p: string, _d: unknown, opts: unknown) => {
+      sawOpts = opts;
+      return { collection: { enforce_ipmitool_min_version: false } };
+    }) as any;
+    const r = readEnforceFlag(load);
+    expect(sawOpts).toEqual({ mustExist: false });
+    expect(r.fatal).toBeUndefined();
+  });
+});

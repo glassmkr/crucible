@@ -130,4 +130,54 @@ describe("collectChassis", () => {
     expect(c.last_power_event).toBeNull();
     expect(c.restart_cause!.code).toBe(0x4);
   });
+
+  // Round 5 finding #3. Every case below used to yield an AFFIRMATIVE "no event, no
+  // faults" from data that said nothing at all. Absence must stay null.
+
+  it("does not turn a BMC error on stdout into 'no faults'", async () => {
+    // run() preserves stdout on a nonzero exit, so this arrives as a non-null string
+    // containing none of the fields we look for.
+    const c = (await collectChassis(async (a) =>
+      a === "ipmi-chassis-status" ? "Get Chassis Status command failed: Invalid command" : null))!;
+    expect(c.last_power_event).toBeNull();
+    expect(c.power_overload_now).toBeNull();
+    expect(c.main_power_fault_now).toBeNull();
+    expect(c.power_control_fault_now).toBeNull();
+    expect(c.power_restore_policy).toBeNull();
+  });
+
+  it("does not infer the fields a TRUNCATED response omitted", async () => {
+    const c = (await collectChassis(async (a) =>
+      a === "ipmi-chassis-status" ? "Power Restore Policy : previous" : null))!;
+    expect(c.power_restore_policy).toBe("previous");
+    // Present in the same payload, so their absence is real information withheld,
+    // not a licence to assert they are fine.
+    expect(c.last_power_event).toBeNull();
+    expect(c.power_overload_now).toBeNull();
+    expect(c.main_power_fault_now).toBeNull();
+    expect(c.power_control_fault_now).toBeNull();
+  });
+
+  it("does not read an unrecognised boolean as false", async () => {
+    const c = (await collectChassis(async (a) =>
+      a === "ipmi-chassis-status"
+        ? ["Power Overload : oui", "Main Power Fault : false", "Power Control Fault : true"].join("\n")
+        : null))!;
+    expect(c.power_overload_now).toBeNull();
+    expect(c.main_power_fault_now).toBe(false);
+    expect(c.power_control_fault_now).toBe(true);
+  });
+
+  it("still distinguishes a genuinely EMPTY Last Power Event from a missing one", async () => {
+    // The empty-but-present case is the common real reading (17 of 21 fleet hosts),
+    // and it must stay distinguishable from the field being absent entirely.
+    const present = (await collectChassis(async (a) =>
+      a === "ipmi-chassis-status" ? "Last Power Event :" : null))!;
+    expect(present.last_power_event).not.toBeNull();
+    expect(present.last_power_event!.present).toBe(false);
+
+    const absent = (await collectChassis(async (a) =>
+      a === "ipmi-chassis-status" ? "Power Restore Policy : previous" : null))!;
+    expect(absent.last_power_event).toBeNull();
+  });
 });
