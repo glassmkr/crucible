@@ -109,7 +109,8 @@ export function parseRestartCause(raw: string | null): RestartCause | null {
 }
 
 /** Pull a `Key : value` line out of `ipmitool chassis status` output. */
-function field(raw: string, key: string): string | null {
+function field(raw: string | null, key: string): string | null {
+  if (raw === null) return null;
   for (const line of raw.split("\n")) {
     const idx = line.indexOf(":");
     if (idx < 0) continue;
@@ -132,17 +133,41 @@ export async function collectChassis(
   const causeRaw = await read("ipmi-chassis-restart-cause");
   if (statusRaw === null && causeRaw === null) return null;
 
+  // Read each field INDEPENDENTLY and let an absent one stay null.
+  //
+  // The previous shape keyed everything off "statusRaw is not null", which conflated
+  // "the BMC answered and said no" with "the BMC did not answer this". Two ways that
+  // produced an affirmative false claim from an absence: `field(...) ?? ""` turned a
+  // missing Last Power Event into a decoded empty bit set, reported as present:false;
+  // and `field(...) === "true"` turned every missing or unrecognised fault field into
+  // a confident false. Neither is hypothetical, because run() preserves stdout on a
+  // NONZERO exit, so `Get Chassis Status command failed: Invalid command` arrives as a
+  // non-null statusRaw containing no fields at all, and the host then reported no
+  // power event and no faults of any kind. A truncated or localised response does the
+  // same. Nothing consumes these yet, which is exactly why this is the moment to fix
+  // the shape. Adversarial review round 5, finding #3.
+  const boolField = (name: string): boolean | null => {
+    const v = field(statusRaw, name);
+    if (v === null) return null;
+    if (v === "true") return true;
+    if (v === "false") return false;
+    // Present but not a value we recognise: still not a licence to say "false".
+    return null;
+  };
+
+  const lastPowerEventRaw = field(statusRaw, "Last Power Event");
+
   const info: ChassisInfo = {
-    last_power_event: statusRaw !== null ? parseLastPowerEvent(field(statusRaw, "Last Power Event") ?? "") : null,
+    last_power_event: lastPowerEventRaw !== null ? parseLastPowerEvent(lastPowerEventRaw) : null,
     restart_cause: parseRestartCause(causeRaw),
     // The power-restore policy is the "why is it on again" layer, and it is what makes
     // an auto-power-on restart cause interpretable at all.
-    power_restore_policy: statusRaw !== null ? field(statusRaw, "Power Restore Policy") : null,
+    power_restore_policy: field(statusRaw, "Power Restore Policy"),
     // Current-state faults, distinct from the last-event bits above. A live fault is a
     // present-tense fact; the event bits are historical.
-    power_overload_now: statusRaw !== null ? field(statusRaw, "Power Overload") === "true" : null,
-    main_power_fault_now: statusRaw !== null ? field(statusRaw, "Main Power Fault") === "true" : null,
-    power_control_fault_now: statusRaw !== null ? field(statusRaw, "Power Control Fault") === "true" : null,
+    power_overload_now: boolField("Power Overload"),
+    main_power_fault_now: boolField("Main Power Fault"),
+    power_control_fault_now: boolField("Power Control Fault"),
   };
   return info;
 }

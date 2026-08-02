@@ -31,7 +31,8 @@
     "test": "vitest run",
     "test:hardened-wrapper": "bash scripts/smoke-hardened-wrapper.sh",
     "clean": "rm -rf dist",
-    "lint:emdash": "node scripts/lint-no-emdash.mjs"
+    "lint:emdash": "node scripts/lint-no-emdash.mjs",
+    "lint:emdash:test": "node scripts/lint-no-emdash.test.mjs"
   },
   "keywords": [
     "monitoring",

@@ -141,15 +141,21 @@ export function readEnforceFlag(
     // An explicit --config wins; only the default path gets the legacy fallback,
     // since that fallback exists to find /etc/glassmkr/collector.yaml and would be
     // wrong to apply to an operator's chosen path.
-    const resolved = configPath && configPath.length > 0
-      ? configPath
+    const explicit = Boolean(configPath && configPath.length > 0);
+    const resolved = explicit
+      ? (configPath as string)
       : resolveConfigPathWithLegacyFallback(DEFAULT_CONFIG_PATH);
-    const cfg = load(resolved);
+    // mustExist for an explicit path: without it a MISSING file returns defaults
+    // instead of throwing, so it never reaches the catch below and the fatal branch
+    // that round 4 added was unreachable for the commonest mistake, a typo.
+    const cfg = load(resolved, undefined, { mustExist: explicit });
     return { enforce: cfg.collection.enforce_ipmitool_min_version, note: null };
   } catch (err: any) {
     const why = err?.code === "EACCES" || err?.code === "EPERM"
       ? "config is not readable by this user (it is root:glassmkr 0640); re-run with sudo for a config-aware result"
-      : `config could not be read (${String(err?.code ?? err?.message ?? err).slice(0, 80)})`;
+      : err?.code === "ENOENT"
+        ? "no such file"
+        : `config could not be read (${String(err?.code ?? err?.message ?? err).slice(0, 80)})`;
     // An EXPLICIT --config that cannot be read is an error, not a default. Silently
     // falling back to enforce=false meant an operator whose config sets
     // `enforce_ipmitool_min_version: true` could have a malformed or briefly
@@ -164,13 +170,20 @@ export function readEnforceFlag(
   }
 }
 
-/** Run the doctor subcommand. Returns the formatted report. */
-export async function runDoctorIpmi(configPath?: string): Promise<string> {
+/**
+ * Run the doctor subcommand. Returns the formatted report AND the process exit code.
+ *
+ * The exit code is part of the contract because a diagnostic that refuses to run must
+ * not look like one that ran and found nothing wrong. Round 4 made an unreadable
+ * explicit config skip the probe, but the CLI still exited 0, so any script wrapping
+ * `doctor ipmi` read the refusal as a pass. Adversarial review round 5, finding #2.
+ */
+export async function runDoctorIpmi(configPath?: string): Promise<{ report: string; exitCode: number }> {
   const { enforce, note, fatal } = readEnforceFlag(loadConfig, configPath);
   if (fatal) {
     // Do NOT probe. Reporting IPMI state under settings we could not read is worse
     // than reporting nothing, because the operator asked about a SPECIFIC config.
-    return [
+    const report = [
       "IPMI capability check: not run.",
       "",
       `The configuration you named could not be read: ${note}.`,
@@ -179,8 +192,9 @@ export async function runDoctorIpmi(configPath?: string): Promise<string> {
       "--config would report on the default configuration instead, which is not the",
       "one you asked about and may enforce differently.",
     ].join("\n");
+    return { report, exitCode: 3 };
   }
   const cap = await detectIpmiCapability({ enforceMinVersion: enforce });
   const report = formatIpmiDoctor(cap);
-  return note ? `${report}\n\nNote: ${note}.` : report;
+  return { report: note ? `${report}\n\nNote: ${note}.` : report, exitCode: 0 };
 }

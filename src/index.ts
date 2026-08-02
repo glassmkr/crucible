@@ -15,8 +15,9 @@ if (cliArgs.mode === "version" || cliArgs.mode === "help") {
 }
 if (cliArgs.mode === "doctor-ipmi") {
   const { runDoctorIpmi } = await import("./doctor.js");
-  console.log(await runDoctorIpmi(cliArgs.configPath));
-  process.exit(0);
+  const { report, exitCode } = await runDoctorIpmi(cliArgs.configPath);
+  console.log(report);
+  process.exit(exitCode);
 }
 if (cliArgs.mode === "init") {
   const { runInit, defaultDeps } = await import("./init.js");
@@ -160,7 +161,12 @@ let plannedRebootConsumed = false;
 const resolvedConfigPath = resolveConfigPathWithLegacyFallback(cliArgs.configPath);
 let config: ReturnType<typeof loadConfig>;
 try {
-  config = loadConfig(resolvedConfigPath);
+  // An explicit --config that is not there must not fall back to defaults: the
+  // daemon would then run under settings the operator never chose, including with
+  // the ipmitool version gate off. Round 5 finding #2.
+  config = loadConfig(resolvedConfigPath, undefined, {
+    mustExist: Boolean(cliArgs.configPath && cliArgs.configPath.length > 0),
+  });
 } catch (error) {
   console.error(configLoadFailureMessage(resolvedConfigPath, error));
   process.exit(11);

@@ -198,7 +198,29 @@ export function assertNoPosixAcl(path: string, runLs: LsRunner): void {
   }
 }
 
-export function loadConfig(path: string, deps: LoadConfigDeps = defaultLoadConfigDeps): Config {
+export interface LoadConfigOptions {
+  /**
+   * Set when the operator named this path explicitly (a `--config` flag). A missing
+   * file is then an ERROR rather than a cue to use defaults.
+   *
+   * Why this exists. Round 4's finding #6 made an UNREADABLE explicit config fatal,
+   * but a MISSING one still slipped through, because the ENOENT branch below turns
+   * any absent file into `ConfigSchema.parse({})` before the caller's error handling
+   * ever sees it. So `doctor ipmi --config /typo.yaml` printed "using defaults",
+   * probed with enforcement OFF, and exited 0, which is exactly the outcome an
+   * operator who set `enforce_ipmitool_min_version: true` was trying to prevent. A
+   * typo therefore silently disabled a security gate. Adversarial review round 5,
+   * finding #2. The DEFAULT path keeps the ENOENT fallback: shipping without a config
+   * file is a supported, documented install.
+   */
+  mustExist?: boolean;
+}
+
+export function loadConfig(
+  path: string,
+  deps: LoadConfigDeps = defaultLoadConfigDeps,
+  opts: LoadConfigOptions = {},
+): Config {
   let fd: number | undefined;
   try {
     fd = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW);
@@ -232,6 +254,10 @@ export function loadConfig(path: string, deps: LoadConfigDeps = defaultLoadConfi
     return config;
   } catch (err: any) {
     if (err.code === "ENOENT") {
+      // "Cannot determine" must not collapse into "safe": an explicitly named file
+      // that is not there tells us nothing about what the operator intended, so it
+      // must not be answered with the shipped defaults.
+      if (opts.mustExist) throw err;
       console.log(`[config] No config file at ${path}, using defaults`);
       return ConfigSchema.parse({});
     }

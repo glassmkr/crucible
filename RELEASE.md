@@ -96,6 +96,8 @@ Single source of truth for cutting a Crucible release. Lives here (the release-t
     - The matcher is easy to make too STRICT, and that direction fails silently: two attempts during #603 under-matched and looked green, and a stale `62` had survived two prior hand reconciles on `/docs/rules` itself. If you touch the matcher, plant a known-bad fixture and confirm it FAILS.
     - The gate also fails on ZERO matches, so a broken matcher cannot report OK.
     - Rule additions have their own checklist beyond the count: see the `glassmkr-rule-change` skill, notably the `gen-rules.mjs` CATEGORY map, which is enforced by `pnpm lint:rule-category` since glassmkr #599 (before that it failed at DEPLOY, not at PR CI).
+    - `pnpm validate:rules` now loads the PRODUCTION `RuleMetadataSchema` and validates every rule YAML against it, not merely that the YAML parses (glassmkr #621, adversarial review round 5 finding #4). Before that a syntactically valid but schema-invalid rule, such as `priority: P9`, passed the gate and then threw `Invalid enum value` at dashboard boot. Its known-bad fixture is `pnpm validate:rules:test`.
+    - `pnpm test:nginx-prune` pins the deploy-time nginx symlink prune (glassmkr #621). It is not a lint, but it is the only automated check on logic that runs `sudo rm` against production nginx, so treat a failure as release-blocking rather than cosmetic.
 
 ## Checklist (copy into the release PR / issue)
 

@@ -31,4 +31,8 @@ jobs:
       # raw_summary). Comments count: a comment dash is what eventually gets
       # copied into a message.
       - run: npm run lint:emdash
+      # Known-bad fixture for the guard above: proves it still FAILS on literal and
+      # escaped dashes. Without it the guard only ever proves today's tree is clean,
+      # so a no-op regression in the guard itself would stay green. Round 5 #6.
+      - run: npm run lint:emdash:test
       - run: npm audit --omit=dev
