@@ -55,6 +55,7 @@ export async function checkPrivilegedWrapper(
 // validated. Everything else takes no argument.
 export type PrivilegedAction =
   | "ipmi-sensor" | "ipmi-sel-info" | "ipmi-sel-elist" | "ipmi-fan"
+  | "ipmi-chassis-status" | "ipmi-chassis-restart-cause"
   | "smart" | "smart-scan" | "zpool"
   | "raid-perccli" | "raid-storcli" | "raid-ssacli" | "raid-arcconf"
   | "dmesg-errcrit" | "dmesg-io"
@@ -155,6 +156,8 @@ export function directCommand(action: PrivilegedAction, args: string[]): { cmd: 
     case "ipmi-sel-info": return { cmd: ipmitool, args: ["sel", "info"] };
     case "ipmi-sel-elist": return { cmd: ipmitool, args: ["sel", "elist"] };
     case "ipmi-fan": return { cmd: ipmitool, args: ["sdr", "type", "Fan"] };
+    case "ipmi-chassis-status": return { cmd: ipmitool, args: ["chassis", "status"] };
+    case "ipmi-chassis-restart-cause": return { cmd: ipmitool, args: ["chassis", "restart_cause"] };
     case "smart-scan": return { cmd: "smartctl", args: ["--scan-open"] };
     case "smart": {
       const dev = args[0] ?? "";
@@ -282,6 +285,8 @@ case "$action" in
   ipmi-sel-info)  exec ipmitool sel info ;;
   ipmi-sel-elist) exec ipmitool sel elist ;;
   ipmi-fan)       exec ipmitool sdr type Fan ;;
+  ipmi-chassis-status)        exec ipmitool chassis status ;;
+  ipmi-chassis-restart-cause) exec ipmitool chassis restart_cause ;;
   smart-scan)     exec smartctl --scan-open ;;
   smart)
     dev="\${1:-}"

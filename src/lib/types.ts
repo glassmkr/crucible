@@ -21,6 +21,13 @@ export interface Snapshot {
   network: NetworkInfo[];
   raid: RaidInfo[];
   ipmi: IpmiInfo;
+  /** Chassis power provenance from Get Chassis Status + Get System Restart Cause
+   *  (Crucible 0.15.0+). Facts only, no verdict: `last_power_event` is a decoded BIT
+   *  SET and a healthy host can legitimately assert `ac_failed`, and `restart_cause`
+   *  identifies a management path rather than an actor. Feeds the reboot root-cause
+   *  rollup once platforms are calibrated; must never be rendered as a cause on its
+   *  own. Omitted when the host has no BMC to ask. */
+  chassis?: ChassisInfo;
   dmi?: DmiInfo;
   thermal?: ThermalInfo;
   os_alerts: OsAlerts;
@@ -932,6 +939,41 @@ export type IpmiCapability =
       reason: "no_ipmitool_binary" | "no_bmc_device" | "execution_failed" | "permission_denied" | "ipmitool_cve_2020_5208";
       detail?: string;
     };
+
+/** Decoded `Last Power Event` bit set from Get Chassis Status. A SET, not a scalar:
+ *  several bits can be asserted at once, and a healthy host can legitimately report
+ *  `ac-failed`. Never render as a cause. */
+export interface LastPowerEvent {
+  raw: string;
+  /** False when the BMC reported no last power event at all. */
+  present: boolean;
+  ac_failed: boolean;
+  power_overload: boolean;
+  power_interlock: boolean;
+  power_fault: boolean;
+  /** Bit 4: last power-ON was via an IPMI command. The other four describe the last
+   *  power-DOWN, so this one answers a different causal layer. */
+  powered_on_by_command: boolean;
+  unrecognised_tokens?: string[];
+}
+
+/** `ipmitool chassis restart_cause`. `code` is the IPMI numeric value; null means the
+ *  vendor wording was not recognised, in which case only `raw` is trustworthy. */
+export interface RestartCause {
+  raw: string;
+  code: number | null;
+  label: string;
+}
+
+/** Chassis power provenance (Crucible 0.15.0+). Facts only; forms no verdict. */
+export interface ChassisInfo {
+  last_power_event: LastPowerEvent | null;
+  restart_cause: RestartCause | null;
+  power_restore_policy: string | null;
+  power_overload_now: boolean | null;
+  main_power_fault_now: boolean | null;
+  power_control_fault_now: boolean | null;
+}
 
 export interface IpmiInfo {
   available: boolean;
