@@ -23,6 +23,7 @@
 import { existsSync, readFileSync, readdirSync } from "fs";
 
 import { run, runDetailed, looksLikeFieldRenameError, isUnitActive } from "../lib/exec.js";
+import { classifyProbe, type GpuCapability } from "../lib/gpu-capability.js";
 import { readDmesg, parseKernelLogTimestamp } from "../lib/dmesg.js";
 import type {
   Gpu,
@@ -362,7 +363,9 @@ async function collectTier1(): Promise<Tier1Snapshot | { available: false; reaso
 
   // NVLink basic state per GPU.
   for (const gpu of gpus) {
-    gpu.nvlink_links = await collectNvLinkBasic(gpu.index);
+    const nv = await collectNvLinkBasic(gpu.index);
+    gpu.nvlink_links = nv.links;
+    gpu.nvlink_capability = nv.capability;
   }
 
   // XID events from dmesg (last 24h).
@@ -437,6 +440,7 @@ export function parseNvidiaSmiCsvRow(line: string): Gpu | null {
     power_violation_total_ms: null,   // Tier 2 enriches
     fan_speed_percent: nullableNum(28),
     nvlink_links: [], // set by collectNvLinkBasic
+    nvlink_capability: null, // set by collectNvLinkBasic
     performance_state_reasons: [], // set by enrichThrottleReasons
   };
 }
@@ -512,14 +516,25 @@ async function enrichThrottleReasons(gpus: Gpu[]): Promise<void> {
   }
 }
 
-async function collectNvLinkBasic(gpuIndex: number): Promise<NvLinkBasic[]> {
-  const out = await run(
+async function collectNvLinkBasic(
+  gpuIndex: number,
+): Promise<{ links: NvLinkBasic[]; capability: GpuCapability }> {
+  const res = await runDetailed(
     "nvidia-smi",
     ["nvlink", "--status", "-i", String(gpuIndex)],
     NVIDIA_SMI_TIMEOUT_MS,
   );
-  if (!out) return [];
-  return parseNvLinkStatus(out);
+  // A card with no NVLink returns exit 0, EMPTY stdout and EMPTY stderr, which is
+  // byte-for-byte what a total link failure would look like. Confirmed on our own
+  // L4 on 2026-08-02. So the usable-content test is "did we see at least one Link
+  // line", not "is stdout non-empty".
+  const capability = classifyProbe("nvlink.status", res, (stdout) =>
+    /^\s*Link\s+\d+:/m.test(stdout),
+  );
+  if (capability.status !== "supported") {
+    return { links: [], capability };
+  }
+  return { links: parseNvLinkStatus(res.stdout ?? ""), capability };
 }
 
 export function parseNvLinkStatus(raw: string): NvLinkBasic[] {

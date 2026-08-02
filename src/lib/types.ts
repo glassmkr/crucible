@@ -121,6 +121,8 @@ export interface GpuCapabilities {
   probe_duration_ms: number;
 }
 
+import type { GpuCapability } from "./gpu-capability.js";
+
 export interface NvLinkBasic {
   link_id: number;
   state: "up" | "down" | "inactive";
@@ -176,6 +178,14 @@ export interface Gpu {
   power_violation_total_ms: number | null;
   fan_speed_percent: number | null;
   nvlink_links: NvLinkBasic[];
+  /**
+   * Why nvlink_links looks the way it does. An empty array is ambiguous on its own:
+   * `nvidia-smi nvlink -s` on a card with no NVLink exits 0 with zero bytes of
+   * stdout and an empty stderr, which is byte-for-byte what a total link failure
+   * would look like. Confirmed on our own L4, 2026-08-02. Consumers MUST check this
+   * before reading an empty list as a measurement.
+   */
+  nvlink_capability: GpuCapability | null;
   performance_state_reasons: string[];
 }
 
