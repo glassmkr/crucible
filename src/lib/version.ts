@@ -11,9 +11,19 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 
+// Injected at single-file-binary build time via `bun build --compile --define`
+// (see scripts/build-binaries.sh). A compiled binary has no package.json on
+// disk next to it, so without this it would self-report "0.0.0" in every
+// snapshot's collector_version. Undefined under node/tsc, where the file
+// read below is the source of truth.
+declare const CRUCIBLE_INJECTED_VERSION: string | undefined;
+
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
 function readPkgVersion(): string {
+  if (typeof CRUCIBLE_INJECTED_VERSION === "string" && CRUCIBLE_INJECTED_VERSION) {
+    return CRUCIBLE_INJECTED_VERSION;
+  }
   // src/lib/version.ts -> ../../package.json under src layout, but at
   // runtime (compiled to dist/lib/version.js) it's still ../../package.json.
   // Both paths resolve correctly because package.json sits one level above
