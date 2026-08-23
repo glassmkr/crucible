@@ -7,7 +7,41 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 Pre-1.0 convention: minor bumps may include breaking changes; we call them
 out under `### Breaking` so downstream consumers can audit.
 
+From 1.0.0 the frozen compatibility surface is the config schema, the CLI
+(flags and exit codes), the privileged wrapper's action set, and the dashboard
+API contract the agent speaks; breaking any of those is a major version. The
+full policy and the freeze-review record live in
+[docs/V1_FREEZE.md](docs/V1_FREEZE.md).
+
 ## [Unreleased]
+
+### Added
+
+- **`--config`/`-c` on `init` and `enroll`**, matching the run and doctor
+  spelling; `--config-path` remains as a compatibility alias.
+- **A bare-base `--ingest-url` now works**: `http://host:3000` gets the
+  canonical `/api/v1/ingest` path appended (with a log line saying so)
+  instead of failing only at first push. Explicit paths are respected as-is.
+- **The daemon honours the dashboard's `min_supported` version** from
+  `GET /api/v1/version`, warning when it runs below the floor. The field was
+  part of the contract but never read.
+- **Single-file Linux binaries** (x64/arm64, no Node.js required) attach to
+  every GitHub Release from this version on, with SHA256SUMS.
+- `docs/EXIT_CODES.md`: the numeric exit codes of every subcommand,
+  previously undocumented; `config/crucible.example.yaml`: the complete
+  config schema with defaults (replaces the legacy-named
+  `collector.example.yaml`, which documented roughly half the keys).
+
+### Changed
+
+- **Unknown `init`/`enroll` arguments are now errors** instead of silent
+  no-ops. A typo'd flag used to be ignored, leaving the operator believing an
+  option was in effect when it was not.
+- **The unknown-config-key warning covers the whole file**, not just
+  `collection:`. A typo under `dashboard:`, `thresholds:`, `channels:`, or
+  `prometheus:` now warns with the key name, and a stale pre-0.10 `forge:`
+  block gets a pointed message explaining the dashboard push reads
+  `dashboard:` (it used to vanish silently, taking reporting down with it).
 
 ## [0.15.1] - 2026-08-02
 

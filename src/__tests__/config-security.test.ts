@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { assertNoPosixAcl, assertSecureConfigStat, configLoadFailureMessage, loadConfig, unknownCollectionKeys } from "../config.js";
+import { assertNoPosixAcl, assertSecureConfigStat, configLoadFailureMessage, loadConfig, unknownCollectionKeys, unknownConfigKeys } from "../config.js";
 
 const tempDirs: string[] = [];
 
@@ -151,5 +151,47 @@ describe("unknownCollectionKeys (2026-07-30 review finding #4)", () => {
     expect(unknownCollectionKeys({})).toEqual([]);
     expect(unknownCollectionKeys("nope")).toEqual([]);
     expect(unknownCollectionKeys(["ipmi"])).toEqual([]);
+  });
+});
+
+// v1 freeze review (2026-08-23): the unknown-key warning covered only
+// `collection:`; the same typo-into-silent-default trap existed under every
+// other block, and a stale 0.9.x `forge:` block vanished without a word,
+// silently disabling the push. These are the known-bad fixtures.
+describe("unknownConfigKeys (v1 freeze: all blocks)", () => {
+  it("flags a stale top-level forge: block", () => {
+    const found = unknownConfigKeys({ forge: { enabled: true, url: "https://x", api_key: "k" } });
+    expect(found.some((f) => f.block === "(top level)" && f.keys.includes("forge"))).toBe(true);
+  });
+  it("flags a typo under dashboard:", () => {
+    const found = unknownConfigKeys({ dashboard: { enabled: true, api_kee: "oops" } });
+    expect(found.some((f) => f.block === "dashboard" && f.keys.includes("api_kee"))).toBe(true);
+  });
+  it("flags a typo under thresholds: despite the superRefine wrapper", () => {
+    const found = unknownConfigKeys({ thresholds: { disk_precent: 90 } });
+    expect(found.some((f) => f.block === "thresholds" && f.keys.includes("disk_precent"))).toBe(true);
+  });
+  it("flags a typo in a nested channels sub-block", () => {
+    const found = unknownConfigKeys({ channels: { telegram: { bot_tokn: "x" } } });
+    expect(found.some((f) => f.block === "channels.telegram" && f.keys.includes("bot_tokn"))).toBe(true);
+  });
+  it("still flags collection typos (parity with the old guard)", () => {
+    const found = unknownConfigKeys({ collection: { enforce_ipmitool_min_versions: true } });
+    expect(found.some((f) => f.block === "collection" && f.keys.includes("enforce_ipmitool_min_versions"))).toBe(true);
+  });
+  it("a fully valid config produces no findings", () => {
+    expect(unknownConfigKeys({
+      server_name: "x",
+      collection: { ipmi: true },
+      dashboard: { enabled: true, url: "https://app.glassmkr.com", api_key: "k" },
+      thresholds: { ram_percent: 90 },
+      channels: { telegram: { enabled: false } },
+      prometheus: { enabled: false },
+    })).toEqual([]);
+  });
+  it("non-object input returns no findings, no throw", () => {
+    expect(unknownConfigKeys(null)).toEqual([]);
+    expect(unknownConfigKeys("nope")).toEqual([]);
+    expect(unknownConfigKeys([1, 2])).toEqual([]);
   });
 });

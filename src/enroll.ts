@@ -244,7 +244,10 @@ export async function runEnroll(opts: EnrollOptions, deps: EnrollDeps): Promise<
       configPath: opts.configPath,
       noStart: opts.noStart,
       force: opts.force,
-      noVerify: opts.noVerify ?? true,
+      // Default false (verify) for programmatic callers too; the CLI always
+      // passes an explicit value, so this only ever affected direct API use,
+      // where skip-verify-by-default was the unsafe surprise (v1 freeze).
+      noVerify: opts.noVerify ?? false,
       apiKeyFromArgv: false,
       allowInsecureEndpoint: opts.allowInsecureEndpoint,
       allowedEndpointOrigins: policy.allowedOrigins,

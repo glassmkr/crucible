@@ -131,6 +131,48 @@ export function unknownCollectionKeys(rawCollection: unknown): string[] {
   return Object.keys(rawCollection as Record<string, unknown>).filter((k) => !known.has(k));
 }
 
+// Unwrap ZodDefault / ZodOptional / ZodEffects (superRefine) down to the
+// object shape, or null for leaf schemas. Bounded loop: wrappers do not nest
+// deeper than a few levels and a cycle here would be a schema bug.
+function objectShapeOf(schema: unknown): Record<string, unknown> | null {
+  let s: any = schema;
+  for (let i = 0; i < 8 && s; i++) {
+    if (typeof s.removeDefault === "function") { s = s.removeDefault(); continue; }
+    if (s._def?.typeName === "ZodOptional" && typeof s.unwrap === "function") { s = s.unwrap(); continue; }
+    if (s._def?.typeName === "ZodEffects" && s._def.schema) { s = s._def.schema; continue; }
+    break;
+  }
+  return s?._def?.typeName === "ZodObject" ? s.shape : null;
+}
+
+/**
+ * Every key the operator wrote, in any block, that the schema does not define.
+ *
+ * Generalizes unknownCollectionKeys to the whole file (v1 freeze review,
+ * 2026-08-23): the typo-into-silent-default trap it closed for `collection:`
+ * existed identically under `dashboard:`, `thresholds:`, `channels:`, and
+ * `prometheus:`, and at the top level, where a stale 0.9.x `forge:` block was
+ * silently stripped, which silently disables the dashboard push. Same design
+ * choice as the original: warn, never throw (a config that stops the agent is
+ * the worse failure). Exported for unit tests; pure.
+ */
+export function unknownConfigKeys(parsed: unknown): { block: string; keys: string[] }[] {
+  const out: { block: string; keys: string[] }[] = [];
+  const walk = (blockName: string, raw: unknown, schema: unknown) => {
+    const shape = objectShapeOf(schema);
+    if (!shape || !raw || typeof raw !== "object" || Array.isArray(raw)) return;
+    const known = new Set(Object.keys(shape));
+    const stray = Object.keys(raw as Record<string, unknown>).filter((k) => !known.has(k));
+    if (stray.length > 0) out.push({ block: blockName, keys: stray });
+    for (const key of known) {
+      const childName = blockName === "(top level)" ? key : `${blockName}.${key}`;
+      walk(childName, (raw as Record<string, unknown>)[key], shape[key]);
+    }
+  };
+  walk("(top level)", parsed, ConfigSchema);
+  return out;
+}
+
 export function configLoadFailureMessage(path: string, error: unknown): string {
   const detail = error instanceof Error ? error.message : String(error);
   return `[config] Refusing to start: ${path} failed integrity or schema validation: ${detail}`;
@@ -236,13 +278,22 @@ export function loadConfig(
         console.warn("[config] WARNING: config is not yet root-owned; run `sudo glassmkr-crucible init` to complete the security migration");
       }
     }
-    const strayKeys = unknownCollectionKeys((parsed as any)?.collection);
-    if (strayKeys.length > 0 && !warnedUnknownKeyPaths.has(path)) {
+    const strayBlocks = unknownConfigKeys(parsed);
+    if (strayBlocks.length > 0 && !warnedUnknownKeyPaths.has(path)) {
       warnedUnknownKeyPaths.add(path);
-      console.warn(
-        `[config] WARNING: ignoring unknown key(s) under collection: ${strayKeys.join(", ")}. ` +
-        "These were dropped, so any setting you expected them to change is still at its default. Check for a typo.",
-      );
+      for (const { block, keys } of strayBlocks) {
+        const where = block === "(top level)" ? "at the top level" : `under ${block}`;
+        console.warn(
+          `[config] WARNING: ignoring unknown key(s) ${where}: ${keys.join(", ")}. ` +
+          "These were dropped, so any setting you expected them to change is still at its default. Check for a typo.",
+        );
+        if (block === "(top level)" && keys.includes("forge")) {
+          console.warn(
+            "[config] WARNING: a legacy `forge:` block was found and ignored; the dashboard push reads `dashboard:` " +
+            "since v0.10. If this host stopped reporting, that is why. Re-run `sudo glassmkr-crucible init` or rename the block.",
+          );
+        }
+      }
     }
     if (!config.thresholds.acknowledge_disabled_detection && thresholdsDisableDetection(config.thresholds)) {
       config.detection_disabled = true;

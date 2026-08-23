@@ -90,8 +90,10 @@ export interface InitDeps {
 }
 
 export const DEFAULT_INGEST_URL = "https://app.glassmkr.com/api/v1/ingest";
-export const DEFAULT_CONFIG_PATH = "/etc/glassmkr/crucible.yaml";
-export const LEGACY_CONFIG_PATH = "/etc/glassmkr/collector.yaml";
+// Single source of truth for these two paths is cli.ts; re-exported here so
+// existing importers keep working (v1 freeze: they were defined twice).
+export { DEFAULT_CONFIG_PATH, LEGACY_CONFIG_PATH } from "./cli.js";
+import { DEFAULT_CONFIG_PATH, LEGACY_CONFIG_PATH } from "./cli.js";
 export const SYSTEMD_UNIT_PATH = "/etc/systemd/system/glassmkr-crucible.service";
 
 const KEY_RE_NEW = /^gmk_cru_live_[A-Za-z0-9]{20,}_[A-Za-z0-9]{4}$/;
@@ -465,7 +467,22 @@ function stopLegacyRootUnitAfterFatalSetup(deps: InitDeps): void {
  * (0 = success). Pure orchestration; no side effects on `process`.
  */
 export async function runInit(opts: InitOptions, deps: InitDeps): Promise<number> {
-  const rawIngestUrl = opts.ingestUrl ?? DEFAULT_INGEST_URL;
+  let rawIngestUrl = opts.ingestUrl ?? DEFAULT_INGEST_URL;
+  // Convenience for self-hosted dashboards (v1 freeze): a bare base URL
+  // ("http://host:3000") gets the canonical ingest path appended, because a
+  // pathless URL would otherwise POST to "/" and fail only at push time,
+  // after init reported success. An explicit non-root path is respected
+  // as-is; an unparseable URL falls through to validateEndpoint's error.
+  if (opts.ingestUrl) {
+    try {
+      const u = new URL(rawIngestUrl);
+      if (u.pathname === "/" && !u.search && !u.hash) {
+        u.pathname = "/api/v1/ingest";
+        rawIngestUrl = u.toString();
+        deps.log(`[init] --ingest-url has no path; using ${rawIngestUrl}`);
+      }
+    } catch { /* validateEndpoint below reports the real error */ }
+  }
   const configPath = opts.configPath ?? DEFAULT_CONFIG_PATH;
   const isCanonicalPath = configPath === DEFAULT_CONFIG_PATH;
   const repairMode = !opts.force && (

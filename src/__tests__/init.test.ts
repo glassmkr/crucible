@@ -633,3 +633,22 @@ describe("setupPrivilegeSeparation wrapper hardening (Codex #6)", () => {
     expect(() => setupPrivilegeSeparation(deps, DEFAULT_CONFIG_PATH)).toThrow("escalation path may remain");
   });
 });
+
+// v1 freeze (2026-08-23): a bare-base --ingest-url gets the canonical path.
+describe("ingest url path normalization", () => {
+  async function initWith(url: string) {
+    const { deps, logs, fs } = makeDeps();
+    const code = await runInit({ apiKey: VALID_NEW_KEY, ingestUrl: url, noStart: true, force: true, noVerify: true, allowInsecureEndpoint: true }, deps);
+    return { code, logs, fs };
+  }
+  it("appends /api/v1/ingest to a pathless URL and says so", async () => {
+    const { code, logs } = await initWith("http://my-dash:3000");
+    expect(code).toBe(0);
+    expect(logs.some((l) => l.includes("http://my-dash:3000/api/v1/ingest"))).toBe(true);
+  });
+  it("respects an explicit non-root path as-is", async () => {
+    const { code, logs } = await initWith("http://my-dash:3000/custom/ingest");
+    expect(code).toBe(0);
+    expect(logs.some((l) => l.includes("has no path"))).toBe(false);
+  });
+});

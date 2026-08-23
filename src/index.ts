@@ -13,6 +13,10 @@ if (cliArgs.mode === "version" || cliArgs.mode === "help") {
   console.log(cliOutput);
   process.exit(0);
 }
+if (cliArgs.mode === "cli-error") {
+  console.error(cliOutput);
+  process.exit(2);
+}
 if (cliArgs.mode === "doctor-ipmi") {
   const { runDoctorIpmi } = await import("./doctor.js");
   const { report, exitCode } = await runDoctorIpmi(cliArgs.configPath);
