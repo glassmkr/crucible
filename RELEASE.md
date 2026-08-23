@@ -51,6 +51,8 @@ Single source of truth for cutting a Crucible release. Lives here (the release-t
    ```
    Only create it by hand (`gh release create vX.Y.Z --title "vX.Y.Z" --notes "<customer-facing notes>"`) if the workflow's Release step failed.
 
+   **8a. Verify the binaries attached.** After the Release exists, the workflow's `binaries` job builds single-file Linux x64/arm64 executables with bun (`scripts/build-binaries.sh`; the script itself asserts the injected version took, guarding the 0.0.0 case) and uploads them plus `SHA256SUMS` as release assets. Confirm with `gh release view vX.Y.Z` (assets listed at the bottom). GPG-signing `SHA256SUMS` remains a manual maintainer step via `scripts/sign-release.sh`; the signing key never lives in CI.
+
 9. **Fleet / customer roll.** The fix only takes effect once a host runs the new version. Roll per host **sequentially** (verify each before the next), do not parallelize across shared hosts.
 
    **9a. Check the host's Node version BEFORE installing.** `package.json` declares `engines: node >= 22.19.0` and that floor is enforced at runtime: since 0.14.7 `src/preflight.ts` exits with a clear message on an older Node, and 0.14.6 (no preflight yet) died at import inside `undici` and then crash-looped forever on the unit's `Restart=always`. Either way the host silently stops reporting and the dashboard shows only `server_unreachable`. Upgrade Node first, never after.
