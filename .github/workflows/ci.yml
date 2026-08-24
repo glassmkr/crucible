@@ -36,6 +36,13 @@ jobs:
       # so a no-op regression in the guard itself would stay green. Round 5 #6.
       - run: npm run lint:emdash:test
       - run: npm audit --omit=dev
+      # Launch gate 11: notices are generator-owned; fail on drift from the
+      # installed production tree.
+      - name: Third-party notices drift
+        run: |
+          set -euo pipefail
+          node scripts/gen-third-party-notices.mjs
+          git diff --exit-code THIRD_PARTY_NOTICES.md
 
   # DCO sign-off (round-2 s1.3, 2026-08-24): every PR commit must carry
   # Signed-off-by. Contribution policy is DCO, not CLA; see CONTRIBUTING.md.

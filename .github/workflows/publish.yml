@@ -137,6 +137,10 @@ jobs:
       - run: npm ci --ignore-scripts
       - name: Build binaries
         run: ./scripts/build-binaries.sh dist-bin
+      # Launch gate 11: a CycloneDX SBOM of the production tree ships as a
+      # release asset alongside the binaries and checksums.
+      - name: SBOM (CycloneDX)
+        run: npx --yes @cyclonedx/cyclonedx-npm --omit dev --output-file dist-bin/sbom.cdx.json
       - name: Attach to release
         env:
           GH_TOKEN: ${{ github.token }}
@@ -145,4 +149,5 @@ jobs:
           gh release upload "${GITHUB_REF_NAME}" --repo "$GITHUB_REPOSITORY" \
             dist-bin/glassmkr-crucible-linux-x64 \
             dist-bin/glassmkr-crucible-linux-arm64 \
-            dist-bin/SHA256SUMS
+            dist-bin/SHA256SUMS \
+            dist-bin/sbom.cdx.json
