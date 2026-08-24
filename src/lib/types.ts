@@ -117,6 +117,17 @@ export interface Snapshot {
   /** Per-CPU scaling frequencies + governor from sysfs cpufreq. Omitted
    *  on hosts without cpufreq (VMs, kernels without the subsystem). */
   cpufreq?: CpufreqSnapshot;
+  /** Per-NUMA-node memory occupancy + allocation-locality rates from
+   *  /sys/devices/system/node. Omitted when the kernel exposes no nodeN
+   *  dirs; a single-node host still emits (one node is an answer). */
+  numa?: NumaSnapshot;
+  /** ZFS ARC cache statistics from /proc/spl/kstat/zfs/arcstats. Omitted
+   *  when ZFS is not loaded: absent means not-loaded, never zero. */
+  zfs_arc?: ZfsArcSnapshot;
+  /** Host-wide PCIe AER error totals from /sys/bus/pci/devices. Omitted
+   *  when no device exposes the aer_dev_* files: absent means AER not
+   *  enabled, never zero errors. */
+  pcie_aer?: PcieAerSnapshot;
 }
 
 // === Host activity (/proc/stat ctxt/processes/procs_*) ===
@@ -171,6 +182,100 @@ export interface CpufreqSnapshot {
   /** Mean current frequency across CPUs (rounded to whole kHz); null
    *  when none readable. */
   cur_khz_mean: number | null;
+}
+
+// === NUMA (/sys/devices/system/node) ===
+
+export interface NumaNode {
+  /** Node ordinal (the N in /sys/devices/system/node/nodeN). */
+  node: number;
+  /** Node memory capacity in kB (nodeN/meminfo MemTotal); null when the
+   *  line is absent or malformed. */
+  mem_total_kb: number | null;
+  /** Free node memory in kB (nodeN/meminfo MemFree); null when the line
+   *  is absent or malformed. */
+  mem_free_kb: number | null;
+  /** Cumulative allocations satisfied on the intended node (numastat
+   *  numa_hit); null when the counter is absent. */
+  numa_hit_total: number | null;
+  /** Per-second numa_hit rate over the most recent interval; null on the
+   *  first snapshot, after a counter reset, or when the counter is
+   *  absent. */
+  numa_hit_rate: number | null;
+  /** Cumulative allocations that fell through to this node because the
+   *  intended one was full (numastat numa_miss); null when absent. */
+  numa_miss_total: number | null;
+  /** Per-second numa_miss rate; null on the first snapshot, after a
+   *  reset, or when the counter is absent. */
+  numa_miss_rate: number | null;
+  /** Cumulative allocations intended for this node but satisfied
+   *  elsewhere (numastat numa_foreign); null when absent. */
+  numa_foreign_total: number | null;
+  /** Per-second numa_foreign rate; null on the first snapshot, after a
+   *  reset, or when the counter is absent. */
+  numa_foreign_rate: number | null;
+}
+
+export interface NumaSnapshot {
+  /** One entry per nodeN dir, ordered by node ordinal. */
+  nodes: NumaNode[];
+  /** Number of nodeN dirs found. 1 on a single-node host (still
+   *  emitted: single-node is an answer, not an absence). */
+  node_count: number;
+  /** Spread between the most- and least-used node in percentage points
+   *  of each node's own capacity (used = MemTotal - MemFree). 0 on a
+   *  single readable node; null when no node's meminfo was readable. */
+  max_mem_used_imbalance_pct: number | null;
+}
+
+// === ZFS ARC (/proc/spl/kstat/zfs/arcstats) ===
+
+export interface ZfsArcSnapshot {
+  /** Current ARC size in bytes (arcstats `size`); null when the row is
+   *  absent or malformed. */
+  size_bytes: number | null;
+  /** ARC target size in bytes (arcstats `c`); null when the row is
+   *  absent or malformed. */
+  target_bytes: number | null;
+  /** Cumulative ARC hits since module load; null when the row is
+   *  absent. */
+  hits_total: number | null;
+  /** Cumulative ARC misses since module load; null when the row is
+   *  absent. */
+  misses_total: number | null;
+  /** Hit ratio in percent over the most recent interval, computed from
+   *  the hits/misses deltas (never the since-boot totals). Null on the
+   *  first snapshot, after a counter reset, and when the interval saw
+   *  zero lookups. */
+  hit_ratio_pct: number | null;
+}
+
+// === PCIe AER (/sys/bus/pci/devices/STAR/aer_dev_*) ===
+
+export interface PcieAerDevice {
+  /** PCI address (the sysfs dir name, e.g. "0000:00:1c.0"). */
+  device: string;
+  /** Total correctable errors; null when the file is missing or
+   *  unparsable on this device. */
+  correctable: number | null;
+  /** Total uncorrectable-nonfatal errors; null when missing/unparsable. */
+  nonfatal: number | null;
+  /** Total uncorrectable-fatal errors; null when missing/unparsable. */
+  fatal: number | null;
+}
+
+export interface PcieAerSnapshot {
+  /** Only devices with at least one nonzero count; empty on a clean
+   *  host that still exposes the files. */
+  devices: PcieAerDevice[];
+  /** Number of devices exposing at least one aer_dev_* file. */
+  devices_reporting: number;
+  /** Sum of correctable totals across all reporting devices. */
+  correctable_total: number;
+  /** Sum of uncorrectable-nonfatal totals across all reporting devices. */
+  nonfatal_total: number;
+  /** Sum of uncorrectable-fatal totals across all reporting devices. */
+  fatal_total: number;
 }
 
 // === C19 GPU ===
@@ -953,6 +1058,21 @@ export interface NetworkInfo {
   operstate?: string; // "up", "down", "unknown", etc. from /sys/class/net/{iface}/operstate
   bond_master?: string; // if this interface is a bond slave, the bond name
   is_bond_master?: boolean; // true when this entry represents the bond aggregate
+  /** Cumulative carrier up/down transitions since the interface
+   *  registered (/sys/class/net/IFACE/carrier_changes). Catches a flap
+   *  BETWEEN snapshots that operstate alone would miss. Absent when the
+   *  kernel does not expose the file. Added 2026-08-24. */
+  carrier_changes?: number;
+  /** Carrier transitions since the previous snapshot (flap detection).
+   *  Null on the first cycle for an interface (no baseline, never 0);
+   *  absent when carrier_changes itself is absent. */
+  carrier_changes_delta?: number | null;
+  /** Cumulative carrier-up transitions (kernel 4.16+). Absent when the
+   *  file is not exposed. */
+  carrier_up_count?: number;
+  /** Cumulative carrier-down transitions (kernel 4.16+). Absent when
+   *  the file is not exposed. */
+  carrier_down_count?: number;
 }
 
 export interface RaidInfo {
@@ -962,6 +1082,25 @@ export interface RaidInfo {
   degraded: boolean;
   disks: string[];
   failed_disks: string[];
+  /** In-progress sync operation parsed from the array's /proc/mdstat
+   *  progress line. Absent when no operation is running (queued
+   *  "resync=DELAYED"/"PENDING" markers are not a running operation).
+   *  Added 2026-08-24. */
+  sync_action?: RaidSyncAction;
+}
+
+export interface RaidSyncAction {
+  /** The operation named on the mdstat progress line. */
+  operation: "resync" | "recovery" | "check" | "reshape";
+  /** Completion percent (e.g. 12.6); null when the value on a matched
+   *  line was malformed. */
+  percent: number | null;
+  /** Kernel finish estimate in minutes; null when the line carries no
+   *  finish= piece (start of an operation) or it was malformed. */
+  finish_min: number | null;
+  /** Sync speed in KiB/s (mdstat's K/sec); null when the line carries
+   *  no speed= piece or it was malformed. */
+  speed_kb_s: number | null;
 }
 
 export interface SelEvent {
@@ -1183,6 +1322,36 @@ export interface ThermalInfo {
   cpu_readings: ThermalReading[];
   other_readings: ThermalReading[];
   max_cpu_celsius: number | null;
+  /** hwmon fan tachometers (fanN_input), collectd sensors parity close
+   *  2026-08-24. A 0 rpm reading is included unless fanN_enable says the
+   *  sensor is disabled: a stopped fan is a signal, not noise. Omitted
+   *  when no fan sensor is exposed (absent means none, never zero fans). */
+  fans?: HwmonFanReading[];
+  /** hwmon voltage rails (inN_input, millivolts as read), collectd
+   *  sensors parity close 2026-08-24. Omitted when no voltage sensor is
+   *  exposed. */
+  voltages?: HwmonVoltageReading[];
+}
+
+export interface HwmonFanReading {
+  /** "chip label" or "chip fanN" when the sensor has no label file. */
+  label: string;
+  /** fanN_input as read (rpm). 0 is a real reading (stopped fan) unless
+   *  fanN_enable was 0, in which case the sensor is skipped entirely. */
+  rpm: number;
+  source_chip: string;
+  /** Same per-device disambiguator as ThermalReading.chip_id. */
+  chip_id?: string;
+}
+
+export interface HwmonVoltageReading {
+  /** "chip label" or "chip inN" when the sensor has no label file. */
+  label: string;
+  /** inN_input as read (millivolts per the hwmon ABI). */
+  millivolts: number;
+  source_chip: string;
+  /** Same per-device disambiguator as ThermalReading.chip_id. */
+  chip_id?: string;
 }
 
 export interface OsAlerts {

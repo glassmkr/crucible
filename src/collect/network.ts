@@ -19,6 +19,7 @@ interface PreviousCounters {
   rx_frame_errors?: number;
   rx_length_errors?: number;
   tx_carrier_errors?: number;
+  carrier_changes?: number;
 }
 
 const previousCounters = new Map<string, PreviousCounters>();
@@ -96,6 +97,57 @@ function delta(current: number, previous: number): number {
   return current; // counter wrapped or reset
 }
 
+const NET_CLASS_ROOT = "/sys/class/net";
+
+// Read a bare-integer file directly under /sys/class/net/IFACE/ (not the
+// statistics/ subdir readStatCounter serves). undefined on any failure.
+function readIfaceCounter(root: string, iface: string, name: string): number | undefined {
+  try {
+    const raw = readFileSync(`${root}/${iface}/${name}`, "utf-8").trim();
+    if (!/^\d+$/.test(raw)) return undefined;
+    const val = parseInt(raw, 10);
+    return Number.isFinite(val) ? val : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+export interface CarrierFlaps {
+  carrier_changes: number;
+  carrier_changes_delta: number | null;
+  carrier_up_count?: number;
+  carrier_down_count?: number;
+}
+
+// Link-flap counters (collectd connectivity parity close, 2026-08-24).
+// /sys/class/net/IFACE/carrier_changes counts every carrier transition
+// since the interface registered, so a flap BETWEEN two ~5-minute
+// snapshots still moves the counter even though operstate looks fine at
+// both sample instants. carrier_up_count/carrier_down_count (kernel
+// 4.16+) split the direction where present. Returns null when the
+// kernel does not expose carrier_changes at all (field stays absent);
+// the delta is null on the first cycle for an interface (no baseline),
+// never 0. Interface filtering is the caller's: this only runs for
+// interfaces parseNetDev already kept (loopback/virtual are skipped
+// there). `root` is a test hook.
+export function collectCarrierFlaps(
+  iface: string,
+  prevChanges: number | undefined,
+  root: string = NET_CLASS_ROOT,
+): CarrierFlaps | null {
+  const changes = readIfaceCounter(root, iface, "carrier_changes");
+  if (changes === undefined) return null;
+  const result: CarrierFlaps = {
+    carrier_changes: changes,
+    carrier_changes_delta: prevChanges === undefined ? null : delta(changes, prevChanges),
+  };
+  const up = readIfaceCounter(root, iface, "carrier_up_count");
+  const down = readIfaceCounter(root, iface, "carrier_down_count");
+  if (up !== undefined) result.carrier_up_count = up;
+  if (down !== undefined) result.carrier_down_count = down;
+  return result;
+}
+
 export async function collectNetwork(): Promise<NetworkInfo[]> {
   const stats1 = parseNetDev();
   await sleep(1000);
@@ -110,6 +162,9 @@ export async function collectNetwork(): Promise<NetworkInfo[]> {
     currentIfaces.add(name);
 
     const prev = previousCounters.get(name);
+
+    // Link-flap counters; null when the kernel lacks carrier_changes.
+    const flaps = collectCarrierFlaps(name, prev?.carrier_changes);
 
     // /sys/class/net/*/statistics/ exposes finer-grained RX/TX subtype
     // counters than /proc/net/dev. Read cumulative values here; delta is
@@ -156,6 +211,7 @@ export async function collectNetwork(): Promise<NetworkInfo[]> {
       rx_frame_errors: rxFrameCum,
       rx_length_errors: rxLenCum,
       tx_carrier_errors: txCarrierCum,
+      carrier_changes: flaps?.carrier_changes,
     });
 
     const entry: NetworkInfo = {
@@ -175,6 +231,12 @@ export async function collectNetwork(): Promise<NetworkInfo[]> {
     if (rxFrameDelta !== undefined) entry.rx_frame_errors = rxFrameDelta;
     if (rxLenDelta !== undefined) entry.rx_length_errors = rxLenDelta;
     if (txCarrierDelta !== undefined) entry.tx_carrier_errors = txCarrierDelta;
+    if (flaps) {
+      entry.carrier_changes = flaps.carrier_changes;
+      entry.carrier_changes_delta = flaps.carrier_changes_delta;
+      if (flaps.carrier_up_count !== undefined) entry.carrier_up_count = flaps.carrier_up_count;
+      if (flaps.carrier_down_count !== undefined) entry.carrier_down_count = flaps.carrier_down_count;
+    }
     const master = getBondMaster(name);
     if (master) entry.bond_master = master;
     // Identify bond masters (have at least one slave pointing at them).

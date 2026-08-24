@@ -36,6 +36,37 @@ full policy and the freeze-review record live in
   plus a min/max/mean summary of current frequency; reads the
   world-readable `scaling_cur_freq` (never root-only `cpuinfo_cur_freq`)
   and the field is absent on hosts without cpufreq.
+- **Per-NUMA-node collection** from `/sys/devices/system/node` in the new
+  `numa` snapshot field: MemTotal/MemFree per node, numa_hit/numa_miss/
+  numa_foreign as per-second rates (first cycle and counter resets report
+  null), plus a node count and the max memory-use imbalance across nodes;
+  absent when the kernel exposes no node dirs, and a single-node host
+  still emits.
+- **ZFS ARC cache statistics** from `/proc/spl/kstat/zfs/arcstats` in the
+  new `zfs_arc` snapshot field: ARC size, target size, and an interval
+  hit ratio computed from the hits/misses deltas (null on the first
+  cycle and idle intervals); read without the privileged wrapper, and
+  the field is absent when ZFS is not loaded (never zero).
+- **hwmon fan and voltage sensors** on the existing `thermal` field
+  (`thermal.fans` rpm, `thermal.voltages` millivolts as read, with
+  labels and per-chip ids): a 0 rpm fan is reported unless its
+  `fanN_enable` says disabled, because a stopped fan is a signal; the
+  temperature logic is unchanged.
+- **Interface flap counters** on the existing per-interface network
+  entries: `carrier_changes` (cumulative) plus `carrier_changes_delta`
+  (flaps since the last snapshot, null on the first cycle) and
+  `carrier_up_count`/`carrier_down_count` where the kernel exposes them,
+  so a link flap between two snapshots is no longer invisible.
+- **mdadm sync progress** on the existing `raid` entries: an in-progress
+  resync/recovery/check/reshape line is parsed into `sync_action`
+  (operation, percent, finish estimate in minutes, speed in KiB/s);
+  absent when no operation is running.
+- **Host-wide PCIe AER error totals** from `/sys/bus/pci/devices` in the
+  new `pcie_aer` snapshot field: per-device correctable/nonfatal/fatal
+  totals for devices with nonzero counts plus summary sums across all
+  reporting devices; handles both the `TOTAL_ERR_COUNT` and bare-number
+  file formats, and the field is absent when no device exposes the
+  counters (AER not enabled is not zero errors).
 - **`--config`/`-c` on `init` and `enroll`**, matching the run and doctor
   spelling; `--config-path` remains as a compatibility alias.
 - **A bare-base `--ingest-url` now works**: `http://host:3000` gets the
