@@ -345,6 +345,14 @@ speaks only break on a major version. New collectors, optional snapshot
 fields, and new flags are minor; fixes are patches. The freeze-review record
 is [docs/V1_FREEZE.md](docs/V1_FREEZE.md).
 
+## Support and release cadence
+
+Maintained. Releases happen when there is something to release; security fixes
+are prioritized. Where Crucible has actually been exercised (as opposed to
+where it should work) is recorded in [SUPPORT.md](SUPPORT.md).
+
 ## License
 
-MIT. See [LICENSE](LICENSE).
+MIT. See [LICENSE](LICENSE). Third-party dependency licenses are listed in
+[THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md). This repository does not use
+per-file license headers; the LICENSE file governs the whole tree.
