@@ -17,6 +17,25 @@ full policy and the freeze-review record live in
 
 ### Added
 
+- **Context-switch and fork rates** from `/proc/stat` (`ctxt`, `processes`)
+  as per-second rates in the new `host_activity` snapshot field; the first
+  cycle and counter resets report null, never zero.
+- **Running and blocked process counts** from `/proc/stat`
+  (`procs_running`, `procs_blocked`) in the same `host_activity` field;
+  `procs_blocked` is a disk-trouble signal.
+- **Hugepage pool reporting** from `/proc/meminfo` (`memory.hugepages`:
+  total, free, reserved, page size), emitted only when a pool is
+  configured (`HugePages_Total > 0`) so snapshots stay lean.
+- **Page-fault and page-scan/steal rates** from `/proc/vmstat` on the
+  existing `vmstat` field: `pgfault_rate`, `pgmajfault_rate`, plus
+  `pgscan_rate`/`pgsteal_rate` summed over the reclaim-source counters
+  (the anon/file type-classification twins are excluded to avoid
+  double-counting).
+- **CPU frequency scaling collection** from sysfs cpufreq in the new
+  `cpufreq` snapshot field: per-CPU `scaling_cur_freq`/min/max/governor
+  plus a min/max/mean summary of current frequency; reads the
+  world-readable `scaling_cur_freq` (never root-only `cpuinfo_cur_freq`)
+  and the field is absent on hosts without cpufreq.
 - **`--config`/`-c` on `init` and `enroll`**, matching the run and doctor
   spelling; `--config-path` remains as a compatibility alias.
 - **A bare-base `--ingest-url` now works**: `http://host:3000` gets the

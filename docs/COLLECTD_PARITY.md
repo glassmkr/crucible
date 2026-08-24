@@ -2,6 +2,8 @@
 
 Audit date: 2026-08-23. Compared: collectd 5.12.0 plugin set (official wiki Table of Plugins) vs Crucible 0.15.1 (`package.json`, source under `src/collect/`) plus the dashboard alert rules (`glassmkr/apps/dashboard/src/lib/server/alerts/rules/*.yaml`).
 
+Updated 2026-08-24: five collection closes landed on `oss-v1-sprint` (unreleased): context-switch/fork rates + procs_running/procs_blocked (`src/collect/host-activity.ts`), hugepages (`src/collect/memory.ts`), vmstat page-fault/scan/steal rates (`src/collect/vmstat.ts`), and cpufreq (`src/collect/cpufreq.ts`). Rows and counts below reflect these; the changes are collection-only (no dashboard rules yet).
+
 This matrix gates public comparison claims. Statuses are assigned conservatively: a row is "covered" only when the plugin's primary signal is verifiably collected in Crucible source; anything uncertain or narrower is "partial" with the missing pieces named; "gap" means Crucible collects nothing comparable.
 
 Evidence paths: `src/...` is the crucible repo; rule names refer to YAML files in `glassmkr/apps/dashboard/src/lib/server/alerts/rules/`.
@@ -20,7 +22,7 @@ Evidence paths: `src/...` is the crucible repo; rule names refer to YAML files i
 4. Crucible's `io_latency.*_iops` fields are per-interval operation counts, not per-second rates (`src/collect/io-latency.ts` doc comment). Do not present them as IOPS rates.
 5. GPU Tier 2 (DCGM) and Tier 3 (Redfish OEM) parsers are marked `"stub"` in source (`src/lib/types.ts`, `Tier2Snapshot` / `Tier3Snapshot`). Only Tier 1 (nvidia-smi) is fleet-tested. Claims about DCGM or Redfish GPU telemetry must say "experimental/stub".
 
-## In-scope host and hardware plugins: COVERED (16)
+## In-scope host and hardware plugins: COVERED (19)
 
 | collectd plugin | What it reads | Crucible status | Evidence | Notes |
 |---|---|---|---|---|
@@ -40,6 +42,9 @@ Evidence paths: `src/...` is the crucible repo; rule names refer to YAML files i
 | conntrack | Connection-tracking table usage | covered | `src/collect/conntrack.ts` (count/max/percent + insert_failed and drop rates); rule `conntrack_exhaustion` | |
 | fhcount | File handle usage | covered | `src/collect/fd.ts`: system-wide allocated/max + per-process top-50 with RLIMIT_NOFILE proximity; rule `fd_exhaustion` | |
 | gpu_nvidia | NVIDIA GPU metrics | covered | `src/collect/gpu.ts` Tier 1 (nvidia-smi): utilization, VRAM, temp, power, clocks, ECC volatile/aggregate, retired pages, throttle reasons, XID events, PCIe link gen/width, NVLink link state; rules `gpu_thermal_critical`, `gpu_uncorrected_ecc`, `gpu_corrected_ecc_storm`, `gpu_xid_critical`, `gpu_pcie_link_degraded`, `gpu_power_cap_throttling`, `nvlink_link_down`, `gpu_driver_unsafe_reboot`, `gpu_driver_or_firmware_drift` | Exceeds collectd's NVML metric set, BUT: Tier 2 DCGM and Tier 3 Redfish are stubs; no NVLink saturation; no failure prediction |
+| contextswitch | Context switch rate | covered | `src/collect/host-activity.ts` (/proc/stat `ctxt`, per-second rate; collection-only, no rule) | Also emits fork rate + procs_running/procs_blocked from the same file (see processes row). Added 2026-08-24, unreleased |
+| cpufreq | CPU frequency scaling | covered | `src/collect/cpufreq.ts` (sysfs `scaling_cur_freq`/`scaling_min_freq`/`scaling_max_freq`/`scaling_governor` per CPU + min/max/mean summary; collection-only, no rule) | Reads `scaling_cur_freq` (world-readable), never root-only `cpuinfo_cur_freq`; field absent on hosts without cpufreq (VMs). C-states/package power remain uncovered (turbostat row). Added 2026-08-24, unreleased |
+| hugepages | Hugepage usage | covered | `src/collect/memory.ts` (`memory.hugepages`: HugePages_Total/Free/Rsvd + Hugepagesize, absolute values; collection-only, no rule) | Emitted only when HugePages_Total > 0; absent field means no pool configured. No per-NUMA-node hugepage split. Added 2026-08-24, unreleased |
 
 ## In-scope host and hardware plugins: PARTIAL (16)
 
@@ -50,19 +55,19 @@ Evidence paths: `src/...` is the crucible repo; rule names refer to YAML files i
 | netlink | Detailed interface/qdisc statistics via netlink | partial | `src/collect/network.ts` (sysfs/proc counters) | No qdisc/class statistics; standard counters only |
 | connectivity | Interface up/down (event-driven via netlink) | partial | `src/collect/network.ts` (`operstate` per snapshot), `src/collect/bonding.ts` (`link_failure_count`) | Polled, not event-driven: a flap between ~5-minute samples is missed |
 | mdevents | md RAID event notifications | partial | `src/collect/raid.ts` (state polled each snapshot) | No event-driven udev/mdadm notification; no resync progress |
-| processes | Process counts by state, fork rate, per-process aggregates | partial | `src/collect/os-alerts.ts` (zombie count, OOM kills), `src/collect/fd.ts` (per-process FD top-50) | No total/running/sleeping/blocked counts, no fork rate, no per-process CPU/RSS aggregates |
+| processes | Process counts by state, fork rate, per-process aggregates | partial | `src/collect/os-alerts.ts` (zombie count, OOM kills), `src/collect/fd.ts` (per-process FD top-50); plus, added 2026-08-24 unreleased: `src/collect/host-activity.ts` (fork rate, procs_running, procs_blocked) | No total/sleeping/stopped state breakdown beyond running/blocked, no per-process CPU/RSS aggregates |
 | irq | Interrupt counts per IRQ line | partial | `src/collect/cpu.ts` (per-core irq/softirq CPU-time percent) | No per-IRQ-line counters from /proc/interrupts |
 | protocols | All /proc/net/snmp + netstat protocol counters | partial | `src/collect/tcp-stats.ts` (TCP segments, retransmits, listen overflows/drops); rules `tcp_retrans_high`, `listen_overflow`, `accept_backlog_or_syn_flood` | TCP subset only; no IP/ICMP/UDP counters |
 | ipstats | IP-layer counters | partial | Same as protocols row | IP-layer counters not collected; TCP subset only |
 | ntpd | NTP daemon statistics | partial | `src/collect/ntp.ts` (timedatectl/chronyc: synced, offset, source, daemon running) + `time_drift_ms` in `src/collect/os-alerts.ts`; rules `ntp_not_synced`, `clock_drift` | No per-peer offset/jitter/frequency-error detail |
 | chrony | Chrony tracking statistics | partial | `src/collect/ntp.ts` (`chronyc tracking` parsed) | Sync state and offset only; no sources/peer statistics |
-| vmem | Detailed /proc/vmstat (paging, faults) | partial | `src/collect/vmstat.ts` | Only pswpin/pswpout read; no page-fault, page-scan, or paging counters |
+| vmem | Detailed /proc/vmstat (paging, faults) | partial | `src/collect/vmstat.ts` (pswpin/pswpout rates; plus, added 2026-08-24 unreleased: pgfault/pgmajfault rates and pgscan/pgsteal rates summed over the reclaim-source counters) | No pgpgin/pgpgout paging-I/O counters; no per-zone or per-source breakdown (aggregate sums only) |
 | mcelog | Machine check exceptions | partial | `src/collect/edac.ts` (EDAC CE/UE incl. per-DIMM), evaluator `mce_uncorrected` keyed off EDAC (`evaluator.ts` "23.3 mce_uncorrected (EDAC)"); IPMI SEL machine-check events classified critical (`src/collect/ipmi.ts:362`) | No /dev/mcelog or mcelog-daemon decode of CPU cache/bus/TLB machine checks |
 | lvm | LVM volume group / logical volume usage | partial | `src/collect/lvm.ts` (thin-pool data + metadata percent); rule `lvm_thinpool_metadata_high` | No VG/LV size and usage statistics outside thin pools |
 | pcie_errors | PCIe error/event counters | partial | `src/collect/gpu.ts` (GPU PCIe link gen/width degradation incl. slot-width comparison); rule `gpu_pcie_link_degraded` | GPU links only; no host-wide PCIe AER error counters |
 | redfish | Hardware telemetry via Redfish API | partial | `src/lib/types.ts` `Tier3Snapshot` (GPU OEM Redfish) | Stub parser only (`parser_quality: "stub"`); no general Redfish hardware polling |
 
-## In-scope host and hardware plugins: GAP (31)
+## In-scope host and hardware plugins: GAP (28)
 
 | collectd plugin | What it reads | Crucible status | Notes |
 |---|---|---|---|
@@ -70,15 +75,12 @@ Evidence paths: `src/...` is the crucible repo; rule names refer to YAML files i
 | buddyinfo | Memory fragmentation (buddy allocator) | gap | |
 | capabilities | Per-process Linux capabilities | gap | Crucible security checks (`src/collect/security.ts`) cover other posture items, not process capabilities |
 | cgroups | Per-cgroup resource accounting | gap | No container/cgroup metrics |
-| contextswitch | Context switch rate | gap | /proc/stat `ctxt` not parsed (`src/collect/cpu.ts` reads cpu lines + loadavg only) |
-| cpufreq | CPU frequency scaling | gap | No CPU frequency collection (GPU clocks only) |
 | cpusleep | CPU sleep/idle time | gap | Mobile-focused plugin |
 | dcpmm | Intel Optane persistent memory | gap | |
 | drbd | DRBD replication state | gap | |
 | entropy | Kernel entropy pool | gap | |
 | filecount | File count/size in directories | gap | |
 | fscache | FS-Cache statistics | gap | |
-| hugepages | Hugepage usage | gap | |
 | infiniband | InfiniBand port counters | gap | Relevant to GPU fleets; nothing comparable collected |
 | intel_pmu | CPU performance counters | gap | |
 | intel_rdt | Intel RDT cache/bandwidth monitoring | gap | |
@@ -139,16 +141,18 @@ Listed for completeness; excluded from parity scoring with the reason given.
 
 In-scope collectd host/hardware read plugins assessed: 63.
 
-- Covered: 16
+- Covered: 19
 - Partial: 16
-- Gap: 31
+- Gap: 28
 - Out-of-scope: 108
+
+(2026-08-24 update: contextswitch, cpufreq, and hugepages moved gap to covered; the vmem and processes partial rows improved. Previous counts: covered 16, gap 31.)
 
 ## Gaps for prioritisation
 
-1. **CPU frequency and power visibility (cpufreq + turbostat)**: no CPU clock, C-state, or package-power collection; CPU throttling is invisible while GPU throttling is covered.
-2. **Process-level aggregates (processes)**: no counts by state, fork rate, or per-process CPU/RSS; only zombies, OOM kills, and FD usage today.
+1. **CPU power and C-state visibility (turbostat)**: cpufreq scaling frequencies are now collected (2026-08-24), but C-state residency and package power remain invisible, so sustained frequency capping is visible while its thermal/power cause is not.
+2. **Process-level aggregates (processes)**: fork rate and running/blocked counts are now collected (2026-08-24), but there is still no full state breakdown (sleeping/stopped/total) and no per-process CPU/RSS aggregates.
 3. **Active connectivity probing and sub-interval link events (ping + connectivity)**: no ICMP latency measurement; link flaps shorter than the ~5-minute interval are missed because operstate is polled, not event-driven.
 4. **Host-wide PCIe AER counters (pcie_errors)**: only GPU PCIe link degradation is watched; NIC/HBA/NVMe PCIe errors are invisible.
 5. **InfiniBand port counters (infiniband)**: relevant to GPU fleets; nothing comparable collected.
-6. Runners-up: ZFS ARC statistics (pool health covered, cache performance not); hugepages + NUMA runtime memory detail; TCP connections by state/port (tcpconns); driver-private NIC counters (`ethtool -S`); user-defined custom metrics (collectd exec/tail/table have no Crucible equivalent).
+6. Runners-up: ZFS ARC statistics (pool health covered, cache performance not); NUMA runtime memory detail; TCP connections by state/port (tcpconns); driver-private NIC counters (`ethtool -S`); user-defined custom metrics (collectd exec/tail/table have no Crucible equivalent).

@@ -136,6 +136,8 @@ import { collectSoftnet } from "./collect/softnet.js";
 import { collectCve } from "./collect/cve.js";
 import { collectDmesgEvents } from "./collect/dmesg-events.js";
 import { collectGpu } from "./collect/gpu.js";
+import { collectHostActivity } from "./collect/host-activity.js";
+import { collectCpufreq } from "./collect/cpufreq.js";
 import { collectThermal } from "./collect/thermal.js";
 import { collectDmi, formatVendorLine } from "./collect/dmi.js";
 import { detectIpmiCapability, formatCapabilityLine } from "./lib/capability.js";
@@ -412,6 +414,13 @@ async function collect() {
   // OS extended-support enrollment (currency-monitoring milestone, v0.13.24+).
   // Unprivileged only; omitted on distros/hosts without a readable mechanism.
   await assignOptional(snapshot, collectionStatus, "support_status", () => collectSupportStatus());
+
+  // collectd-parity closes (2026-08-24): /proc/stat activity counters
+  // and sysfs cpufreq. Unprivileged reads; each returns null (field
+  // omitted) when its surface is absent. vmstat's fault/scan rates and
+  // memory's hugepages ride inside their existing collectors above.
+  await assignOptional(snapshot, collectionStatus, "host_activity", () => collectHostActivity());
+  await assignOptional(snapshot, collectionStatus, "cpufreq", () => collectCpufreq());
 
   // Update Prometheus metrics
   updateMetrics(snapshot);

@@ -107,6 +107,70 @@ export interface Snapshot {
    *  Redfish OEM (stub in v0.13.0). Per CC_SPEC_CRUCIBLE_GPU_
    *  COLLECTION_2026-05-19.md. */
   gpu?: GpuSnapshot;
+
+  // collectd-parity closes (2026-08-24). Optional fields, omitted when
+  // the underlying /proc or /sys surface is absent (capability-style:
+  // absent means not-supported, never zero).
+  /** Context-switch/fork rates + running/blocked process counts from
+   *  /proc/stat. Omitted when /proc/stat is unreadable. */
+  host_activity?: HostActivitySnapshot;
+  /** Per-CPU scaling frequencies + governor from sysfs cpufreq. Omitted
+   *  on hosts without cpufreq (VMs, kernels without the subsystem). */
+  cpufreq?: CpufreqSnapshot;
+}
+
+// === Host activity (/proc/stat ctxt/processes/procs_*) ===
+
+export interface HostActivitySnapshot {
+  /** Cumulative context switches since boot (/proc/stat `ctxt`).
+   *  Null when the line is absent from /proc/stat. */
+  context_switches_total: number | null;
+  /** Per-second context-switch rate over the most recent interval; null
+   *  on the first snapshot (no baseline), after a counter reset, or when
+   *  the `ctxt` line is absent. */
+  context_switches_rate: number | null;
+  /** Cumulative forks since boot (/proc/stat `processes`).
+   *  Null when the line is absent. */
+  forks_total: number | null;
+  /** Per-second fork rate; null on the first snapshot, after a counter
+   *  reset, or when the `processes` line is absent. */
+  forks_rate: number | null;
+  /** Currently runnable processes (/proc/stat `procs_running`), a point
+   *  in time value, not a rate. Null when the line is absent. */
+  procs_running: number | null;
+  /** Processes blocked on I/O (/proc/stat `procs_blocked`), a point in
+   *  time value and a disk-trouble signal. Null when the line is absent. */
+  procs_blocked: number | null;
+}
+
+// === cpufreq (sysfs CPU frequency scaling) ===
+
+export interface CpufreqCpu {
+  /** CPU ordinal (the N in /sys/devices/system/cpu/cpuN). */
+  cpu: number;
+  /** scaling_cur_freq in kHz; null when the file is unreadable. */
+  cur_khz: number | null;
+  /** scaling_min_freq in kHz; null when the file is unreadable. */
+  min_khz: number | null;
+  /** scaling_max_freq in kHz; null when the file is unreadable. */
+  max_khz: number | null;
+  /** scaling_governor (e.g. "performance", "schedutil"); null when the
+   *  file is unreadable or empty. */
+  governor: string | null;
+}
+
+export interface CpufreqSnapshot {
+  /** One entry per CPU that exposes a cpufreq directory. CPUs without
+   *  one are skipped entirely (they answered nothing). */
+  cpus: CpufreqCpu[];
+  /** Lowest current frequency across CPUs with a readable
+   *  scaling_cur_freq; null when none was readable. */
+  cur_khz_min: number | null;
+  /** Highest current frequency across CPUs; null when none readable. */
+  cur_khz_max: number | null;
+  /** Mean current frequency across CPUs (rounded to whole kHz); null
+   *  when none readable. */
+  cur_khz_mean: number | null;
 }
 
 // === C19 GPU ===
@@ -414,6 +478,23 @@ export interface VmstatSnapshot {
    *  reboot mid-session). */
   pswpin_rate: number | null;
   pswpout_rate: number | null;
+  // Page-fault / page-scan rates (collectd vmem parity close,
+  // 2026-08-24). Each field is OMITTED when its counter key is absent
+  // from /proc/vmstat (did-not-answer) and null on the first snapshot
+  // or after a counter reset (answered, no rate yet).
+  /** Per-second page-fault rate (`pgfault`). */
+  pgfault_rate?: number | null;
+  /** Per-second major page-fault rate (`pgmajfault`). */
+  pgmajfault_rate?: number | null;
+  /** Per-second pages-scanned rate: sum of the reclaim-source pgscan_*
+   *  counters (kswapd/direct/khugepaged, incl. old per-zone variants).
+   *  Excludes pgscan_anon/pgscan_file (the same scanned pages classified
+   *  by type; summing them would double-count) and pgscan_direct_throttle
+   *  (a throttle-event count, not pages). */
+  pgscan_rate?: number | null;
+  /** Per-second pages-reclaimed rate: sum of the reclaim-source
+   *  pgsteal_* counters, with the same anon/file exclusion as pgscan. */
+  pgsteal_rate?: number | null;
 }
 
 // === C4 reboot evidence ===
@@ -694,6 +775,22 @@ export interface MemoryInfo {
   free_mb: number;
   swap_total_mb: number;
   swap_used_mb: number;
+  /** Hugepage pool from /proc/meminfo. Present only when
+   *  HugePages_Total > 0 (a configured pool); omitted otherwise to keep
+   *  snapshots lean. Absent field means no pool, never zero. */
+  hugepages?: HugepagesInfo;
+}
+
+export interface HugepagesInfo {
+  /** HugePages_Total: pool size in pages. Always > 0 when this struct
+   *  is present. */
+  total: number;
+  /** HugePages_Free: unallocated pages; null when the line is absent. */
+  free: number | null;
+  /** HugePages_Rsvd: reserved-but-unfaulted pages; null when absent. */
+  reserved: number | null;
+  /** Hugepagesize in kB (e.g. 2048); null when the line is absent. */
+  page_size_kb: number | null;
 }
 
 /** One SMBIOS Type 17 Memory Device record (a physical DIMM slot). */
