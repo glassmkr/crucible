@@ -24,23 +24,25 @@ exercised, which is a narrower and more honest claim than where it should
 work.
 
 Statuses: **verified** (a validation run passed on this combination),
-**expected** (same family as a verified row, not separately exercised),
-**untested**.
+**pending validation run**, or **untested**. There is deliberately no
+"expected" status: either a run passed on that combination or it did not.
 
 | Distro | Version | Arch | Install path | Status |
 |---|---|---|---|---|
-| Debian | 13 | x86_64 | binary, npm | pending validation run |
+| Debian | 12 | x86_64 | binary, npm | pending validation run |
 | Ubuntu | 24.04 LTS | x86_64 | binary, npm | pending validation run |
 | Rocky Linux | 9 | x86_64 | binary, npm | pending validation run |
 | AlmaLinux | 9 | x86_64 | binary, npm | pending validation run |
-| Ubuntu | 22.04 LTS | x86_64 | npm | expected (previously operated) |
-| Debian | 12 | x86_64 | npm | expected (previously operated) |
-| Other systemd Linux | - | x86_64 | npm | untested |
-| Any supported distro | - | arm64 | binary | untested |
 
-The four pending rows fill in from the validation-fleet run; each becomes
-verified only when a real install on that distro passes, and stays pending
-otherwise. Do not promote a row on the grounds that it "should" work.
+Every other distro, version, and architecture is **untested**. That includes
+Debian 13, Ubuntu 22.04, and arm64: the agent may well run on them, but this
+table records where it has actually been exercised, so an untested version is
+not listed as though it were supported.
+
+The four rows fill in from the validation-fleet run; each becomes verified
+only when a real install on that distro passes, and stays pending otherwise.
+Do not promote a row on the grounds that it "should" work, and do not add a
+row for a version nobody ran.
 
 Notes that apply regardless of row:
 
