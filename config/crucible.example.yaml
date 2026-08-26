@@ -1,0 +1,74 @@
+# Glassmkr Crucible configuration; copy to /etc/glassmkr/crucible.yaml.
+#
+# Every key is optional and shown here with its default. `sudo
+# glassmkr-crucible init` writes a minimal file for you; this document is the
+# complete schema for hand-editing. Unknown keys are ignored WITH a warning in
+# the journal; check there after editing.
+
+# Server identity (init sets this to the hostname unless --name is given)
+server_name: "my-server"
+
+# Collection settings
+collection:
+  interval_seconds: 300        # How often to collect, 60-3600 (default 5 minutes)
+  ipmi: true                   # Collect IPMI data (requires ipmitool)
+  smart: true                  # Collect SMART data (requires smartmontools)
+  thermal: true                # Collect hwmon thermal sensors
+  dmi: true                    # Collect DMI/SMBIOS hardware identity
+  # Refuse IPMI collection when ipmitool reads below 1.8.19 (CVE-2020-5208).
+  # Off by default: the check cannot see distro backports, so it fires on
+  # suspicion rather than evidence and would silently disable BMC monitoring
+  # on stock Ubuntu 20.04/22.04 and RHEL-family 9. Turn it on if you model
+  # BMC compromise. `glassmkr-crucible doctor ipmi` reports what this host does.
+  enforce_ipmitool_min_version: false
+
+# Dashboard integration (init writes this block from --api-key/--ingest-url)
+dashboard:
+  enabled: false
+  url: "https://app.glassmkr.com"
+  api_key: ""                  # The per-server gmk_cru_live_ key, shown once at server creation
+  # TLS pinning (optional, hand-edit only): base64 SHA-256 of the dashboard's
+  # SPKI. When set, pushes go over a pinned connection.
+  tls_pin: ""
+  # Endpoint policy (init writes these from --allow-insecure-endpoint /
+  # --allow-endpoint-origin; needed for http or private-network dashboards,
+  # e.g. a self-hosted instance on a LAN)
+  allow_insecure_endpoint: false
+  allowed_origins: []
+
+# Alert thresholds (all optional; the agent's local evaluation only)
+thresholds:
+  ram_percent: 90              # Alert when RAM usage exceeds this
+  swap_alert: true             # Alert on any swap usage
+  disk_percent: 85             # Alert when any disk exceeds this
+  iowait_percent: 20           # Alert when CPU iowait exceeds this
+  nvme_wear_percent: 85        # Alert when NVMe lifetime wear exceeds this
+  disk_latency_nvme_ms: 50     # p99 latency threshold for NVMe
+  disk_latency_hdd_ms: 200     # p99 latency threshold for HDD
+  cpu_temp_warning_c: 80       # CPU temperature warning (must be below critical)
+  cpu_temp_critical_c: 90      # CPU temperature critical
+  interface_utilization_percent: 90  # Network saturation threshold
+  # Thresholds pushed to their limits effectively disable detection; the agent
+  # warns about that unless you acknowledge it was deliberate.
+  acknowledge_disabled_detection: false
+
+# Notification channels (all optional; local notifications from the agent
+# itself, independent of any dashboard alerting)
+channels:
+  telegram:
+    enabled: false
+    bot_token: ""
+    chat_id: ""
+  email:
+    enabled: false
+    to: ""                     # Delivered via the host's /usr/sbin/sendmail
+  slack:
+    enabled: false
+    webhook_url: ""
+
+# Local Prometheus exposition (optional; serves GET /metrics and /health,
+# unauthenticated, so keep the bind address private)
+prometheus:
+  enabled: false
+  address: "127.0.0.1"
+  port: 9101

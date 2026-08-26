@@ -81,6 +81,8 @@ the **Manual install** section below.
 ```
 glassmkr-crucible [options]
 glassmkr-crucible init        [--api-key <K>] [--name <N>] [--ingest-url <U>] [--no-start] [--force] [--no-verify]
+glassmkr-crucible enroll      --account-key <K> [--name <N>] [--tags a,b] [--dashboard-url <U>] [--no-start] [--force]
+glassmkr-crucible doctor ipmi [--config <P>]
 glassmkr-crucible mark-reboot [--reason TEXT] [--ttl DURATION]
 glassmkr-crucible reboot      [--reason TEXT] [--ttl DURATION]
 
@@ -90,7 +92,7 @@ Options:
   -c, --config     Path to config file (default: /etc/glassmkr/crucible.yaml)
 ```
 
-`--config=PATH` and the legacy positional form `glassmkr-crucible /path/to.yaml` both work. Without options, Crucible runs as a long-lived collector daemon.
+`--config=PATH` and the legacy positional form `glassmkr-crucible /path/to.yaml` both work, and `-c`/`--config` is accepted by every subcommand (on `init`/`enroll` it names where the config is written). An unrecognized flag on `init`/`enroll` is an error, not a silent no-op. Without options, Crucible runs as a long-lived collector daemon. Numeric exit codes for scripting are documented in [docs/EXIT_CODES.md](docs/EXIT_CODES.md).
 
 ## Configuration
 
@@ -113,6 +115,14 @@ prometheus:
   address: "127.0.0.1"
   port: 9101
 ```
+
+That is the shape, not the whole schema: `thresholds:` (local alert limits),
+`channels:` (agent-local Telegram/email/Slack notifications), per-collector
+toggles (`thermal`, `dmi`, `enforce_ipmitool_min_version`), and
+`dashboard.tls_pin` are all documented with defaults in
+[config/crucible.example.yaml](config/crucible.example.yaml). Unknown keys
+anywhere in the file are ignored with a journal warning naming the key, so a
+typo cannot silently disable a setting.
 
 The opt-in Prometheus listener binds to loopback by default and has no built-in
 authentication. To scrape it remotely, keep the loopback bind and place an
@@ -326,6 +336,23 @@ Dashboard evaluates 65 alert rules server-side across 9 categories (storage, zfs
 - [Troubleshooting](https://glassmkr.com/docs/troubleshooting)
 - [API Reference](https://glassmkr.com/docs/api)
 
+## Versioning
+
+Semver, with the compatibility surface defined precisely: from 1.0.0, the
+config file schema, the CLI (flags and [exit codes](docs/EXIT_CODES.md)), the
+privileged wrapper's action set, and the dashboard API contract the agent
+speaks only break on a major version. New collectors, optional snapshot
+fields, and new flags are minor; fixes are patches. The freeze-review record
+is [docs/V1_FREEZE.md](docs/V1_FREEZE.md).
+
+## Support and release cadence
+
+Maintained. Releases happen when there is something to release; security fixes
+are prioritized. Where Crucible has actually been exercised (as opposed to
+where it should work) is recorded in [SUPPORT.md](SUPPORT.md).
+
 ## License
 
-MIT. See [LICENSE](LICENSE).
+MIT. See [LICENSE](LICENSE). Third-party dependency licenses are listed in
+[THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md). This repository does not use
+per-file license headers; the LICENSE file governs the whole tree.

@@ -4,7 +4,7 @@
 
 import * as fs from "node:fs";
 
-export type CliMode = "version" | "help" | "run" | "mark-reboot" | "reboot" | "init" | "enroll" | "doctor-ipmi";
+export type CliMode = "version" | "help" | "run" | "mark-reboot" | "reboot" | "init" | "enroll" | "doctor-ipmi" | "cli-error";
 
 export interface CliArgs {
   mode: CliMode;
@@ -67,7 +67,10 @@ export function parseCliArgs(argv: string[], version: string): { result: CliArgs
       if (a.startsWith("--name=")) { flags.name = a.slice("--name=".length); continue; }
       if (a === "--ingest-url") { flags.ingestUrl = argv[++i]; continue; }
       if (a.startsWith("--ingest-url=")) { flags.ingestUrl = a.slice("--ingest-url=".length); continue; }
-      if (a === "--config-path") { flags.configPath = argv[++i]; continue; }
+      // --config/-c is the canonical spelling (matches run and doctor);
+      // --config-path predates the alias and stays as a compat form.
+      if (a === "--config" || a === "-c" || a === "--config-path") { flags.configPath = argv[++i]; continue; }
+      if (a.startsWith("--config=")) { flags.configPath = a.slice("--config=".length); continue; }
       if (a.startsWith("--config-path=")) { flags.configPath = a.slice("--config-path=".length); continue; }
       if (a === "--allow-insecure-endpoint") { flags.allowInsecureEndpoint = true; continue; }
       if (a === "--allow-endpoint-origin") {
@@ -81,6 +84,11 @@ export function parseCliArgs(argv: string[], version: string): { result: CliArgs
       if (a === "--no-start") { flags.noStart = true; continue; }
       if (a === "--force") { flags.force = true; continue; }
       if (a === "--no-verify") { flags.noVerify = true; continue; }
+      // v1 freeze: an unrecognized token is an error, not a silent no-op.
+      // A typo'd --forse or an unquoted key fragment used to be ignored,
+      // which on a security-relevant command means the operator believes
+      // an option is in effect when it is not.
+      return { result: { mode: "cli-error", configPath: "" }, output: `[init] unknown argument: ${a}. See 'glassmkr-crucible init --help'.` };
     }
     return { result: { mode: "init", configPath: "", init: flags }, output: null };
   }
@@ -100,7 +108,8 @@ export function parseCliArgs(argv: string[], version: string): { result: CliArgs
       if (a.startsWith("--name=")) { flags.name = a.slice("--name=".length); continue; }
       if (a === "--dashboard-url") { flags.dashboardUrl = argv[++i]; continue; }
       if (a.startsWith("--dashboard-url=")) { flags.dashboardUrl = a.slice("--dashboard-url=".length); continue; }
-      if (a === "--config-path") { flags.configPath = argv[++i]; continue; }
+      if (a === "--config" || a === "-c" || a === "--config-path") { flags.configPath = argv[++i]; continue; }
+      if (a.startsWith("--config=")) { flags.configPath = a.slice("--config=".length); continue; }
       if (a.startsWith("--config-path=")) { flags.configPath = a.slice("--config-path=".length); continue; }
       if (a === "--tags") { flags.tags = splitTags(argv[++i]); continue; }
       if (a.startsWith("--tags=")) { flags.tags = splitTags(a.slice("--tags=".length)); continue; }
@@ -116,6 +125,8 @@ export function parseCliArgs(argv: string[], version: string): { result: CliArgs
       if (a === "--no-start") { flags.noStart = true; continue; }
       if (a === "--force") { flags.force = true; continue; }
       if (a === "--no-verify") { flags.noVerify = true; continue; }
+      // v1 freeze: same unknown-argument rule as init.
+      return { result: { mode: "cli-error", configPath: "" }, output: `[enroll] unknown argument: ${a}. See 'glassmkr-crucible enroll --help'.` };
     }
     return { result: { mode: "enroll", configPath: "", enroll: flags }, output: null };
   }
@@ -286,7 +297,8 @@ export function initHelp(version: string): string {
     "                      Permit a specific cross-origin or private endpoint. Repeatable.",
     "  --allow-insecure-endpoint",
     "                      Permit HTTP and private endpoints for trusted self-hosting.",
-    "  --config-path <P>   Where to write crucible.yaml (default: /etc/glassmkr/crucible.yaml).",
+    "  --config <P>        Where to write crucible.yaml (default: /etc/glassmkr/crucible.yaml).",
+    "                      (-c and the older --config-path spelling also work.)",
     "  --no-start          Write config + unit, daemon-reload, but do not enable/start the service.",
     "  --force             Overwrite an existing config file. Without it, init re-secures in place.",
     "  --no-verify         Skip the connectivity probe against the ingest endpoint.",
@@ -336,7 +348,8 @@ export function enrollHelp(version: string): string {
     "                        Repeat for multiple origins.",
     "  --allow-insecure-endpoint",
     "                        Permit HTTP and private endpoints for trusted self-hosting.",
-    "  --config-path <P>     Where to write crucible.yaml (default: /etc/glassmkr/crucible.yaml).",
+    "  --config <P>          Where to write crucible.yaml (default: /etc/glassmkr/crucible.yaml).",
+    "                        (-c and the older --config-path spelling also work.)",
     "  --no-start            Write config + unit, daemon-reload, but do not start the service.",
     "  --force               Re-enroll even if already configured (rotates the collector key).",
     "  --no-verify           Skip the post-register connectivity probe.",

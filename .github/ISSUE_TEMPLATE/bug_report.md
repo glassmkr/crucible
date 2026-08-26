@@ -7,6 +7,8 @@ about: Something is not working as expected
 **OS and version:** (e.g., Ubuntu 24.04)
 **Kernel:** (output of `uname -r`)
 **Node.js version:** (output of `node --version`)
+**Hardware:** (vendor/model or board, e.g. Supermicro H13SSW; relevant devices
+like RAID controller or drive model if the bug involves a collector)
 **Running as root:** yes/no
 
 **What happened:**

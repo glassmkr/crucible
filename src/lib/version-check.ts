@@ -92,6 +92,17 @@ export async function checkForUpdates(
       console.log(`[update] Changelog: ${data.crucible?.changelog_url || "https://github.com/glassmkr/crucible/releases"}`);
       console.log(`[update] Run: npm i -g @glassmkr/crucible && sudo glassmkr-crucible init && sudo systemctl restart glassmkr-crucible`);
     }
+
+    // min_supported was declared in this contract from the start but never
+    // read (v1 freeze review, 2026-08-23). Honour it: a WARN, not an exit;
+    // an old agent that keeps reporting beats a floor that silences a host.
+    const minSupported = data.crucible?.min_supported;
+    if (minSupported && isOlderVersion(CURRENT_VERSION, minSupported)) {
+      console.warn(
+        `[update] WARNING: this Crucible (${CURRENT_VERSION}) is below the dashboard's minimum supported version ` +
+        `(${minSupported}). Snapshots may be rejected or misread; upgrade promptly.`,
+      );
+    }
   } catch {
     // Version check is non-critical, fail silently
   }

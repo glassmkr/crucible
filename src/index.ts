@@ -13,6 +13,10 @@ if (cliArgs.mode === "version" || cliArgs.mode === "help") {
   console.log(cliOutput);
   process.exit(0);
 }
+if (cliArgs.mode === "cli-error") {
+  console.error(cliOutput);
+  process.exit(2);
+}
 if (cliArgs.mode === "doctor-ipmi") {
   const { runDoctorIpmi } = await import("./doctor.js");
   const { report, exitCode } = await runDoctorIpmi(cliArgs.configPath);
@@ -132,6 +136,11 @@ import { collectSoftnet } from "./collect/softnet.js";
 import { collectCve } from "./collect/cve.js";
 import { collectDmesgEvents } from "./collect/dmesg-events.js";
 import { collectGpu } from "./collect/gpu.js";
+import { collectHostActivity } from "./collect/host-activity.js";
+import { collectCpufreq } from "./collect/cpufreq.js";
+import { collectNuma } from "./collect/numa.js";
+import { collectZfsArc } from "./collect/zfs-arc.js";
+import { collectPcieAer } from "./collect/pcie-aer.js";
 import { collectThermal } from "./collect/thermal.js";
 import { collectDmi, formatVendorLine } from "./collect/dmi.js";
 import { detectIpmiCapability, formatCapabilityLine } from "./lib/capability.js";
@@ -408,6 +417,18 @@ async function collect() {
   // OS extended-support enrollment (currency-monitoring milestone, v0.13.24+).
   // Unprivileged only; omitted on distros/hosts without a readable mechanism.
   await assignOptional(snapshot, collectionStatus, "support_status", () => collectSupportStatus());
+
+  // collectd-parity closes (2026-08-24): /proc/stat activity counters,
+  // sysfs cpufreq, NUMA node stats, ZFS ARC kstats, and host-wide PCIe
+  // AER totals. Unprivileged reads; each returns null (field omitted)
+  // when its surface is absent. vmstat's fault/scan rates, memory's
+  // hugepages, hwmon fans/voltages, interface flap counters, and mdadm
+  // resync progress ride inside their existing collectors above.
+  await assignOptional(snapshot, collectionStatus, "host_activity", () => collectHostActivity());
+  await assignOptional(snapshot, collectionStatus, "cpufreq", () => collectCpufreq());
+  await assignOptional(snapshot, collectionStatus, "numa", () => collectNuma());
+  await assignOptional(snapshot, collectionStatus, "zfs_arc", () => collectZfsArc());
+  await assignOptional(snapshot, collectionStatus, "pcie_aer", () => collectPcieAer());
 
   // Update Prometheus metrics
   updateMetrics(snapshot);

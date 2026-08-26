@@ -241,3 +241,91 @@ describe("collectFromHwmon: AMD k10temp Tdie fallback (regression for 0.8.0 P1)"
     expect(result!.cpu[0].label).toBe("k10temp temp1");
   });
 });
+
+// Fans + voltages (collectd sensors parity close, 2026-08-24). Known-bad
+// cases first: no sensors, malformed values, the 0-rpm-vs-disabled rule.
+describe("collectFromHwmon: fans and voltages", () => {
+  it("chips without fan/voltage sensors yield empty arrays (absent field upstream)", async () => {
+    await writeChip("hwmon0", {
+      name: "coretemp",
+      temp1_input: "50000", temp1_label: "Package id 0",
+    });
+    const result = await collectFromHwmon(root);
+    expect(result!.fans).toEqual([]);
+    expect(result!.voltages).toEqual([]);
+  });
+
+  it("malformed fan/voltage values are skipped, not read as zero", async () => {
+    await writeChip("hwmon0", {
+      name: "nct6775",
+      fan1_input: "garbage\n",
+      in0_input: "\n",
+    });
+    const result = await collectFromHwmon(root);
+    expect(result!.fans).toEqual([]);
+    expect(result!.voltages).toEqual([]);
+  });
+
+  it("reads fanN_input with labels; threshold files are not inputs", async () => {
+    await writeChip("hwmon0", {
+      name: "nct6775",
+      fan1_input: "1200\n", fan1_label: "CPU Fan\n",
+      fan2_input: "800\n",
+      fan1_min: "300\n", // threshold, not a reading
+    });
+    const result = await collectFromHwmon(root);
+    expect(result!.fans).toHaveLength(2);
+    expect(result!.fans.map(f => f.label).sort()).toEqual(["nct6775 CPU Fan", "nct6775 fan2"]);
+    expect(result!.fans.find(f => f.label === "nct6775 CPU Fan")!.rpm).toBe(1200);
+    expect(result!.fans[0].source_chip).toBe("nct6775");
+    expect(result!.fans[0].chip_id).toBe("hwmon0");
+  });
+
+  it("reports a 0 rpm fan when no fanN_enable says disabled (stopped fan is a signal)", async () => {
+    await writeChip("hwmon0", {
+      name: "nct6775",
+      fan1_input: "0\n",
+    });
+    const result = await collectFromHwmon(root);
+    expect(result!.fans).toHaveLength(1);
+    expect(result!.fans[0].rpm).toBe(0);
+  });
+
+  it("skips a 0 rpm fan ONLY when its fanN_enable reads 0", async () => {
+    await writeChip("hwmon0", {
+      name: "nct6775",
+      fan1_input: "0\n", fan1_enable: "0\n", // disabled: skip
+      fan2_input: "0\n", fan2_enable: "1\n", // enabled and stopped: report
+    });
+    const result = await collectFromHwmon(root);
+    expect(result!.fans).toHaveLength(1);
+    expect(result!.fans[0].label).toBe("nct6775 fan2");
+    expect(result!.fans[0].rpm).toBe(0);
+  });
+
+  it("reads inN_input as millivolts as read, negatives allowed", async () => {
+    await writeChip("hwmon0", {
+      name: "nct6775",
+      in0_input: "1224\n", in0_label: "Vcore\n",
+      in1_input: "-120\n",
+    });
+    const result = await collectFromHwmon(root);
+    expect(result!.voltages).toHaveLength(2);
+    expect(result!.voltages.find(v => v.label === "nct6775 Vcore")!.millivolts).toBe(1224);
+    expect(result!.voltages.find(v => v.label === "nct6775 in1")!.millivolts).toBe(-120);
+  });
+
+  it("collects fans from a chip whose temps are filtered (temperature logic untouched)", async () => {
+    await writeChip("hwmon0", {
+      name: "k10temp",
+      temp1_input: "65000", temp1_label: "Tctl",
+      fan1_input: "900\n",
+    });
+    const result = await collectFromHwmon(root);
+    // Temperature classification unchanged: Tctl still the CPU reading.
+    expect(result!.cpu).toHaveLength(1);
+    expect(result!.cpu[0].label).toBe("k10temp Tctl");
+    expect(result!.fans).toHaveLength(1);
+    expect(result!.fans[0].label).toBe("k10temp fan1");
+  });
+});

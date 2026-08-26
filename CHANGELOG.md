@@ -7,7 +7,91 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 Pre-1.0 convention: minor bumps may include breaking changes; we call them
 out under `### Breaking` so downstream consumers can audit.
 
+From 1.0.0 the frozen compatibility surface is the config schema, the CLI
+(flags and exit codes), the privileged wrapper's action set, and the dashboard
+API contract the agent speaks; breaking any of those is a major version. The
+full policy and the freeze-review record live in
+[docs/V1_FREEZE.md](docs/V1_FREEZE.md).
+
 ## [Unreleased]
+
+### Added
+
+- **Context-switch and fork rates** from `/proc/stat` (`ctxt`, `processes`)
+  as per-second rates in the new `host_activity` snapshot field; the first
+  cycle and counter resets report null, never zero.
+- **Running and blocked process counts** from `/proc/stat`
+  (`procs_running`, `procs_blocked`) in the same `host_activity` field;
+  `procs_blocked` is a disk-trouble signal.
+- **Hugepage pool reporting** from `/proc/meminfo` (`memory.hugepages`:
+  total, free, reserved, page size), emitted only when a pool is
+  configured (`HugePages_Total > 0`) so snapshots stay lean.
+- **Page-fault and page-scan/steal rates** from `/proc/vmstat` on the
+  existing `vmstat` field: `pgfault_rate`, `pgmajfault_rate`, plus
+  `pgscan_rate`/`pgsteal_rate` summed over the reclaim-source counters
+  (the anon/file type-classification twins are excluded to avoid
+  double-counting).
+- **CPU frequency scaling collection** from sysfs cpufreq in the new
+  `cpufreq` snapshot field: per-CPU `scaling_cur_freq`/min/max/governor
+  plus a min/max/mean summary of current frequency; reads the
+  world-readable `scaling_cur_freq` (never root-only `cpuinfo_cur_freq`)
+  and the field is absent on hosts without cpufreq.
+- **Per-NUMA-node collection** from `/sys/devices/system/node` in the new
+  `numa` snapshot field: MemTotal/MemFree per node, numa_hit/numa_miss/
+  numa_foreign as per-second rates (first cycle and counter resets report
+  null), plus a node count and the max memory-use imbalance across nodes;
+  absent when the kernel exposes no node dirs, and a single-node host
+  still emits.
+- **ZFS ARC cache statistics** from `/proc/spl/kstat/zfs/arcstats` in the
+  new `zfs_arc` snapshot field: ARC size, target size, and an interval
+  hit ratio computed from the hits/misses deltas (null on the first
+  cycle and idle intervals); read without the privileged wrapper, and
+  the field is absent when ZFS is not loaded (never zero).
+- **hwmon fan and voltage sensors** on the existing `thermal` field
+  (`thermal.fans` rpm, `thermal.voltages` millivolts as read, with
+  labels and per-chip ids): a 0 rpm fan is reported unless its
+  `fanN_enable` says disabled, because a stopped fan is a signal; the
+  temperature logic is unchanged.
+- **Interface flap counters** on the existing per-interface network
+  entries: `carrier_changes` (cumulative) plus `carrier_changes_delta`
+  (flaps since the last snapshot, null on the first cycle) and
+  `carrier_up_count`/`carrier_down_count` where the kernel exposes them,
+  so a link flap between two snapshots is no longer invisible.
+- **mdadm sync progress** on the existing `raid` entries: an in-progress
+  resync/recovery/check/reshape line is parsed into `sync_action`
+  (operation, percent, finish estimate in minutes, speed in KiB/s);
+  absent when no operation is running.
+- **Host-wide PCIe AER error totals** from `/sys/bus/pci/devices` in the
+  new `pcie_aer` snapshot field: per-device correctable/nonfatal/fatal
+  totals for devices with nonzero counts plus summary sums across all
+  reporting devices; handles both the `TOTAL_ERR_COUNT` and bare-number
+  file formats, and the field is absent when no device exposes the
+  counters (AER not enabled is not zero errors).
+- **`--config`/`-c` on `init` and `enroll`**, matching the run and doctor
+  spelling; `--config-path` remains as a compatibility alias.
+- **A bare-base `--ingest-url` now works**: `http://host:3000` gets the
+  canonical `/api/v1/ingest` path appended (with a log line saying so)
+  instead of failing only at first push. Explicit paths are respected as-is.
+- **The daemon honours the dashboard's `min_supported` version** from
+  `GET /api/v1/version`, warning when it runs below the floor. The field was
+  part of the contract but never read.
+- **Single-file Linux binaries** (x64/arm64, no Node.js required) attach to
+  every GitHub Release from this version on, with SHA256SUMS.
+- `docs/EXIT_CODES.md`: the numeric exit codes of every subcommand,
+  previously undocumented; `config/crucible.example.yaml`: the complete
+  config schema with defaults (replaces the legacy-named
+  `collector.example.yaml`, which documented roughly half the keys).
+
+### Changed
+
+- **Unknown `init`/`enroll` arguments are now errors** instead of silent
+  no-ops. A typo'd flag used to be ignored, leaving the operator believing an
+  option was in effect when it was not.
+- **The unknown-config-key warning covers the whole file**, not just
+  `collection:`. A typo under `dashboard:`, `thresholds:`, `channels:`, or
+  `prometheus:` now warns with the key name, and a stale pre-0.10 `forge:`
+  block gets a pointed message explaining the dashboard push reads
+  `dashboard:` (it used to vanish silently, taking reporting down with it).
 
 ## [0.15.1] - 2026-08-02
 

@@ -13,6 +13,16 @@ are all welcome.
 - **Report a security issue** privately: see [SECURITY.md](SECURITY.md). Do not
   open a public issue for vulnerabilities.
 
+## Developer Certificate of Origin (DCO)
+
+Every commit must carry a `Signed-off-by:` line (`git commit -s` adds it).
+By signing off you certify the [Developer Certificate of Origin](https://developercertificate.org/):
+in plain words, that you wrote the change or otherwise have the right to
+submit it under this repository's MIT license, and that you understand the
+contribution is public and recorded permanently. That is the whole
+agreement; there is no CLA and no copyright assignment. CI rejects
+unsigned commits on pull requests.
+
 ## Development setup
 
 Crucible is a TypeScript project (Node 20+). No hardware is required to work on

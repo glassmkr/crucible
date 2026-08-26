@@ -2,7 +2,7 @@ import { promises as fs } from "node:fs";
 import { join } from "node:path";
 import { isCpuChip } from "../lib/cpu-thermal-chips.js";
 import { readFileTrim } from "../lib/parse.js";
-import type { ThermalInfo, ThermalReading } from "../lib/types.js";
+import type { HwmonFanReading, HwmonVoltageReading, ThermalInfo, ThermalReading } from "../lib/types.js";
 
 const HWMON_ROOT = "/sys/class/hwmon";
 const THERMAL_ZONE_ROOT = "/sys/class/thermal";
@@ -86,12 +86,14 @@ function pickAmdCpuReading(readings: ThermalReading[]): { cpu: ThermalReading | 
   return { cpu: readings[0], other: readings.slice(1) };
 }
 
-export async function collectFromHwmon(root: string = HWMON_ROOT): Promise<{ cpu: ThermalReading[]; other: ThermalReading[] } | null> {
+export async function collectFromHwmon(root: string = HWMON_ROOT): Promise<{ cpu: ThermalReading[]; other: ThermalReading[]; fans: HwmonFanReading[]; voltages: HwmonVoltageReading[] } | null> {
   const entries = await listDir(root);
   if (!entries) return null;
 
   const cpu: ThermalReading[] = [];
   const other: ThermalReading[] = [];
+  const fans: HwmonFanReading[] = [];
+  const voltages: HwmonVoltageReading[] = [];
 
   for (const entry of entries) {
     const chipDir = join(root, entry);
@@ -108,6 +110,44 @@ export async function collectFromHwmon(root: string = HWMON_ROOT): Promise<{ cpu
     // reboots; fall back to the hwmon dir name when it is absent.
     const devLink = await fs.readlink(join(chipDir, "device")).catch(() => null);
     const chipId = devLink ? (devLink.split("/").filter(Boolean).pop() ?? entry) : entry;
+
+    // Fans + voltages (collectd sensors parity close, 2026-08-24). Read
+    // alongside the temperatures on every chip; the CPU/other temperature
+    // classification below does not apply to them.
+    for (const file of files) {
+      const fanMatch = file.match(/^fan(\d+)_input$/);
+      if (fanMatch) {
+        const rpmRaw = readFileTrim(join(chipDir, file));
+        if (rpmRaw === null || !/^\d+$/.test(rpmRaw)) continue;
+        const rpm = parseInt(rpmRaw, 10);
+        // A 0 rpm reading is dropped ONLY when fanN_enable says the
+        // sensor is disabled; otherwise a stopped fan is a signal, not
+        // noise, so the 0 is reported.
+        if (rpm === 0 && readFileTrim(join(chipDir, `fan${fanMatch[1]}_enable`)) === "0") continue;
+        const fanLabel = readFileTrim(join(chipDir, `fan${fanMatch[1]}_label`));
+        fans.push({
+          label: fanLabel ? `${chipName} ${fanLabel}` : `${chipName} fan${fanMatch[1]}`,
+          rpm,
+          source_chip: chipName,
+          chip_id: chipId,
+        });
+        continue;
+      }
+      const inMatch = file.match(/^in(\d+)_input$/);
+      if (inMatch) {
+        // inN_input is millivolts per the hwmon ABI; emitted as read.
+        // Negative values are legal on some sensors.
+        const mvRaw = readFileTrim(join(chipDir, file));
+        if (mvRaw === null || !/^-?\d+$/.test(mvRaw)) continue;
+        const inLabel = readFileTrim(join(chipDir, `in${inMatch[1]}_label`));
+        voltages.push({
+          label: inLabel ? `${chipName} ${inLabel}` : `${chipName} in${inMatch[1]}`,
+          millivolts: parseInt(mvRaw, 10),
+          source_chip: chipName,
+          chip_id: chipId,
+        });
+      }
+    }
 
     // Find tempN_input files. Skip threshold files (max, crit, max_hyst, min, etc.)
     const tempInputs = files.filter(f => /^temp\d+_input$/.test(f));
@@ -162,7 +202,7 @@ export async function collectFromHwmon(root: string = HWMON_ROOT): Promise<{ cpu
     }
   }
 
-  return { cpu, other };
+  return { cpu, other, fans, voltages };
 }
 
 export async function collectFromThermalZone(root: string = THERMAL_ZONE_ROOT): Promise<{ cpu: ThermalReading[]; other: ThermalReading[] } | null> {
@@ -206,6 +246,15 @@ export async function collectFromThermalZone(root: string = THERMAL_ZONE_ROOT): 
 export async function collectThermal(): Promise<ThermalInfo> {
   // Try hwmon first.
   const hwmon = await collectFromHwmon();
+
+  // Fans + voltages come only from hwmon and ride along regardless of
+  // which temperature source wins below (a chassis can expose fans with
+  // no usable temp sensors). Omitted when empty: absent means no such
+  // sensors exposed, never zero fans.
+  const extras: Pick<ThermalInfo, "fans" | "voltages"> = {};
+  if (hwmon && hwmon.fans.length > 0) extras.fans = hwmon.fans;
+  if (hwmon && hwmon.voltages.length > 0) extras.voltages = hwmon.voltages;
+
   if (hwmon && (hwmon.cpu.length > 0 || hwmon.other.length > 0)) {
     const max = hwmon.cpu.length > 0 ? Math.max(...hwmon.cpu.map(r => r.value_celsius)) : null;
     return {
@@ -214,6 +263,7 @@ export async function collectThermal(): Promise<ThermalInfo> {
       cpu_readings: hwmon.cpu,
       other_readings: hwmon.other,
       max_cpu_celsius: max,
+      ...extras,
     };
   }
 
@@ -227,6 +277,7 @@ export async function collectThermal(): Promise<ThermalInfo> {
       cpu_readings: tz.cpu,
       other_readings: tz.other,
       max_cpu_celsius: max,
+      ...extras,
     };
   }
 
@@ -235,7 +286,7 @@ export async function collectThermal(): Promise<ThermalInfo> {
   const everLookedAtHwmon = hwmon !== null;
   const everLookedAtTz = tz !== null;
   if (everLookedAtHwmon || everLookedAtTz) {
-    return { available: true, source: "none", cpu_readings: [], other_readings: [], max_cpu_celsius: null };
+    return { available: true, source: "none", cpu_readings: [], other_readings: [], max_cpu_celsius: null, ...extras };
   }
   return { available: false, source: "none", cpu_readings: [], other_readings: [], max_cpu_celsius: null };
 }

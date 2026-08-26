@@ -36,3 +36,36 @@ jobs:
       # so a no-op regression in the guard itself would stay green. Round 5 #6.
       - run: npm run lint:emdash:test
       - run: npm audit --omit=dev
+      # Launch gate 11: notices are generator-owned; fail on drift from the
+      # installed production tree.
+      - name: Third-party notices drift
+        run: |
+          set -euo pipefail
+          node scripts/gen-third-party-notices.mjs
+          git diff --exit-code THIRD_PARTY_NOTICES.md
+
+  # DCO sign-off (round-2 s1.3, 2026-08-24): every PR commit must carry
+  # Signed-off-by. Contribution policy is DCO, not CLA; see CONTRIBUTING.md.
+  dco:
+    name: DCO sign-off
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          fetch-depth: 0
+      - name: Check Signed-off-by on every PR commit
+        run: |
+          set -euo pipefail
+          MISSING=0
+          for sha in $(git rev-list --no-merges "${{ github.event.pull_request.base.sha }}..${{ github.event.pull_request.head.sha }}"); do
+            if ! git log -1 --format=%B "$sha" | grep -Eqi "^Signed-off-by: .+ <.+@.+>"; then
+              echo "missing Signed-off-by: $sha $(git log -1 --format=%s "$sha")" >&2
+              MISSING=1
+            fi
+          done
+          if [ "$MISSING" -eq 1 ]; then
+            echo "Add sign-offs with: git rebase --signoff origin/main (see CONTRIBUTING.md)" >&2
+            exit 1
+          fi
+          echo "all commits signed off"
+

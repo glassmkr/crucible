@@ -222,3 +222,47 @@ describe("doctor ipmi --config (adversarial review 2026-07-30, finding #8)", () 
     expect(parseCliArgs(["doctor", "ipmi"], "0.0.0").result.configPath).toBe("");
   });
 });
+
+// v1 freeze review fixes (2026-08-23): unknown flags must be errors, not
+// silent no-ops, and --config must work everywhere --config-path does.
+describe("v1 freeze: unknown flags are errors on init/enroll", () => {
+  it("init: a typo'd flag is a cli-error, not a silent no-op", () => {
+    const { result, output } = parseCliArgs(["init", "--api-key", "k", "--forse"], "1.2.3");
+    expect(result.mode).toBe("cli-error");
+    expect(output).toContain("--forse");
+  });
+  it("enroll: a typo'd flag is a cli-error", () => {
+    const { result, output } = parseCliArgs(["enroll", "--account-key", "k", "--no-strat"], "1.2.3");
+    expect(result.mode).toBe("cli-error");
+    expect(output).toContain("--no-strat");
+  });
+  it("init: a stray positional token is a cli-error (unquoted key fragment)", () => {
+    const { result, output } = parseCliArgs(["init", "--api-key", "k", "leftover"], "1.2.3");
+    expect(result.mode).toBe("cli-error");
+    expect(output).toContain("leftover");
+  });
+  it("valid init invocations still parse", () => {
+    const { result } = parseCliArgs(["init", "--api-key", "k", "--no-start", "--force"], "1.2.3");
+    expect(result.mode).toBe("init");
+    expect(result.init?.noStart).toBe(true);
+  });
+});
+
+describe("v1 freeze: --config/-c aliases on init and enroll", () => {
+  it("init --config sets configPath like --config-path", () => {
+    const { result } = parseCliArgs(["init", "--api-key", "k", "--config", "/tmp/x.yaml"], "1.2.3");
+    expect(result.init?.configPath).toBe("/tmp/x.yaml");
+  });
+  it("init -c and --config= forms work", () => {
+    expect(parseCliArgs(["init", "--api-key", "k", "-c", "/tmp/y.yaml"], "1.2.3").result.init?.configPath).toBe("/tmp/y.yaml");
+    expect(parseCliArgs(["init", "--api-key", "k", "--config=/tmp/z.yaml"], "1.2.3").result.init?.configPath).toBe("/tmp/z.yaml");
+  });
+  it("enroll --config sets configPath", () => {
+    const { result } = parseCliArgs(["enroll", "--account-key", "k", "--config", "/tmp/e.yaml"], "1.2.3");
+    expect(result.enroll?.configPath).toBe("/tmp/e.yaml");
+  });
+  it("--config-path keeps working (compat)", () => {
+    const { result } = parseCliArgs(["init", "--api-key", "k", "--config-path", "/tmp/p.yaml"], "1.2.3");
+    expect(result.init?.configPath).toBe("/tmp/p.yaml");
+  });
+});

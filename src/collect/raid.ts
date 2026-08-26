@@ -1,8 +1,8 @@
 import { readProcFile } from "../lib/parse.js";
-import type { RaidInfo } from "../lib/types.js";
+import type { RaidInfo, RaidSyncAction } from "../lib/types.js";
 
-export async function collectRaid(): Promise<RaidInfo[]> {
-  const raw = readProcFile("/proc/mdstat");
+export async function collectRaid(path: string = "/proc/mdstat"): Promise<RaidInfo[]> {
+  const raw = readProcFile(path);
   if (!raw) return [];
 
   const results: RaidInfo[] = [];
@@ -33,7 +33,36 @@ export async function collectRaid(): Promise<RaidInfo[]> {
       });
     }
 
-    results.push({ device, level, status, degraded, disks, failed_disks: failedDisks });
+    const entry: RaidInfo = { device, level, status, degraded, disks, failed_disks: failedDisks };
+
+    // In-progress sync operation (collectd mdevents parity close,
+    // 2026-08-24). The progress line belongs to this array's block, so
+    // scan its continuation lines until a blank line or the next mdN
+    // device line. Only the bracketed in-progress form is captured
+    // ("[==>....]  resync = 12.6% (...) finish=76.2min speed=186496K/sec");
+    // "resync=DELAYED"/"resync=PENDING" queue markers are not a running
+    // operation. Field absent when no operation is running; a malformed
+    // piece of a matched line yields null for that piece only.
+    for (let j = i + 1; j < lines.length; j++) {
+      const line = lines[j];
+      if (line.trim() === "" || /^md\d+\s*:/.test(line)) break;
+      const opMatch = line.match(/\[[=>.]*\]\s+(resync|recovery|check|reshape)\s*=/);
+      if (!opMatch) continue;
+      const percentMatch = line.match(/=\s*([\d.]+)%/);
+      const finishMatch = line.match(/finish=([\d.]+)min/);
+      const speedMatch = line.match(/speed=(\d+)K\/sec/);
+      const percent = percentMatch ? parseFloat(percentMatch[1]) : NaN;
+      const finish = finishMatch ? parseFloat(finishMatch[1]) : NaN;
+      entry.sync_action = {
+        operation: opMatch[1] as RaidSyncAction["operation"],
+        percent: Number.isFinite(percent) ? percent : null,
+        finish_min: Number.isFinite(finish) ? finish : null,
+        speed_kb_s: speedMatch ? parseInt(speedMatch[1], 10) : null,
+      };
+      break;
+    }
+
+    results.push(entry);
   }
 
   return results;
