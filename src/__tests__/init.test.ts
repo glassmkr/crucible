@@ -389,6 +389,34 @@ describe("runInit", () => {
     expect(errors[0]).toContain("api key rejected");
   });
 
+  // The known-bad fixture. Before this, a 404 printed "api key validated" and
+  // init exited 0, so a typo'd ingest URL produced a running service that
+  // pushed into nothing. Found by probing the published binary against the
+  // marketing origin, which answers 404 where a real endpoint answers 405.
+  it("connectivity probe: 404 means the URL is wrong -> exit code 3", async () => {
+    const { deps, errors } = makeDeps({ fetchStatus: 404 });
+    const code = await runInit({ apiKey: VALID_NEW_KEY, configPath }, deps);
+    expect(code).toBe(3);
+    expect(errors[0]).toContain("no ingest endpoint");
+  });
+
+  // A real ingest route is POST-only, so 405 is the healthy answer and must
+  // still succeed.
+  it("connectivity probe: 405 is the healthy answer and proceeds", async () => {
+    const { deps, logs } = makeDeps({ fetchStatus: 405 });
+    const code = await runInit({ apiKey: VALID_NEW_KEY, configPath }, deps);
+    expect(code).toBe(0);
+    expect(logs.some((l) => l.includes("reachable (HTTP 405)"))).toBe(true);
+  });
+
+  // The probe is an unauthenticated GET, so it cannot validate a key and must
+  // not say it did.
+  it("connectivity probe: does not claim the key was validated", async () => {
+    const { deps, logs } = makeDeps({ fetchStatus: 405 });
+    await runInit({ apiKey: VALID_NEW_KEY, configPath }, deps);
+    expect(logs.some((l) => l.includes("api key validated"))).toBe(false);
+  });
+
   it("connectivity probe: 5xx warns but continues", async () => {
     const { deps, warns } = makeDeps({ fetchStatus: 502 });
     const code = await runInit({ apiKey: VALID_NEW_KEY, configPath }, deps);
