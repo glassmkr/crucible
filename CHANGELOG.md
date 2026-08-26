@@ -13,6 +13,39 @@ API contract the agent speaks; breaking any of those is a major version. The
 full policy and the freeze-review record live in
 [docs/V1_FREEZE.md](docs/V1_FREEZE.md).
 
+## [1.0.0] - 2026-08-26
+
+First stable release. From here the frozen compatibility surface is the config
+schema, the CLI (flags and exit codes), the privileged wrapper's action set,
+and the dashboard API contract the agent speaks. Breaking any of those is a
+major version.
+
+### Added
+
+- Single-file binaries for linux-x64 and linux-arm64, attached to the GitHub
+  Release with SHA256SUMS. They embed their own runtime, so a host with no
+  Node can run the agent. The version is injected at compile time, because a
+  compiled binary has no package.json to read.
+- CycloneDX SBOM published as a release asset.
+- Third-party notices, generated and checked for drift in CI.
+- DCO sign-off required on every commit.
+- Issue templates that ask for the hardware, because hardware bugs are not
+  reproducible without it.
+- Tested-support matrix recording where the agent has actually been exercised,
+  which is narrower than where it should work.
+- Eleven collectd parity closes: NUMA, ZFS ARC, hwmon fans and voltages,
+  interface flap counters, RAID resync progress, PCIe AER, host activity,
+  hugepages, vmstat rates, and CPU frequency.
+
+### Changed
+
+- **Security:** undici 8.8.0 to 8.10.0, closing five high-severity advisories
+  including downstream response desynchronization via the retry interceptor
+  and cross-user information disclosure through cache-control parsing. undici
+  is the agent's only outbound path.
+- The 1.0 surface freeze review fixed the regrets before freezing rather than
+  carrying them into a stable release.
+
 ## [Unreleased]
 
 ### Added
