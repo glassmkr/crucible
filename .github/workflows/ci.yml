@@ -8,6 +8,13 @@ name: CI
 on:
   pull_request:
     branches: [main]
+  # Also on push to main. A squash-merge creates a NEW commit that the PR run
+  # never saw: PR #121's head was green while the resulting merge commit had
+  # only the secret scan against it. Since the release tag points at a main
+  # commit and the tag is the publish, an unverified commit could otherwise
+  # reach npm. Verified 2026-08-26 on 25c3800, which had 1 check-run.
+  push:
+    branches: [main]
 
 permissions:
   contents: read
