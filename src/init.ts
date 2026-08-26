@@ -546,9 +546,10 @@ export async function runInit(opts: InitOptions, deps: InitDeps): Promise<number
     return 5;
   }
 
-  // Connectivity probe (optional). 401 means key is wrong → hard fail.
-  // 5xx / network errors → warn but continue (the host's network may
-  // still be coming up during a fresh install).
+  // Connectivity probe (optional). 401/403 means the key is wrong → hard fail.
+  // 404 means the URL is wrong → hard fail. 5xx / network errors → warn but
+  // continue (the host's network may still be coming up during a fresh
+  // install).
   if (!repairMode && !opts.noVerify) {
     const initialOrigin = ingestEndpoint!.origin;
     let current = ingestEndpoint!;
@@ -600,10 +601,25 @@ export async function runInit(opts: InitOptions, deps: InitDeps): Promise<number
         deps.error(`[init] api key rejected by ${current} (HTTP ${resp.status}). Double-check the key in your Glassmkr dashboard.`);
         return 3;
       }
+      // A real ingest endpoint is POST-only, so it answers this GET with 405.
+      // A 404 means there is no ingest endpoint at this URL at all, which is
+      // the single most likely self-hosting mistake: a typo in the path, or the
+      // marketing origin used instead of the dashboard origin. Accepting it
+      // used to print "api key validated", after which the service started and
+      // pushed into nothing for as long as nobody read the journal.
+      if (resp.status === 404) {
+        deps.error(`[init] no ingest endpoint at ${current} (HTTP 404). A working endpoint answers this probe with 405, since it accepts POST only. Check the URL: it should be your dashboard origin plus /api/v1/ingest, not the marketing site. Pass --no-verify to skip this probe.`);
+        return 3;
+      }
       if (resp.status >= 500) {
         deps.warn(`[init] ingest endpoint returned ${resp.status}; continuing anyway. Check connectivity post-install.`);
       } else {
-        deps.log(`[init] api key validated (HTTP ${resp.status}).`);
+        // Deliberately NOT "api key validated". This probe is a GET, and the
+        // endpoint does not authenticate GETs, so a non-401 answer says the
+        // endpoint is reachable and nothing whatsoever about the key. Claiming
+        // otherwise is how an operator learns their key is wrong from silence
+        // instead of from init.
+        deps.log(`[init] ingest endpoint reachable (HTTP ${resp.status}); key not rejected.`);
       }
       probeComplete = true;
       break;
