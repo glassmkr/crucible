@@ -3,3 +3,6 @@ dist/
 *.tsbuildinfo
 .env
 .DS_Store
+
+# bun compile leaves these next to the output binary
+*.bun-build
