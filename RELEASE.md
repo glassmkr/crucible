@@ -37,7 +37,11 @@ Single source of truth for cutting a Crucible release. Lives here (the release-t
 
    The tag push triggers `.github/workflows/publish.yml` (npm publish via Trusted Publishing / OIDC, `--provenance`; **no npm token needed**).
 
-   PR-level CI does run here: `ci.yml` ("Build, test, and audit") and `secret-scan.yml` ("gitleaks secret scan") both fire on every PR to `main`. The repo has no required status checks, so `gh pr merge` succeeds against pending or red CI; poll `gh pr checks` for actual PASS first. The local build+test in step 4 remains the pre-tag gate.
+   PR-level CI does run here: `ci.yml` ("Build, test, and audit") and `secret-scan.yml` ("gitleaks secret scan") both fire on every PR to `main`. Since 2026-08-26 `ci.yml` ALSO fires on push to `main`, which is what actually protects the tag: a squash-merge produces a new commit the PR run never saw, and the tag points at that commit. Before tagging, confirm the MERGE COMMIT itself is green, not merely the PR:
+     ```
+     gh api repos/glassmkr/crucible/commits/<sha>/check-runs -q '.check_runs[] | "\(.conclusion)  \(.name)"'
+     ```
+     v1.0.0's first candidate commit had only the secret scan against it. The repo has no required status checks, so `gh pr merge` succeeds against pending or red CI; poll `gh pr checks` for actual PASS first. The local build+test in step 4 remains the pre-tag gate.
 
 7. **Verify the publish landed:**
    ```
@@ -108,6 +112,7 @@ Single source of truth for cutting a Crucible release. Lives here (the release-t
 - [ ] package.json version bumped
 - [ ] `npm run build && npx vitest run` clean
 - [ ] release PR opened, both checks PASS, squash-merged
+- [ ] MERGE COMMIT itself green (check-runs on the sha, not just the PR)
 - [ ] tag created on the squash-merged `main` commit and pushed
 - [ ] `npm view @glassmkr/crucible version` shows the new version
 - [ ] GitHub Release verified with `gh release view vX.Y.Z` (auto-created by publish.yml)
