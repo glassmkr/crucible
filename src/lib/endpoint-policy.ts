@@ -1,6 +1,21 @@
 import { isIP, type LookupFunction } from "node:net";
 import { lookup } from "node:dns/promises";
-import { Agent, fetch as undiciFetch, type Dispatcher } from "undici";
+// Deep path on purpose, and it must stay this way. Bare "undici" resolves to
+// BUN'S BUILT-IN SHIM when the single-file binaries are compiled, and that shim
+// is a stub: its Agent has a constructor and nothing else. Two consequences,
+// both found by enrolling a compiled binary on a real host rather than by any
+// test in this repo, because the suite mocks the transport:
+//
+//   1. dispatcher.close() is undefined, so init, enroll and every snapshot
+//      push throw. The binary could run --version and nothing else.
+//   2. Worse and quieter: fetch IGNORED the pinned dispatcher entirely and did
+//      a normal DNS resolution. The address pinning below is an endpoint-policy
+//      security control, and in the shimmed binary it simply was not applied.
+//
+// "undici/index.js" resolves to the real package under both bun and node
+// (undici declares no exports map, so the subpath is legal). Reverting this to
+// bare "undici" silently disarms the pinning in every published binary.
+import { Agent, fetch as undiciFetch, type Dispatcher } from "undici/index.js";
 
 // Node's global and package undici Request classes have different type-only
 // overloads. Pinned callers pass URL values, so bridge that declaration gap
