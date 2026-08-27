@@ -25,7 +25,10 @@ anonymous.
 
 ## Supported versions
 
-Crucible is pre-1.0 and ships from a single release line. Security fixes land in
+Crucible is 1.x and ships from a single release line. The config schema, the CLI
+flags and exit codes, the privileged wrapper's action set, and the dashboard API
+contract are the frozen compatibility surface; breaking any of them is a major
+version. Security fixes land in
 the latest published version on npm (`@glassmkr/crucible`); please upgrade to the
 latest before reporting, in case the issue is already fixed:
 
