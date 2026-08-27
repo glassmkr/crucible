@@ -117,14 +117,23 @@ jobs:
   # Single-file binaries (no Node.js needed on the installing host), attached
   # to the GitHub Release the publish job creates. Built with bun (see
   # scripts/build-binaries.sh for the toolchain rationale and the version
-  # smoke test). GPG signing of SHA256SUMS stays a manual maintainer step
-  # (scripts/sign-release.sh); the key never lives in CI.
+  # smoke test).
+  #
+  # Integrity: each binary gets a build-provenance attestation, which ties the
+  # artifact's digest to this workflow, this repository and this commit, and is
+  # checkable by anyone with `gh attestation verify`. Deliberately NOT GPG: a
+  # single-operator signing key's realistic failure mode is loss, and losing it
+  # makes every prior signature unverifiable. There is no key here to lose.
   binaries:
     name: Build and attach binaries
     needs: publish
     runs-on: ubuntu-latest
     permissions:
       contents: write
+      # attest-build-provenance signs via Sigstore using the job's OIDC
+      # identity, so both of these are required and neither is a stored secret.
+      id-token: write
+      attestations: write
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
@@ -141,6 +150,15 @@ jobs:
       # release asset alongside the binaries and checksums.
       - name: SBOM (CycloneDX)
         run: npx --yes @cyclonedx/cyclonedx-npm --omit dev --output-file dist-bin/sbom.cdx.json
+      # Attest BEFORE upload, so a binary that cannot be attested never reaches
+      # the release. Verify a downloaded one with:
+      #   gh attestation verify <file> --repo glassmkr/crucible
+      - name: Attest binaries
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: |
+            dist-bin/glassmkr-crucible-linux-x64
+            dist-bin/glassmkr-crucible-linux-arm64
       - name: Attach to release
         env:
           GH_TOKEN: ${{ github.token }}

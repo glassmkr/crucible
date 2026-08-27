@@ -1,0 +1,50 @@
+# Exercise the binary build and its provenance attestation WITHOUT publishing.
+#
+# The binaries job in publish.yml had never run on any release before v1.0.0, so
+# its first execution was also its first test. That is a bad shape for anything
+# on the release path, and attestation adds a new failure surface to the same
+# job. This workflow lets the whole mechanism be rehearsed on demand: it builds
+# the binaries, attests them, and uploads them as workflow artifacts. Nothing is
+# tagged, published, or attached to a release.
+#
+# The attestation it produces names THIS workflow as the builder, so it proves
+# the mechanism and the verification command rather than standing in for a real
+# release attestation.
+name: Binaries dry run
+
+on:
+  workflow_dispatch:
+
+permissions: {}
+
+jobs:
+  dryrun:
+    name: Build and attest binaries (no publish)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 24
+          cache: npm
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version: 1.4.0
+      - run: npm ci --ignore-scripts
+      - name: Build binaries
+        run: ./scripts/build-binaries.sh dist-bin
+      - name: Attest binaries
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: |
+            dist-bin/glassmkr-crucible-linux-x64
+            dist-bin/glassmkr-crucible-linux-arm64
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: dryrun-binaries
+          path: dist-bin/
+          retention-days: 1
