@@ -55,7 +55,13 @@ Single source of truth for cutting a Crucible release. Lives here (the release-t
    ```
    Only create it by hand (`gh release create vX.Y.Z --title "vX.Y.Z" --notes "<customer-facing notes>"`) if the workflow's Release step failed.
 
-   **8a. Verify the binaries attached.** After the Release exists, the workflow's `binaries` job builds single-file Linux x64/arm64 executables with bun (`scripts/build-binaries.sh`; the script itself asserts the injected version took, guarding the 0.0.0 case) and uploads them plus `SHA256SUMS` and a CycloneDX SBOM (`sbom.cdx.json`, production tree) as release assets. Confirm with `gh release view vX.Y.Z` (assets listed at the bottom). GPG-signing `SHA256SUMS` remains a manual maintainer step via `scripts/sign-release.sh`; the signing key never lives in CI.
+   **8a. Verify the binaries attached.** After the Release exists, the workflow's `binaries` job builds single-file Linux x64/arm64 executables with bun (`scripts/build-binaries.sh`; the script itself asserts the injected version took, guarding the 0.0.0 case) and uploads them plus `SHA256SUMS` and a CycloneDX SBOM (`sbom.cdx.json`, production tree) as release assets. Confirm with `gh release view vX.Y.Z` (assets listed at the bottom). Each binary also carries a build-provenance attestation created in the same job before upload, so a binary that could not be attested never reaches the release. Confirm one validates against what a stranger would actually download:
+
+   ```
+   gh attestation verify glassmkr-crucible-linux-x64 --repo glassmkr/crucible
+   ```
+
+   Attestation rather than GPG is deliberate: a single-operator signing key's realistic failure mode is loss, and losing it makes every prior signature unverifiable. There is no key in CI because there is no key. `scripts/binaries-dryrun` (the **Binaries dry run** workflow) exercises the build and attestation on demand without publishing, so this path is never first tested by a release.
 
 9. **Fleet / customer roll.** The fix only takes effect once a host runs the new version. Roll per host **sequentially** (verify each before the next), do not parallelize across shared hosts.
 
