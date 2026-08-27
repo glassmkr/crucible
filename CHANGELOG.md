@@ -13,6 +13,32 @@ API contract the agent speaks; breaking any of those is a major version. The
 full policy and the freeze-review record live in
 [docs/V1_FREEZE.md](docs/V1_FREEZE.md).
 
+## [1.0.1] - 2026-08-27
+
+### Fixed
+
+- `init` now refuses a 404 from the ingest endpoint instead of reporting
+  success. A working endpoint is POST-only and answers the probe's GET with
+  405; a 404 means there is no ingest endpoint at that URL, which is the most
+  likely self-hosting mistake. Previously any status below 500 that was not
+  401/403 printed "api key validated", so a mistyped URL produced a confident
+  pass, a running service, and telemetry pushed into nothing until somebody read
+  the journal. The message now names the URL to check and points at
+  `--no-verify` for the rare proxy that 404s a GET it would accept a POST on.
+- `init` no longer claims to have validated the API key. The probe is an
+  unauthenticated GET against an endpoint that does not authenticate GETs, so a
+  non-401 answer says the endpoint is reachable and nothing about the key. It
+  now reports exactly that.
+
+### Changed
+
+- Release binaries carry a build-provenance attestation, tying each binary's
+  digest to the workflow, repository and commit that produced it. Verify a
+  download with `gh attestation verify glassmkr-crucible-linux-x64 --repo
+  glassmkr/crucible`. This replaces a long-standing intention to GPG-sign
+  checksums: a single-operator signing key's realistic failure mode is loss, and
+  losing it makes every prior signature unverifiable. There is no key to lose.
+
 ## [1.0.0] - 2026-08-26
 
 First stable release. From here the frozen compatibility surface is the config
