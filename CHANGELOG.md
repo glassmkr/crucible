@@ -36,8 +36,8 @@ full policy and the freeze-review record live in
   digest to the workflow, repository and commit that produced it. Verify a
   download with `gh attestation verify glassmkr-crucible-linux-x64 --repo
   glassmkr/crucible`. This replaces a long-standing intention to GPG-sign
-  checksums: a single-operator signing key's realistic failure mode is loss, and
-  losing it makes every prior signature unverifiable. There is no key to lose.
+  checksums. Attestation binds provenance to the build workflow itself, with no
+  key for a single maintainer to hold, rotate, or lose.
 
 ## [1.0.0] - 2026-08-26
 
