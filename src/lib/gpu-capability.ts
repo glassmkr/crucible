@@ -152,11 +152,19 @@ export function classifyProbe(
     return { probe, status: "not_supported", detail: firstLine(stdout) };
   }
   if (!hasUsableContent(stdout)) {
-    // Exit 0, nothing we recognise, no marker. On an L4 this is what
-    // `nvlink --status` does, and it means the feature is absent rather than
-    // broken. Treating it as "supported with zero links" is the bug this whole
-    // module exists to prevent.
-    return { probe, status: "not_supported", detail: "no output and no error" };
+    // Exit 0, nothing we recognise, no marker. EMPTY output means the feature
+    // is absent: on an L4 this is what `nvlink --status` does, and treating it
+    // as "supported with zero links" is the bug this whole module exists to
+    // prevent. NONEMPTY output that fails the caller's content test is a
+    // different animal (Codex 2026-08-29 #15): the tool ran and said
+    // something we could not read, which is the exact shape a driver
+    // output-format change produces. Filing that under not_supported makes a
+    // broken parser look like absent hardware, silently and forever;
+    // parse_or_api_mismatch is the status that gets a human to look.
+    if (stdout.trim() === "") {
+      return { probe, status: "not_supported", detail: "no output and no error" };
+    }
+    return { probe, status: "parse_or_api_mismatch", detail: `unrecognized output: ${firstLine(stdout)}` };
   }
 
   return { probe, status: "supported", detail: null };

@@ -13,6 +13,28 @@ API contract the agent speaks; breaking any of those is a major version. The
 full policy and the freeze-review record live in
 [docs/V1_FREEZE.md](docs/V1_FREEZE.md).
 
+## [Unreleased]
+
+### Fixed
+
+- GPU capability probes that exit 0 with output the parser cannot read are now
+  recorded as `parse_or_api_mismatch` instead of `not_supported`. Empty output
+  still reads as `not_supported` (the verified no-NVLink shape); nonempty
+  unreadable output is the shape a driver output-format change produces, and
+  filing it as absent hardware hid the breakage from the one status that gets
+  a human to look.
+
+### Docs
+
+- README: the default collection interval is 300 seconds, not 60 (the sample
+  config and the resource-usage note now say so); the rule catalogue is 70
+  rules with priorities P0 through P4, not 65 with P1 through P4.
+- RELEASE.md: the attestation verify step now downloads the release binary
+  first (`gh attestation verify` reads a local file and fetches nothing); the
+  dashboard follow-up checklist documents the 2026-08-29 OSS-pivot gates and
+  their INCOMPLETE (exit 2) state; the rule-count step names this README's own
+  two marker lines, which no CI gate reaches across repos to check.
+
 ## [1.0.1] - 2026-08-27
 
 ### Fixed

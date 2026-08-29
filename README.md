@@ -3,12 +3,13 @@
 [![MIT License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![npm version](https://img.shields.io/npm/v/@glassmkr/crucible.svg)](https://www.npmjs.com/package/@glassmkr/crucible)
 
-<!-- Canonical rule count: 65 across 9 categories. -->
-Lightweight bare-metal server monitoring agent. Collects hardware and OS health every 60 seconds at the default interval and pushes snapshots to the [Glassmkr Dashboard](https://app.glassmkr.com), which evaluates 65 alert rules across 9 categories and sends notifications.
+<!-- Canonical rule count: 70 across 9 categories. Read it from the dashboard
+     repo's generated rules.json / coverage.test.ts, never from prose. -->
+Lightweight bare-metal server monitoring agent. Collects hardware and OS health every 5 minutes at the default interval (configurable down to 60 seconds) and pushes snapshots to the [Glassmkr Dashboard](https://app.glassmkr.com), which evaluates 70 alert rules across 9 categories and sends notifications.
 
 Open source. MIT licensed. Built by [Glassmkr](https://glassmkr.com). Crucible is the open-source product; the optional [Glassmkr Dashboard](https://app.glassmkr.com) is a hosted SaaS that consumes Crucible's snapshots.
 
-**Resource usage:** under 1% of host RAM on every host we tested. Crucible 0.13.6 measured across all 10 validation hosts at steady state shows a median 108 MB RSS (range 81 to 116 MB; varies primarily with the bundled Node version). Effectively 0% CPU at the default 60-second snapshot interval. Random-read I/O throughput delta under 1.5% under fio saturation (no measurable impact on customer workloads).
+**Resource usage:** under 1% of host RAM on every host we tested. Crucible 0.13.6 measured across all 10 validation hosts at steady state shows a median 108 MB RSS (range 81 to 116 MB; varies primarily with the bundled Node version). Effectively 0% CPU at a 60-second snapshot interval (the measurement cadence; the shipped default is 300 seconds, which collects five times less often). Random-read I/O throughput delta under 1.5% under fio saturation (no measurable impact on customer workloads).
 
 **Security:** See [glassmkr.com/trust](https://glassmkr.com/trust) for the full list of what Crucible does and does not collect.
 
@@ -107,7 +108,7 @@ Options:
 ```yaml
 server_name: "web-01"
 collection:
-  interval_seconds: 60
+  interval_seconds: 300  # the default; minimum 60
   ipmi: true
   smart: true
 dashboard:
@@ -324,8 +325,9 @@ best-effort, so applications should still avoid writing secrets to logs.
 | File descriptors | System-wide allocation |
 | Reboot evidence | pstore / kdump / wtmp; expected-vs-unexpected reboot classification |
 
-<!-- Canonical rule count: 65 across 9 categories. -->
-Dashboard evaluates 65 alert rules server-side across 9 categories (storage, zfs, filesystem, memory & CPU, network, hardware/BMC, time & services, security & patching, GPU), with priorities P1 Urgent through P4 Low. Every rule ships with deep FIX content (copy-pasteable remediation + verdict prior + rollback notes); 30+ are verified end-to-end on real hardware. Full list: [glassmkr.com/docs/rules](https://glassmkr.com/docs/rules).
+<!-- Canonical rule count: 70 across 9 categories. Read it from the dashboard
+     repo's generated rules.json / coverage.test.ts, never from prose. -->
+Dashboard evaluates 70 alert rules server-side across 9 categories (storage, zfs, filesystem, memory & CPU, network, hardware/BMC, time & services, security & patching, GPU), with priorities P0 Critical through P4 Low. Every rule ships with deep FIX content (copy-pasteable remediation + verdict prior + rollback notes); 30+ are verified end-to-end on real hardware. Full list: [glassmkr.com/docs/rules](https://glassmkr.com/docs/rules).
 
 ## Requirements
 

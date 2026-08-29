@@ -61,6 +61,12 @@ Single source of truth for cutting a Crucible release. Lives here (the release-t
    gh attestation verify glassmkr-crucible-linux-x64 --repo glassmkr/crucible
    ```
 
+   `gh attestation verify` needs the artifact as a LOCAL file; it does not fetch it. Download first, then verify (the command above assumes the file is already in the working directory):
+   ```
+   gh release download vX.Y.Z --repo glassmkr/crucible -p glassmkr-crucible-linux-x64
+   gh attestation verify glassmkr-crucible-linux-x64 --repo glassmkr/crucible
+   ```
+
    Attestation rather than GPG is deliberate: a single-operator signing key's realistic failure mode is loss, and losing it makes every prior signature unverifiable. There is no key in CI because there is no key. `scripts/binaries-dryrun` (the **Binaries dry run** workflow) exercises the build and attestation on demand without publishing, so this path is never first tested by a release.
 
 9. **Fleet / customer roll.** The fix only takes effect once a host runs the new version. Roll per host **sequentially** (verify each before the next), do not parallelize across shared hosts.
@@ -105,11 +111,17 @@ Single source of truth for cutting a Crucible release. Lives here (the release-t
 
 12. **[dashboard] If the release ADDS OR REMOVES AN ALERT RULE, the advertised rule count moves too**, and it is claimed in far more places than anyone expects: 83 sites across 26 files as of 2026-07-30, including all 8 `/vs/*` and all 4 `/for-*` pages. CI-enforced since glassmkr #603 (`pnpm lint:rule-count`), which checks the site copy against the length of the generated `rules.json` and skips an explicit list of dated pages (`/blog/*`, `/docs/changelog`) whose numbers were true at publication.
     - Read the canonical count from `apps/dashboard/src/lib/server/alerts/fix-workflow/__tests__/coverage.test.ts`; never trust a number quoted in prose, including one quoted here.
+    - THIS repo's README claims the count too, in two `<!-- Canonical rule count -->` marker lines plus the sentences under them, and no CI gate reaches across repos to check them (they sat at 65 while the catalogue held 70 until 2026-08-29). A rule-count move is not done until both README spots move with it.
     - The matcher is easy to make too STRICT, and that direction fails silently: two attempts during #603 under-matched and looked green, and a stale `62` had survived two prior hand reconciles on `/docs/rules` itself. If you touch the matcher, plant a known-bad fixture and confirm it FAILS.
     - The gate also fails on ZERO matches, so a broken matcher cannot report OK.
     - Rule additions have their own checklist beyond the count: see the `glassmkr-rule-change` skill, notably the `gen-rules.mjs` CATEGORY map, which is enforced by `pnpm lint:rule-category` since glassmkr #599 (before that it failed at DEPLOY, not at PR CI).
     - `pnpm validate:rules` now loads the PRODUCTION `RuleMetadataSchema` and validates every rule YAML against it, not merely that the YAML parses (glassmkr #621, adversarial review round 5 finding #4). Before that a syntactically valid but schema-invalid rule, such as `priority: P9`, passed the gate and then threw `Invalid enum value` at dashboard boot. Its known-bad fixture is `pnpm validate:rules:test`.
     - `pnpm test:nginx-prune` pins the deploy-time nginx symlink prune (glassmkr #621). It is not a lint, but it is the only automated check on logic that runs `sudo rm` against production nginx, so treat a failure as release-blocking rather than cosmetic.
+
+13. **[dashboard] The OSS-pivot gates and their third exit state.** Added 2026-08-29; a dashboard follow-up PR must leave all of these green, and two of them can end INCOMPLETE rather than pass/fail:
+    - `pnpm lint:comment-leak` - rendered pages must not leak comment text into copy.
+    - `pnpm lint:plan-language` - no active surface may sell the retired paid tier (upsell phrases, checkout links, `?plan=pro`, `upgrade_url`). If a release note or docs edit trips it, the copy is wrong, not the gate; the pricing registry is `ground-truth.yaml`.
+    - `node scripts/check-exhibits.mjs` and `node scripts/check-machine-surface.mjs` - public images and machine surfaces (llms.txt, OpenAPI) match reality. These exit **2 for INCOMPLETE** (something was classified but unresolved, or a check could not run), distinct from 0=pass and 1=fail. Exit 2 is not a pass: a person must resolve the listed item or explicitly waive it; `check-openapi-depth.mjs` accepts `--allow-skips` as that explicit waiver when no live origin exists to probe.
 
 ## Checklist (copy into the release PR / issue)
 
