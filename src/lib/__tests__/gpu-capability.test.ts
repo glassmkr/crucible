@@ -79,11 +79,23 @@ describe("classifyProbe", () => {
   });
 
   it("lets the caller decide what counts as usable content", () => {
-    // topo -m always prints a legend, so non-empty is not enough for it.
+    // topo -m always prints a legend, so non-empty is not enough for it. But a
+    // legend with NO matrix row is output we failed to read, not evidence the
+    // feature is absent: a healthy single-GPU host still prints its own row,
+    // so legend-only means the format moved under the parser. The earlier
+    // expectation here (not_supported) blessed misclassifying a driver format
+    // change as absent hardware (Codex 2026-08-29 #15).
     const legendOnly = "Legend:\n  X = Self\n";
     const strict = (s: string) => /GPU\d/.test(s);
-    expect(classifyProbe("topo", ok({ stdout: legendOnly }), strict).status).toBe("not_supported");
+    expect(classifyProbe("topo", ok({ stdout: legendOnly }), strict).status).toBe("parse_or_api_mismatch");
     expect(classifyProbe("topo", ok({ stdout: "GPU0\tX\t" }), strict).status).toBe("supported");
+  });
+
+  it("keeps EMPTY exit-0 output as not_supported (the verified L4 nvlink shape)", () => {
+    const nonEmptyTest = (s: string) => s.trim().length > 0;
+    const c = classifyProbe("nvlink", ok({ stdout: "" }), nonEmptyTest);
+    expect(c.status).toBe("not_supported");
+    expect(c.detail).toBe("no output and no error");
   });
 
   it("isMeasured rejects null and undefined", () => {
