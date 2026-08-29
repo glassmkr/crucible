@@ -13,7 +13,7 @@ API contract the agent speaks; breaking any of those is a major version. The
 full policy and the freeze-review record live in
 [docs/V1_FREEZE.md](docs/V1_FREEZE.md).
 
-## [Unreleased]
+## [1.1.0] - 2026-08-29
 
 ### License
 
@@ -103,7 +103,7 @@ major version.
 - The 1.0 surface freeze review fixed the regrets before freezing rather than
   carrying them into a stable release.
 
-## [Unreleased]
+<!-- The features below landed in the v1.0 sprint (#120) and shipped in 1.0.0; their [Unreleased] heading was never renamed at release time, so they are folded into the 1.0.0 section above (fixed 2026-08-29). -->
 
 ### Added
 
