@@ -7,7 +7,7 @@
      repo's generated rules.json / coverage.test.ts, never from prose. -->
 Lightweight bare-metal server monitoring agent. Collects hardware and OS health every 5 minutes at the default interval (configurable down to 60 seconds) and pushes snapshots to the [Glassmkr Dashboard](https://app.glassmkr.com), which evaluates 70 alert rules across 9 categories and sends notifications.
 
-Open source, AGPL-3.0 licensed. Built by [Glassmkr](https://glassmkr.com). Crucible is the open-source product; the optional [Glassmkr Dashboard](https://app.glassmkr.com) is a hosted SaaS that consumes Crucible's snapshots.
+Open source, AGPL-3.0 licensed. Built by [Glassmkr](https://glassmkr.com). The [Glassmkr Dashboard](https://github.com/glassmkr/glassmkr) that consumes Crucible's snapshots is open source too: self-hostable with one Docker Compose file, or free to use hosted at [app.glassmkr.com](https://app.glassmkr.com).
 
 **Resource usage:** under 1% of host RAM on every host we tested. Crucible 0.13.6 measured across all 10 validation hosts at steady state shows a median 108 MB RSS (range 81 to 116 MB; varies primarily with the bundled Node version). Effectively 0% CPU at a 60-second snapshot interval (the measurement cadence; the shipped default is 300 seconds, which collects five times less often). Random-read I/O throughput delta under 1.5% under fio saturation (no measurable impact on customer workloads).
 

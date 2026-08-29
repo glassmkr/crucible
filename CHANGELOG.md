@@ -13,6 +13,16 @@ API contract the agent speaks; breaking any of those is a major version. The
 full policy and the freeze-review record live in
 [docs/V1_FREEZE.md](docs/V1_FREEZE.md).
 
+## [1.1.1] - 2026-08-30
+
+### Docs
+
+- README: the license is stated plainly (the per-release license history lives
+  in this changelog), and the Glassmkr Dashboard is described as what it now
+  is: open source at github.com/glassmkr/glassmkr, self-hostable with one
+  Docker Compose file, with a free hosted instance. No code changes; agents
+  running 1.1.0 have nothing to gain from upgrading.
+
 ## [1.1.0] - 2026-08-29
 
 ### License
