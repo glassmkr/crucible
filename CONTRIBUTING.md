@@ -1,6 +1,6 @@
 # Contributing to Crucible
 
-Thanks for your interest in Crucible, the open-source (MIT) monitoring agent
+Thanks for your interest in Crucible, the open-source (AGPL-3.0) monitoring agent
 behind [Glassmkr](https://glassmkr.com). Bug reports, fixes, and new collectors
 are all welcome.
 
@@ -18,7 +18,7 @@ are all welcome.
 Every commit must carry a `Signed-off-by:` line (`git commit -s` adds it).
 By signing off you certify the [Developer Certificate of Origin](https://developercertificate.org/):
 in plain words, that you wrote the change or otherwise have the right to
-submit it under this repository's MIT license, and that you understand the
+submit it under this repository's AGPL-3.0-only license, and that you understand the
 contribution is public and recorded permanently. That is the whole
 agreement; there is no CLA and no copyright assignment. CI rejects
 unsigned commits on pull requests.

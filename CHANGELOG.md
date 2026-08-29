@@ -15,6 +15,15 @@ full policy and the freeze-review record live in
 
 ## [Unreleased]
 
+### License
+
+- Crucible is relicensed from MIT to AGPL-3.0-only, effective from this
+  release onward. Versions 1.0.1 and earlier were published under MIT and
+  remain MIT; a granted license is not retractable. All code in this
+  repository was authored by the copyright holder, so no third-party
+  contributor consent was required. The agent and the dashboard now carry the
+  same license.
+
 ### Fixed
 
 - GPU capability probes that exit 0 with output the parser cannot read are now
