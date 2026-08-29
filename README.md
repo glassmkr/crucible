@@ -15,17 +15,23 @@ Open source. MIT licensed. Built by [Glassmkr](https://glassmkr.com). Crucible i
 ## Screenshots
 
 ![Dashboard alert with copy-pasteable fix commands](https://glassmkr.com/screenshots/alerts.png?v=20260701)
-*A P1 alert showing the rule trigger, evidence, and the exact remediation
-commands. Each rule ships pre-written fix content; the agent does not write
-to your server.*
+*Illustration composed for this README, not a capture: the alert, its
+evidence, and the commands are written into the showcase component; no host
+produced them. It shows the layout of a P1 alert with the rule trigger,
+evidence, and remediation commands. Each rule ships pre-written fix content;
+the agent does not write to your server.*
 
 ![Storage and SMART drive health](https://glassmkr.com/screenshots/hardware.png?v=20260701)
-*Per-mount capacity and per-disk SMART status. Drives are checked against
-SMART attributes, NVMe Critical Warning bits, and ZFS pool state.*
+*Illustration composed for this README, not a capture: the drive models,
+capacities, and SMART values are written into the showcase component. It shows
+the layout of per-mount capacity and per-disk SMART status; real deployments
+check SMART attributes, NVMe Critical Warning bits, and ZFS pool state.*
 
 ![Server fleet overview](https://glassmkr.com/screenshots/overview.png?v=20260701)
-*Fleet view with per-server status, distro, IP, and last-seen timestamp.
-Alerted servers surface a counter at a glance.*
+*Illustration composed for this README, not a capture: hostnames are
+invented and the addresses are from the RFC 5737 documentation range. It shows
+the fleet view layout with per-server status, distro, IP, and last-seen
+timestamp; alerted servers surface a counter at a glance.*
 
 ## Install
 
