@@ -7,7 +7,7 @@
      repo's generated rules.json / coverage.test.ts, never from prose. -->
 Lightweight bare-metal server monitoring agent. Collects hardware and OS health every 5 minutes at the default interval (configurable down to 60 seconds) and pushes snapshots to the [Glassmkr Dashboard](https://app.glassmkr.com), which evaluates 70 alert rules across 9 categories and sends notifications.
 
-Open source, AGPL-3.0 licensed from v1.1.0 onward (v1.0.1 and earlier were published under MIT and remain MIT). Built by [Glassmkr](https://glassmkr.com). Crucible is the open-source product; the optional [Glassmkr Dashboard](https://app.glassmkr.com) is a hosted SaaS that consumes Crucible's snapshots.
+Open source, AGPL-3.0 licensed. Built by [Glassmkr](https://glassmkr.com). Crucible is the open-source product; the optional [Glassmkr Dashboard](https://app.glassmkr.com) is a hosted SaaS that consumes Crucible's snapshots.
 
 **Resource usage:** under 1% of host RAM on every host we tested. Crucible 0.13.6 measured across all 10 validation hosts at steady state shows a median 108 MB RSS (range 81 to 116 MB; varies primarily with the bundled Node version). Effectively 0% CPU at a 60-second snapshot interval (the measurement cadence; the shipped default is 300 seconds, which collects five times less often). Random-read I/O throughput delta under 1.5% under fio saturation (no measurable impact on customer workloads).
 
@@ -361,8 +361,8 @@ where it should work) is recorded in [SUPPORT.md](SUPPORT.md).
 
 ## License
 
-AGPL-3.0-only, from v1.1.0 onward. See [LICENSE](LICENSE). Versions 1.0.1 and
-earlier were published under MIT and remain MIT. Third-party dependency
-licenses are listed in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md). This
+AGPL-3.0-only. See [LICENSE](LICENSE); the license history of earlier releases
+is recorded in [CHANGELOG.md](CHANGELOG.md). Third-party dependency licenses
+are listed in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md). This
 repository does not use per-file license headers; the LICENSE file governs the
 whole tree.
