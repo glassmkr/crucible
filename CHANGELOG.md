@@ -13,6 +13,33 @@ API contract the agent speaks; breaking any of those is a major version. The
 full policy and the freeze-review record live in
 [docs/V1_FREEZE.md](docs/V1_FREEZE.md).
 
+## [1.2.0] - 2026-08-30
+
+### Added
+
+- Boot-config integrity collection. A new read-only privileged action inspects
+  the boot configuration (the mounted root filesystem, the block-device
+  identity table, the kernel command-line sources, the per-kernel boot entries,
+  and the bootloader default selection) and cross-checks every boot entry's
+  root filesystem reference against the filesystems that actually exist on the
+  host. This surfaces a boot configuration that will fail on the next reboot,
+  or is drifting toward one, while the host is still running and reachable, so
+  it can be fixed before a reboot strands the machine in the initramfs recovery
+  shell. Covers both the RHEL family (BLS entries plus the kernel-cmdline
+  source that new kernel installs inherit) and the Debian family (grub.cfg plus
+  the default selection). The dashboard's two new boot-config rules consume it;
+  older dashboards ignore the extra snapshot field. Capability-gated: on an
+  unprivileged host, or before the privileged wrapper is refreshed, the field
+  is reported unavailable and nothing fires.
+
+### Upgrade note
+
+- This release adds a privileged wrapper action. On hosts that use the sudo
+  wrapper (the default hardened install), refresh the wrapper after upgrading
+  so the new action is available; until then the boot-config field reports
+  unavailable. Hosts running the agent as root need no wrapper step. No config,
+  CLI, or dashboard-contract changes; upgrading is otherwise a drop-in.
+
 ## [1.1.1] - 2026-08-30
 
 ### Docs
