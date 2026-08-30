@@ -302,6 +302,16 @@ describe("WRAPPER_SCRIPT (the sudo facade)", () => {
     expect(WRAPPER_SCRIPT).toContain("exec zpool status");
     expect(WRAPPER_SCRIPT).toContain("exec iptables -L -n");
   });
+  it("wires the boot-config action as a read-only scan (no write verbs)", () => {
+    expect(WRAPPER_SCRIPT).toContain("boot-config)");
+    // The scan reads identity + config only; it must never mutate boot state.
+    const scan = WRAPPER_SCRIPT.slice(WRAPPER_SCRIPT.indexOf("boot-config)"));
+    expect(scan).toContain("findmnt -no SOURCE /");
+    expect(scan).toContain("blkid -o export");
+    for (const verb of ["grub2-mkconfig", "grub-mkconfig", "grubby", "grub2-editenv", "grub-editenv", " sed -i", " dd ", "mkfs", "> /boot", ">/boot"]) {
+      expect(scan.includes(verb)).toBe(false);
+    }
+  });
 });
 
 describe("SUDOERS_CONTENT", () => {
