@@ -61,7 +61,7 @@ export type PrivilegedAction =
   | "dmesg-errcrit" | "dmesg-io"
   | "iptables" | "nft" | "ufw" | "firewall-cmd" | "pve-firewall"
   | "sshd" | "lvs" | "ethtool" | "last" | "dmidecode-memory" | "proc-fd"
-  | "ssh-config-mtime";
+  | "ssh-config-mtime" | "boot-config";
 
 // proc-fd scan (added 0.13.20). Runs the per-process FD count + RLIMIT read as
 // root so the unprivileged `glassmkr` service user can see root-owned processes
@@ -95,6 +95,50 @@ for f in /etc/ssh/sshd_config.d/*.conf; do
   fi
 done
 echo "$newest"`;
+
+// boot-config scan (added 1.2.0, from the val-rocky boot failure postmortem
+// 2026-08-30). Emits everything needed to judge whether the NEXT boot can
+// find its root filesystem: the mounted root source, the blkid identity
+// export, a /boot listing, the kernel-cmdline source files, BLS entries,
+// and the root=-bearing lines of grub.cfg. Root is required because /boot,
+// /boot/grub2 (0700 on RHEL) and blkid's full export are not readable by the
+// unprivileged service user. Strictly read-only: fixed paths + globs, head-
+// bounded per file, BLS entries capped at 24. No \${..} parameter expansion
+// (this string is embedded in the wrapper template literal).
+const BOOT_CONFIG_SH = `echo "===MOUNTED_ROOT==="
+findmnt -no SOURCE / 2>/dev/null || echo "?"
+echo "===BLKID==="
+blkid -o export 2>/dev/null || echo "BLKID_FAILED"
+echo "===BOOT_LS==="
+ls -1 /boot 2>/dev/null | head -160
+for f in /proc/cmdline /etc/kernel/cmdline /etc/fstab /etc/default/grub /boot/grub2/grubenv /boot/grub/grubenv; do
+  if [ -e "$f" ]; then
+    echo "===FILE:$f:present==="
+    head -c 16384 "$f" 2>/dev/null || true
+    echo ""
+  else
+    echo "===FILE:$f:absent==="
+  fi
+done
+n=0
+for f in /boot/loader/entries/*.conf; do
+  if [ -e "$f" ]; then
+    n=$((n+1))
+    if [ "$n" -le 24 ]; then
+      echo "===FILE:$f:present==="
+      head -c 8192 "$f" 2>/dev/null || true
+      echo ""
+    fi
+  fi
+done
+for f in /boot/grub/grub.cfg /boot/grub2/grub.cfg /boot/efi/EFI/*/grub.cfg; do
+  if [ -e "$f" ]; then
+    echo "===GRUBCFG:$f:present==="
+    grep -E "^[[:space:]]*(menuentry |linux|initrd|set default)" "$f" 2>/dev/null | head -80
+    echo ""
+  fi
+done`
+
 
 /** SMART device paths the wrapper accepts. Mirrors the sh `valid_device`
  *  case in WRAPPER_SCRIPT; kept in TS so it is unit-testable. Blocks path
@@ -189,6 +233,7 @@ export function directCommand(action: PrivilegedAction, args: string[]): { cmd: 
     case "dmidecode-memory": return { cmd: "dmidecode", args: ["-t", "17"] };
     case "proc-fd": return { cmd: "sh", args: ["-c", PROC_FD_SH] };
     case "ssh-config-mtime": return { cmd: "sh", args: ["-c", SSH_CONFIG_MTIME_SH] };
+    case "boot-config": return { cmd: "sh", args: ["-c", BOOT_CONFIG_SH] };
     default: return null;
   }
 }
@@ -322,6 +367,9 @@ ${PROC_FD_SH}
     exit 0 ;;
   ssh-config-mtime)
 ${SSH_CONFIG_MTIME_SH}
+    exit 0 ;;
+  boot-config)
+${BOOT_CONFIG_SH}
     exit 0 ;;
   *) echo "crucible-collect: unknown action: $action" >&2; exit 64 ;;
 esac

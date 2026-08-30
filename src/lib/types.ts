@@ -74,6 +74,7 @@ export interface Snapshot {
   vmstat?: VmstatSnapshot;
   /** pstore / kdump / wtmp signals corroborating a reboot. */
   reboot_evidence?: RebootEvidence;
+  boot_config?: BootConfigData;
   /** Hardware RAID controllers scraped via vendor CLIs. */
   hardware_raid?: HardwareRaidSnapshot;
 
@@ -619,6 +620,70 @@ export interface RebootEvidence {
    *  most recent reboot (suggests a clean shutdown). false when only
    *  the boot record is present (suggests hard reset or power loss). */
   prior_shutdown_clean: boolean;
+}
+
+// === Boot config integrity (1.2.0) ===
+// From the val-rocky boot-failure postmortem (2026-08-30): a kernel update
+// baked a stale root=UUID into the new boot entry, so the box dropped to the
+// dracut emergency shell on the next reboot. This collector cross-checks every
+// boot target's root= filesystem reference against the filesystems that
+// actually exist, so the dashboard can warn BEFORE the fatal reboot.
+
+/** One boot target: a BLS entry (RHEL) or a grub.cfg menuentry (Debian). */
+export interface BootEntry {
+  /** Where it was parsed from. */
+  source: "bls" | "grub.cfg";
+  /** Human label: BLS `title`, or the menuentry name. */
+  title: string;
+  /** Kernel version string when derivable (BLS `version`, or the
+   *  vmlinuz-<ver> from the linux line); null otherwise. */
+  kernel: string | null;
+  /** The raw root= token, e.g. "UUID=01950b15-..", "LABEL=root",
+   *  "/dev/md0". null if the entry carries no root=. */
+  root_spec: string | null;
+  /** True when root_spec is a UUID/LABEL form that resolves to a
+   *  present filesystem; false when it is a UUID/LABEL that does NOT;
+   *  null when unverifiable (a /dev path, or no root_spec). */
+  resolvable: boolean | null;
+  /** True when root_spec resolves specifically to the currently
+   *  mounted root filesystem; false when it resolves to a different
+   *  present filesystem; null when unverifiable. */
+  matches_mounted: boolean | null;
+  /** True when this is the entry the bootloader will select next
+   *  (RHEL grubenv saved_entry, or Debian GRUB_DEFAULT). */
+  is_default: boolean;
+}
+
+export interface BootConfigData extends CollectorAvailability {
+  /** The currently mounted root filesystem: device source, and its
+   *  fs UUID/LABEL from blkid. null when it could not be established
+   *  (then available is false: no ground truth to judge against). */
+  mounted_root: { source: string; uuid: string | null; label: string | null } | null;
+  /** The kernel-cmdline template future kernel installs inherit
+   *  (/etc/kernel/cmdline on RHEL). null on distros without it
+   *  (Debian derives root= from grub-probe at update-grub time). */
+  cmdline_source: {
+    path: string;
+    root_spec: string | null;
+    resolvable: boolean | null;
+    matches_mounted: boolean | null;
+  } | null;
+  /** Every boot target parsed. */
+  entries: BootEntry[];
+  /** The default/selected entry's root resolves to a present fs.
+   *  false is the critical case (next reboot cannot find root).
+   *  null when the default entry could not be identified. */
+  default_entry_bootable: boolean | null;
+  /** The default entry's root resolves to a present fs that is NOT
+   *  the mounted root. null when unverifiable. */
+  default_entry_wrong_fs: boolean | null;
+  /** Count of entries whose UUID/LABEL root does NOT resolve to any
+   *  present filesystem (stale/rescue entries that cannot boot). */
+  unbootable_entry_count: number;
+  /** The cmdline_source root differs from the mounted root, so the
+   *  next kernel install would inherit a wrong/stale root (latent
+   *  trap). null when there is no cmdline_source or it is unverifiable. */
+  source_regressed: boolean | null;
 }
 
 // === C5 hardware RAID ===

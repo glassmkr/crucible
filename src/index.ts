@@ -121,6 +121,7 @@ import { collectMemoryTopology } from "./collect/memory-topology.js";
 import { collectPsi } from "./collect/psi.js";
 import { collectVmstat } from "./collect/vmstat.js";
 import { collectRebootEvidence } from "./collect/reboot-evidence.js";
+import { collectBootConfig } from "./collect/boot-config.js";
 import { collectHardwareRaid } from "./collect/hardware-raid.js";
 import { collectIoErrors } from "./collect/io-errors.js";
 import { collectIoLatency } from "./collect/io-latency.js";
@@ -388,6 +389,9 @@ async function collect() {
   await assignOptional(snapshot, collectionStatus, "psi", () => collectPsi());
   await assignOptional(snapshot, collectionStatus, "vmstat", () => collectVmstat());
   await assignOptional(snapshot, collectionStatus, "reboot_evidence", () => collectRebootEvidence());
+  // Boot-config integrity (1.2.0, val-rocky postmortem). Privileged read-only
+  // scan; available:false on unprivileged/older hosts so rules degrade.
+  await assignOptional(snapshot, collectionStatus, "boot_config", () => collectBootConfig());
   await assignOptional(snapshot, collectionStatus, "hardware_raid", () => collectHardwareRaid());
 
   // C7-C10 collectors (v0.11.0, 2026-05-19). Capability gating mirrors
