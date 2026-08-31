@@ -17,20 +17,43 @@ export async function collectRaid(path: string = "/proc/mdstat"): Promise<RaidIn
     const level = match[3]; // "raid1", "raid5", etc.
     const disksPart = match[4];
 
-    // Parse component disks (e.g., "sda1[0] sdb1[1]")
-    const disks = (disksPart.match(/\w+\[\d+\]/g) || []).map((d) => d.replace(/\[\d+\]/, ""));
+    // Parse components WITH their RAID role index and faulty flag, e.g.
+    // "sdb2[1](F) sda2[0]". CRITICAL: mdstat lists members in an arbitrary
+    // order, but the [U_] bitmap on the next line is ordered by ROLE index
+    // (the [N] after each device), NOT by listing order. Mapping the bitmap by
+    // listing order misidentifies the failed member and can name the SURVIVING
+    // disk, which is data-loss-grade (a user pulls the good drive). So resolve
+    // each bitmap position through the role index. (Grok red-team, 2026-08-30.)
+    const components = (disksPart.match(/(\w+)\[(\d+)\](\(F\))?/g) || []).map((tok) => {
+      const m = tok.match(/(\w+)\[(\d+)\](\(F\))?/)!;
+      return { name: m[1], role: Number(m[2]), faulty: Boolean(m[3]) };
+    });
+    const disks = components.map((c) => c.name); // listing order, for display
+    const roleToName = new Map(components.map((c) => [c.role, c.name]));
 
     // Check next line for degraded status (e.g., "[UU_]" means one drive missing)
     const statusLine = lines[i + 1] || "";
     const bracketMatch = statusLine.match(/\[([U_]+)\]/);
-    const degraded = bracketMatch ? bracketMatch[1].includes("_") : false;
+    const degraded =
+      (bracketMatch ? bracketMatch[1].includes("_") : false) ||
+      components.some((c) => c.faulty);
 
     const failedDisks: string[] = [];
-    if (degraded && bracketMatch) {
-      const pattern = bracketMatch[1];
-      pattern.split("").forEach((c, idx) => {
-        if (c === "_" && disks[idx]) failedDisks.push(disks[idx]);
+    if (bracketMatch) {
+      // Bitmap position idx == RAID role idx. Name the member at that role; a
+      // removed member has no listing entry, so it cannot be named (but the
+      // array is still correctly reported degraded).
+      bracketMatch[1].split("").forEach((c, idx) => {
+        if (c === "_") {
+          const name = roleToName.get(idx);
+          if (name && !failedDisks.includes(name)) failedDisks.push(name);
+        }
       });
+    }
+    // A member explicitly flagged faulty (F) is failed even if the bitmap has
+    // not yet flipped its slot; union it in.
+    for (const comp of components) {
+      if (comp.faulty && !failedDisks.includes(comp.name)) failedDisks.push(comp.name);
     }
 
     const entry: RaidInfo = { device, level, status, degraded, disks, failed_disks: failedDisks };
