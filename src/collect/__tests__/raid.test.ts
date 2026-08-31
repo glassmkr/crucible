@@ -138,6 +138,56 @@ describe("collectRaid: in-progress operation parsing", () => {
     ].join("\n") + "\n");
     const r = await collectRaid(mdstatPath);
     expect(r[0].degraded).toBe(true);
-    expect(r[0].failed_disks).toEqual(["sda1"]);
+    // sdb1 is role 1; bitmap [U_] means role 1 is down => sdb1 failed. This
+    // assertion previously read ["sda1"] (the SURVIVOR), which enshrined the
+    // listing-order bug fixed 2026-08-30; corrected to the real failed member.
+    expect(r[0].failed_disks).toEqual(["sdb1"]);
+  });
+});
+
+// --- 2026-08-30: role-index vs listing-order failed-member bug (Grok red-team,
+// data-loss-grade: the RAID-degraded alert named the SURVIVING disk). mdstat
+// lists members in an arbitrary order while [U_] is ordered by RAID role [N];
+// mapping the bitmap by listing order misidentifies the failed member. ---
+describe("collectRaid: failed member is identified by ROLE index, not listing order", () => {
+  it("names the actually-failed member when mdstat lists it out of role order (Grok val-debian case)", async () => {
+    // Operator ran `mdadm --fail /dev/sdb2`. sdb2 is role 1 (down); sda2 is
+    // role 0 (up). mdstat lists sdb2 FIRST. Bitmap [U_] => role1 down => sdb2.
+    await writeMdstat([
+      "Personalities : [raid1]",
+      "md126 : active raid1 sdb2[1](F) sda2[0]",
+      "      523200 blocks super 1.2 [2/1] [U_]",
+      "      bitmap: 1/1 pages [4KB], 65536KB chunk",
+      "",
+      "unused devices: <none>",
+    ].join("\n") + "\n");
+    const r = await collectRaid(mdstatPath);
+    expect(r[0].degraded).toBe(true);
+    expect(r[0].failed_disks).toEqual(["sdb2"]); // NOT sda2 (the healthy one)
+  });
+
+  it("still works when listing order happens to match role order", async () => {
+    await writeMdstat([
+      "Personalities : [raid1]",
+      "md1 : active raid1 sda1[0] sdb1[1]",
+      "      976630336 blocks super 1.2 [2/1] [_U]",
+      "",
+      "unused devices: <none>",
+    ].join("\n") + "\n");
+    const r = await collectRaid(mdstatPath);
+    expect(r[0].failed_disks).toEqual(["sda1"]); // role 0 is down
+  });
+
+  it("a removed member (gone from the listing) leaves degraded true and does not misname a survivor", async () => {
+    await writeMdstat([
+      "Personalities : [raid1]",
+      "md126 : active raid1 sda2[0]",
+      "      523200 blocks super 1.2 [2/1] [U_]",
+      "",
+      "unused devices: <none>",
+    ].join("\n") + "\n");
+    const r = await collectRaid(mdstatPath);
+    expect(r[0].degraded).toBe(true);
+    expect(r[0].failed_disks).not.toContain("sda2"); // must never name the survivor
   });
 });
