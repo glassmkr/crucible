@@ -84,8 +84,11 @@ const RESULT_VALUES: ReadonlySet<SystemdUnitResult> = new Set([
 ]);
 
 export async function collectSystemd(extraExcludes: string[] = []): Promise<SystemdData> {
+  // Include mount + automount units, not just services: a failed .mount is
+  // boot-critical (e.g. /boot/efi failing means the bootloader cannot be
+  // updated) but --type=service made it invisible (Grok red-team H8/H16).
   const result = await runDetailed("systemctl", [
-    "list-units", "--type=service", "--state=failed", "--no-legend", "--plain",
+    "list-units", "--type=service,mount,automount", "--state=failed", "--no-legend", "--plain",
   ]);
   if (!result.installed) {
     return { available: false, error: "systemctl is not installed", failed_units: [], failed_count: null };
@@ -113,7 +116,7 @@ export async function collectSystemd(extraExcludes: string[] = []): Promise<Syst
 
   for (const line of output.trim().split("\n")) {
     const unit = line.trim().split(/\s+/)[0];
-    if (unit && unit.endsWith(".service") && !excludes.has(unit)) {
+    if (unit && /\.(service|mount|automount)$/.test(unit) && !excludes.has(unit)) {
       units.push(unit);
     }
   }

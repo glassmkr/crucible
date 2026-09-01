@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { classifySensor, deriveSelSeverity, parseSelTimestamp, parseFanStatus, parseSelEccCounts, collectIpmi, collectSelEccCounts } from "../ipmi.js";
+import { classifySensor, deriveSelSeverity, parseSelTimestamp, parseFanStatus, parseSelEccCounts, collectIpmi, collectSelEccCounts, parseSelInfo } from "../ipmi.js";
 
 describe("classifySensor", () => {
   it("recognizes memory sensors", () => {
@@ -170,5 +170,28 @@ describe("collectIpmi: capability short-circuit", () => {
     const out = await collectIpmi("generic");
     expect(out.available).toBe(false);
     expect(out.detection).toBeUndefined();
+  });
+});
+
+
+describe("parseSelInfo (H12: SEL fullness so ipmi_sel_full can fire)", () => {
+  it("parses a full, overflowed SEL", () => {
+    const raw = [
+      "SEL Information",
+      "Version          : 1.5 (v1.5, v2 compliant)",
+      "Entries          : 512",
+      "Free Space       : 0 bytes",
+      "Percent Used     : 100%",
+      "Overflow         : true",
+    ].join("\n");
+    expect(parseSelInfo(raw)).toEqual({ entries: 512, percent_used: 100, overflow: true });
+  });
+  it("parses a healthy SEL", () => {
+    const raw = "Entries          : 12\nPercent Used     : 2%\nOverflow         : false";
+    expect(parseSelInfo(raw)).toEqual({ entries: 12, percent_used: 2, overflow: false });
+  });
+  it("returns nulls (unknown, never 0) when the probe failed or fields are absent", () => {
+    expect(parseSelInfo(null)).toEqual({ entries: null, percent_used: null, overflow: null });
+    expect(parseSelInfo("Version : 1.5")).toEqual({ entries: null, percent_used: null, overflow: null });
   });
 });

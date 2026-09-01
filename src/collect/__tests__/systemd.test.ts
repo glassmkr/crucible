@@ -202,3 +202,22 @@ describe("journal excerpt data boundary", () => {
     expect(JOURNAL_MAX_TOTAL_CHARS).toBe(4096);
   });
 });
+
+
+describe("collectSystemd: failed .mount units (Grok H8/H16)", () => {
+  it("queries service+mount+automount and surfaces a failed .mount", async () => {
+    runDetailedMock.mockImplementation((_cmd: string, args: string[]) => {
+      if (Array.isArray(args) && args[0] === "list-units") {
+        return Promise.resolve({ installed: true, exitCode: 0, timedOut: false, stderr: "",
+          stdout: "boot-efi.mount loaded failed failed /boot/efi\napp.service loaded failed failed App" });
+      }
+      // journal / show calls for each unit: benign
+      return Promise.resolve({ installed: true, exitCode: 0, timedOut: false, stderr: "", stdout: "" });
+    });
+    runMock.mockResolvedValue("");
+    const out = await collectSystemd();
+    expect(out.failed_units).toEqual(expect.arrayContaining(["boot-efi.mount", "app.service"]));
+    // the query must include mount + automount, not just service
+    expect(runDetailedMock.mock.calls[0][1]).toContain("--type=service,mount,automount");
+  });
+});
