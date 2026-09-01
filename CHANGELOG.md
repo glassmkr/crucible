@@ -13,6 +13,30 @@ API contract the agent speaks; breaking any of those is a major version. The
 full policy and the freeze-review record live in
 [docs/V1_FREEZE.md](docs/V1_FREEZE.md).
 
+## [1.2.1] - 2026-09-01
+
+### Fixed
+
+- RAID: a degraded software-mirror alert could name the wrong member and attach
+  the wrong disk's serial when the kernel listed array members out of role
+  order (routine after a member is failed). Because the fix guidance says to
+  replace the named drive, this could point an operator at the healthy disk. The
+  failed member is now identified by its RAID role, so the alert, the serial,
+  and the "replace this drive" guidance all name the drive that actually failed.
+- systemd: failed `mount` and `automount` units are now reported, not only
+  `service` units. A failed boot-critical mount (for example the EFI system
+  partition, after which the bootloader can no longer be updated) previously
+  left the host looking healthy.
+- IPMI: the agent now reports System Event Log fullness (percent used and
+  overflow), so a full or overflowed SEL, which is silently dropping new
+  hardware events, can be surfaced instead of going unnoticed.
+
+### Upgrade note
+
+- These are collector fixes; upgrade the agent to receive them. On hosts that
+  use the sudo wrapper, refresh the wrapper after upgrading as usual. No config,
+  CLI, or dashboard-contract changes.
+
 ## [1.2.0] - 2026-08-30
 
 ### Added
