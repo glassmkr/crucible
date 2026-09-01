@@ -44,6 +44,27 @@ import { findBmcDeviceNode } from "../lib/bmc-presence.js";
  *                    (per-cycle ENOENT on no-BMC hosts; supported for tests
  *                    and back-compat).
  */
+/** Parse `ipmitool sel info` for entry count + fullness. Pure + exported for
+ *  unit testing. A full/overflowed SEL drops new hardware events; ipmi_sel_full
+ *  reads percent_used/overflow. Nulls mean the field was absent/unparseable
+ *  ("unknown"), never 0. */
+export function parseSelInfo(raw: string | null): {
+  entries: number | null;
+  percent_used: number | null;
+  overflow: boolean | null;
+} {
+  const out: { entries: number | null; percent_used: number | null; overflow: boolean | null } =
+    { entries: null, percent_used: null, overflow: null };
+  if (!raw) return out;
+  const e = raw.match(/Entries\s*:\s*(\d+)/i);
+  if (e) out.entries = parseInt(e[1], 10);
+  const p = raw.match(/Percent Used\s*:\s*(\d+)\s*%/i);
+  if (p) out.percent_used = parseInt(p[1], 10);
+  const o = raw.match(/Overflow\s*:\s*(true|false|yes|no)/i);
+  if (o) out.overflow = /^(true|yes)$/i.test(o[1]);
+  return out;
+}
+
 export async function collectIpmi(vendor: Vendor = "generic", capability?: IpmiCapability): Promise<IpmiInfo> {
   // Re-checked every snapshot, unlike `capability` which is a one-shot startup
   // result. This is what lets the Dashboard tell "no BMC on this host" apart
@@ -158,12 +179,13 @@ export async function collectIpmi(vendor: Vendor = "generic", capability?: IpmiC
   // unparseable response leaves this null (unknown), never 0, so a partial SEL
   // failure cannot be mistaken for a genuinely empty event log while the top-level
   // IPMI payload stays available.
-  let selCount: number | null = null;
-  const selInfo = await runPrivileged("ipmi-sel-info");
-  if (selInfo) {
-    const match = selInfo.match(/Entries\s*:\s*(\d+)/i);
-    if (match) selCount = parseInt(match[1], 10);
-  }
+  // SEL fullness: a full/overflowed SEL is silently dropping new hardware
+  // events, so ipmi_sel_full needs percent/overflow, not just the count
+  // (Grok red-team H12). Nulls mean "unknown", never "0%".
+  const sel = parseSelInfo(await runPrivileged("ipmi-sel-info"));
+  const selCount = sel.entries;
+  const selPercentUsed = sel.percent_used;
+  const selOverflow = sel.overflow;
 
   // SEL recent events. C11 (2026-05-19): tag each event with the BMC
   // vendor's parser_quality so Dashboard can render an honesty surface
@@ -201,6 +223,8 @@ export async function collectIpmi(vendor: Vendor = "generic", capability?: IpmiC
     ecc_errors_from_sel: selEccCounts,
     psu_redundancy_state: psuRedundancyState,
     sel_entries_count: selCount,
+    sel_percent_used: selPercentUsed,
+    sel_overflow: selOverflow,
     sel_events_recent: selEvents,
     fans,
     detection: capability,

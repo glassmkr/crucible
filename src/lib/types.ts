@@ -1365,6 +1365,12 @@ export interface IpmiInfo {
    * couldn't ask the BMC".
    */
   sel_entries_count: number | null;
+  /** SEL fullness from `ipmi-sel-info`. A full/overflowed SEL drops new
+   *  hardware events; ipmi_sel_full consumes these. Optional (absent on
+   *  pre-1.2.1 agents); null when the BMC/field did not report it (never
+   *  mistake unknown for 0). */
+  sel_percent_used?: number | null;
+  sel_overflow?: boolean | null;
   sel_events_recent: SelEvent[];
   fans: FanStatus[];
 }
