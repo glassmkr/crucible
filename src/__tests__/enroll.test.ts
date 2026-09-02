@@ -54,6 +54,7 @@ function makeDeps(opts?: {
       realpathSync: (p) => p,
       renameSync: (from, to) => { const f = files.get(from); if (f) { files.set(to, f); files.delete(from); } },
       unlinkSync: (p) => { files.delete(p); },
+      readFileSync: (p) => { const f = files.get(p); if (!f) throw new Error(`ENOENT: ${p}`); return f.data; },
     },
     exec: (cmd, args) => {
       if (cmd === "command" || cmd === "which") return { stdout: "/usr/local/bin/glassmkr-crucible\n", status: 0 };

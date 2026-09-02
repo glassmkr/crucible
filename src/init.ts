@@ -77,6 +77,7 @@ export interface InitDeps {
     writeSecureFileSync: (p: string, data: string, mode: number) => void;
     renameSync: (from: string, to: string) => void;
     unlinkSync: (p: string) => void;
+    readFileSync: (p: string) => string;
   };
   exec: (cmd: string, args: string[]) => { stdout: string; status: number | null };
   hostname: () => string;
@@ -104,6 +105,21 @@ const SYSTEMD_USER_RE = /^[A-Za-z_][A-Za-z0-9_-]*$/;
 export function isValidApiKey(key: string): boolean {
   if (!key || /\s/.test(key)) return false;
   return KEY_RE_NEW.test(key) || KEY_RE_LEGACY.test(key);
+}
+
+/** Extract the api_key value from an existing crucible config, for the L1
+ *  key-mismatch guard. Returns null when the file is unreadable or has no
+ *  api_key line. Deliberately a single-line regex, not a YAML parse: the only
+ *  field needed is one init writes itself (`api_key: "..."`). */
+export function readStoredApiKey(deps: InitDeps, path: string): string | null {
+  let contents: string;
+  try {
+    contents = deps.fs.readFileSync(path);
+  } catch {
+    return null;
+  }
+  const m = contents.match(/^\s*api_key:\s*"?([^"\r\n]+?)"?\s*$/m);
+  return m ? m[1].trim() : null;
 }
 
 export function buildCollectorYaml(
@@ -508,6 +524,26 @@ export async function runInit(opts: InitOptions, deps: InitDeps): Promise<number
     return 2;
   }
 
+  // L1 (Grok red-team): re-pointing an existing agent to a NEW key without
+  // --force silently preserves the OLD key, so the operator sees "success"
+  // while the agent keeps pushing to the previous account (a rotated key then
+  // returns 401 with no clue why). If the caller supplied a valid key that
+  // DIFFERS from the stored one and did not pass --force, refuse with an
+  // actionable message rather than ignoring the new key. A matching key (a
+  // redundant re-point, e.g. install.sh re-run) is a no-op and proceeds.
+  if (repairMode && apiKey && isValidApiKey(apiKey)) {
+    const existingConfig = deps.fs.existsSync(configPath)
+      ? configPath
+      : (isCanonicalPath && deps.fs.existsSync(LEGACY_CONFIG_PATH) ? LEGACY_CONFIG_PATH : null);
+    if (existingConfig) {
+      const storedKey = readStoredApiKey(deps, existingConfig);
+      if (storedKey && storedKey !== apiKey) {
+        deps.error(`[init] refusing to change the collector key: a config already exists at ${existingConfig} with a different key, and init preserves the existing key unless --force is given. Without --force your new key is ignored and the agent keeps pushing to the previous account. To replace it, re-run: sudo glassmkr-crucible init --api-key - --force`);
+        return 7;
+      }
+    }
+  }
+
   const serverName = opts.name && opts.name.trim() ? opts.name.trim() : deps.hostname();
   let endpointPolicy: EndpointPolicy;
   let ingestEndpoint: URL | undefined;
@@ -869,6 +905,7 @@ export function defaultDeps(): InitDeps {
       },
       renameSync: fsDefault.renameSync,
       unlinkSync: fsDefault.unlinkSync,
+      readFileSync: (p) => fsDefault.readFileSync(p, "utf8"),
     },
     exec: (cmd, args) => {
       try {
