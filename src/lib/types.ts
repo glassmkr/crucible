@@ -696,11 +696,60 @@ export interface HardwareRaidController {
    *  raid_degraded evaluator pages on any state != "Optimal". */
   state: string;
   /** Count of physical disks the controller flagged as failed /
-   *  degraded; null when the parser couldn't extract this. */
+   *  degraded; null when the parser couldn't extract this (e.g. the
+   *  vendor CLI produced no PD LIST). */
   degraded_disks: number | null;
   /** Optional vendor-text excerpt the dashboard can surface in
    *  evidence; null when not captured. */
   raw_summary: string | null;
+  /** Virtual drives (arrays) on this controller, from the vendor's VD
+   *  LIST. Present for the JSON-emitting MegaRAID CLIs (storcli/perccli);
+   *  undefined for CLIs this collector does not yet parse at array
+   *  granularity (ssacli/arcconf). Lets the dashboard name the degraded
+   *  array ("VD 0/0 RAID10 Dgrd") instead of only the controller. */
+  virtual_drives?: HardwareRaidVirtualDrive[];
+  /** Physical drives the controller reports in a non-healthy state
+   *  (offline, failed, missing, rebuilding). Empty array when every
+   *  member is online. The dashboard names these (enclosure:slot +
+   *  model) so an operator can locate the exact bay rather than being
+   *  told only "controller Needs Attention". Undefined for CLIs not
+   *  parsed at drive granularity. */
+  degraded_drives?: HardwareRaidPhysicalDrive[];
+}
+
+/** A virtual drive (array) as reported in a MegaRAID VD LIST. */
+export interface HardwareRaidVirtualDrive {
+  /** "DG/VD" identifier, e.g. "0/239". */
+  id: string;
+  /** RAID level string, e.g. "RAID1", "RAID10". */
+  raid_level: string;
+  /** Vendor state token, e.g. "Optl", "Dgrd", "Pdgd", "OfLn". */
+  state: string;
+  /** True when state is anything other than optimal ("Optl"). */
+  degraded: boolean;
+}
+
+/** A physical drive as reported in a MegaRAID PD LIST. */
+export interface HardwareRaidPhysicalDrive {
+  /** Enclosure:slot locator, e.g. "252:6" - the "EID:Slt" column, i.e.
+   *  what an operator uses to find the physical bay. */
+  enclosure_slot: string;
+  /** Controller device id (DID); null when not reported. */
+  device_id: number | null;
+  /** Vendor state token, e.g. "Onln", "Offln", "Failed", "Rbld", "Msng". */
+  state: string;
+  /** Drive-group index this PD belongs to; null when unassigned. */
+  drive_group: number | null;
+  /** Drive model, whitespace-collapsed; null when not reported. Note this
+   *  is NOT the serial (the MegaRAID PD LIST does not carry one); serial
+   *  needs a per-drive query, a documented follow-up. */
+  model: string | null;
+  /** Size string as the controller reports it, e.g. "3.492 TB". */
+  size: string | null;
+  /** Media type, e.g. "HDD" / "SSD". */
+  media: string | null;
+  /** Bus interface, e.g. "SATA" / "SAS" / "NVMe". */
+  interface: string | null;
 }
 
 export interface HardwareRaidSnapshot {
@@ -847,9 +896,24 @@ export interface ZfsVdev {
    *  matrix on the dashboard side depends on this so a DEGRADED
    *  raidz1 (zero remaining tolerance) pages differently from a
    *  DEGRADED raidz2 (one disk-fault budget left). */
-  redundancy_class: "mirror" | "raidz1" | "raidz2" | "raidz3" | "draid" | "stripe";
+  redundancy_class:
+    | "mirror"
+    | "mirror_2way"
+    | "mirror_3way"
+    | "mirror_4way+"
+    | "raidz1"
+    | "raidz2"
+    | "raidz3"
+    | "draid"
+    | "stripe";
   /** Number of child devices under this vdev in a non-ONLINE state. */
   degraded_disks_count: number;
+  /** Total number of child devices under this vdev. Drives the
+   *  mirror_Nway classification (2/3/4+) so the dashboard severity
+   *  matrix can distinguish a 2-way mirror (a single fault exhausts
+   *  redundancy: critical) from a 3-way+ (fault budget remains: warning).
+   *  Bare "mirror" is only emitted when the child count is unknown. */
+  child_count: number;
 }
 
 export interface ZfsPool {

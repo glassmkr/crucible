@@ -94,7 +94,9 @@ errors: 2 data errors
     const [p] = parseZpoolStatus(raw);
     expect(p.vdevs.length).toBe(1);
     expect(p.vdevs[0].name).toBe("mirror-0");
-    expect(p.vdevs[0].redundancy_class).toBe("mirror");
+    // Two child devices -> mirror_2way (H-D4g).
+    expect(p.vdevs[0].redundancy_class).toBe("mirror_2way");
+    expect(p.vdevs[0].child_count).toBe(2);
     expect(p.slog_vdevs.length).toBe(1);
     expect(p.slog_vdevs[0].name).toBe("/var/tmp/zfs-test/slog.img");
     expect(p.slog_vdevs[0].state).toBe("ONLINE");
@@ -135,6 +137,89 @@ errors: 2 data errors
     expect(p.scrub_never_run).toBeUndefined();
     expect(p.scrub_errors).toBe(0);
     expect(p.scrub_repaired).toBe("0B");
+  });
+
+  // === H-D4g: mirror_Nway classification from child count ===
+
+  it("classifies a 2-way mirror as mirror_2way (Grok val-nvme-platinum shape)", () => {
+    // The exact scenario Grok exercised: a 2-way mirror, one leaf
+    // administratively offlined. The pool is DEGRADED but the vdev has
+    // two children, so it is a 2-way mirror (a single fault exhausts
+    // redundancy). The old parser emitted bare "mirror", which the
+    // dashboard severity matrix could not classify ("unknown redundancy
+    // class"); now it is mirror_2way.
+    const raw =
+      "  pool: gmkscratch\n" +
+      " state: DEGRADED\n" +
+      "  scan: resilvered 36K in 00:00:00 with 0 errors on Tue Sep  2 14:24:00 2026\n" +
+      "config:\n" +
+      "\n" +
+      "\tNAME            STATE     READ WRITE CKSUM\n" +
+      "\tgmkscratch      DEGRADED     0     0     0\n" +
+      "\t  mirror-0      DEGRADED     0     0     0\n" +
+      "\t    nvme0n1p3   ONLINE       0     0     0\n" +
+      "\t    nvme1n1p3   OFFLINE      0     0     0\n" +
+      "\n" +
+      "errors: No known data errors\n";
+    const [p] = parseZpoolStatus(raw);
+    expect(p.state).toBe("DEGRADED");
+    expect(p.vdevs[0].redundancy_class).toBe("mirror_2way");
+    expect(p.vdevs[0].child_count).toBe(2);
+    expect(p.vdevs[0].degraded_disks_count).toBe(1);
+  });
+
+  it("classifies 3-way and 4-way mirrors", () => {
+    const threeWay =
+      "  pool: t3\n state: ONLINE\nconfig:\n" +
+      "\tNAME        STATE\n\tt3          ONLINE\n\t  mirror-0  ONLINE\n" +
+      "\t    a       ONLINE\n\t    b       ONLINE\n\t    c       ONLINE\n" +
+      "errors: No known data errors\n";
+    expect(parseZpoolStatus(threeWay)[0].vdevs[0].redundancy_class).toBe("mirror_3way");
+    const fourWay =
+      "  pool: t4\n state: ONLINE\nconfig:\n" +
+      "\tNAME        STATE\n\tt4          ONLINE\n\t  mirror-0  ONLINE\n" +
+      "\t    a       ONLINE\n\t    b       ONLINE\n\t    c       ONLINE\n\t    d       ONLINE\n" +
+      "errors: No known data errors\n";
+    expect(parseZpoolStatus(fourWay)[0].vdevs[0].redundancy_class).toBe("mirror_4way+");
+  });
+
+  // === H-D4h: a resilver is not a scrub ===
+
+  it("does NOT treat a resilver as a scrub: never-scrubbed stays true, no last_scrub_date", () => {
+    // Grok's H-D4h: offline+online of a mirror leaf produced
+    // `scan: resilvered ...`. The old parser saw a `scan:` line and set
+    // last_scrub_date + suppressed scrub_never_run, silently clearing the
+    // "never checksum-scrubbed" warning on a pool that had still never
+    // been scrubbed. A resilver must not do either.
+    const raw =
+      "  pool: gmkscratch\n" +
+      " state: ONLINE\n" +
+      "  scan: resilvered 36K in 00:00:00 with 0 errors on Tue Sep  2 14:24:00 2026\n" +
+      "config:\n" +
+      "\tNAME            STATE\n" +
+      "\tgmkscratch      ONLINE\n" +
+      "\t  mirror-0      ONLINE\n" +
+      "\t    nvme0n1p3   ONLINE\n" +
+      "\t    nvme1n1p3   ONLINE\n" +
+      "errors: No known data errors\n";
+    const [p] = parseZpoolStatus(raw);
+    expect(p.scrub_never_run).toBe(true);
+    expect(p.last_scrub_date).toBeUndefined();
+    expect(p.scrub_repaired).toBeUndefined();
+  });
+
+  it("still records a real scrub after a resilver line elsewhere is ignored", () => {
+    // A genuine scrub line must still set scrub history (regression guard
+    // that the resilver carve-out did not break scrub parsing).
+    const raw =
+      "  pool: tank\n" +
+      " state: ONLINE\n" +
+      "  scan: scrub repaired 0B in 00:05:00 with 0 errors on Wed Jan 15 03:00:00 2026\n" +
+      "errors: No known data errors\n";
+    const [p] = parseZpoolStatus(raw);
+    expect(p.scrub_never_run).toBeUndefined();
+    expect(p.scrub_errors).toBe(0);
+    expect(p.last_scrub_date).toContain("2026");
   });
 
   it("section headers tolerate either tab-prefixed or unindented form (forwards-compat)", () => {
