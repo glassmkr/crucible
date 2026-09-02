@@ -208,6 +208,25 @@ errors: 2 data errors
     expect(p.scrub_repaired).toBeUndefined();
   });
 
+  it("does NOT treat a canceled scrub as scrub history (Codex round-1 #1)", () => {
+    // A canceled scrub never finished verifying the pool, so it must not set
+    // last_scrub_date or suppress the never-scrubbed warning.
+    const raw =
+      "  pool: tank\n" +
+      " state: ONLINE\n" +
+      "  scan: scrub canceled on Tue Sep  2 14:24:00 2026\n" +
+      "config:\n" +
+      "\tNAME       STATE\n" +
+      "\ttank       ONLINE\n" +
+      "\t  mirror-0 ONLINE\n" +
+      "\t    a      ONLINE\n" +
+      "\t    b      ONLINE\n" +
+      "errors: No known data errors\n";
+    const [p] = parseZpoolStatus(raw);
+    expect(p.scrub_never_run).toBe(true);
+    expect(p.last_scrub_date).toBeUndefined();
+  });
+
   it("still records a real scrub after a resilver line elsewhere is ignored", () => {
     // A genuine scrub line must still set scrub history (regression guard
     // that the resilver carve-out did not break scrub parsing).

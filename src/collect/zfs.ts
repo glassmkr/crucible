@@ -116,7 +116,13 @@ export function parseZpoolStatus(zpoolStatus: string): ZfsPool[] {
       if (line.includes("none requested")) {
         sawScrubSignal = true;
         current.scrub_never_run = true;
-      } else if (/\bscrub\b/.test(line)) {
+      } else if (/\bscrub\b/.test(line) && !line.includes("canceled")) {
+        // A completed / in-progress / paused scrub establishes scrub history. A
+        // CANCELED scrub does NOT (Codex round 1 #1): it never finished verifying
+        // the pool, so it must not set last_scrub_date and must not suppress the
+        // never-scrubbed signal - a pool whose only scrub was canceled has still
+        // never been fully scrubbed, so it falls through to scrub_never_run at
+        // the `errors:` marker below.
         sawScrubSignal = true;
         const repairMatch = line.match(/scrub repaired (\S+) in .* with (\d+) errors/);
         if (repairMatch) {
