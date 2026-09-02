@@ -9,67 +9,157 @@
 //   - arcconf  (Adaptec)
 //
 // For each installed CLI, queries the controller state and returns
-// a normalized HardwareRaidController. The vendor-specific output
-// formats vary considerably; this module's parsers are intentionally
-// conservative; they extract a state string ("Optimal", "Degraded",
-// etc.) plus an optional degraded_disks counter when the vendor output
-// makes it easy to find. The dashboard's raid_degraded evaluator pages
-// on any state != "Optimal"; that's the contract.
+// a normalized HardwareRaidController. The dashboard's raid_degraded
+// evaluator pages on any controller state != "Optimal"; that's the
+// trigger contract.
 //
-// Implementation scope (2026-05-19): perccli + storcli parsers are
-// best-effort because the validation fleet has no hardware RAID
-// controllers to verify against. Real parsing precision lands in
-// follow-up PRs as customers with each vendor surface. The framework
-// here ensures:
+// MegaRAID (storcli / perccli) parsing is fleet-tested: verified against
+// a LSI 9364-8i (SATA RAID10) and a tri-mode 9560-16i (NVMe RAID1) on the
+// validation fleet, 2026-09-02, including a live degraded array. Both CLIs
+// emit the same JSON schema (`/... show all J`), so one parser serves both.
+// The wrapper already fetches `show all` (VD LIST + PD LIST + TOPOLOGY), so
+// beyond the controller state we now also extract:
+//   - virtual_drives:  every array with its RAID level + state,
+//   - degraded_drives: physical members in a non-healthy state, each named
+//     by enclosure:slot + model, so the alert can say "slot 4:3, WDC ..."
+//     instead of only "controller Needs Attention".
+// The MegaRAID PD LIST carries no serial number; naming a member by serial
+// needs a per-drive query and is a documented follow-up.
+//
+// ssacli (HPE) and arcconf (Adaptec) remain state-only best-effort: no
+// validation hardware for those vendors yet, so they omit virtual_drives /
+// degraded_drives rather than guess.
+//
+// Framework guarantees preserved:
 //   - empty controllers[] on hosts without any vendor CLI (capability
 //     gate; dashboard rule no-ops),
-//   - empty controllers[] on hosts with the CLI but no controllers
-//     present (rare configurations).
+//   - empty controllers[] on hosts with the CLI but no controllers present.
 //
 // The dashboard's mdadm path is unaffected by this module.
 
 import { which } from "../lib/exec.js";
 import { runPrivileged } from "../lib/privileged.js";
-import type { HardwareRaidSnapshot, HardwareRaidController } from "../lib/types.js";
+import type {
+  HardwareRaidSnapshot,
+  HardwareRaidController,
+  HardwareRaidVirtualDrive,
+  HardwareRaidPhysicalDrive,
+} from "../lib/types.js";
 
-async function scrapePerccli(): Promise<HardwareRaidController[]> {
-  // perccli /c0 show all J: JSON output for controller 0.
-  // Multi-controller hosts are rare; query c0 only and let follow-ups
-  // expand if a customer surfaces multi-controller hardware.
-  const raw = await runPrivileged("raid-perccli", [], 10000);
-  if (!raw) return [];
+// PD state tokens that mean the member is healthy (online, a spare, or an
+// unconfigured-but-good drive). Anything else - Offln, Failed, Rbld, Msng,
+// UBad, Pdgd, SmrtFail, ... - is surfaced in degraded_drives so the alert
+// can name it. Kept as an allowlist so an unfamiliar token defaults to
+// "surface it" rather than silently swallowing a real fault.
+const HEALTHY_PD_STATES = new Set([
+  "Onln", "GHS", "DHS", "UGood", "JBOD", "Optl", "Hotspare",
+]);
+
+function toNumberOrNull(v: unknown): number | null {
+  if (typeof v === "number" && Number.isFinite(v)) return v;
+  if (typeof v === "string" && /^-?\d+$/.test(v.trim())) return Number(v.trim());
+  return null;
+}
+
+function parseMegaraidVdList(vds: unknown): HardwareRaidVirtualDrive[] {
+  if (!Array.isArray(vds)) return [];
+  return vds.map((vd: any) => {
+    const state = String(vd?.State ?? "Unknown");
+    return {
+      id: String(vd?.["DG/VD"] ?? "?"),
+      raid_level: String(vd?.TYPE ?? "?"),
+      state,
+      degraded: state !== "Optl",
+    };
+  });
+}
+
+function parseMegaraidDegradedPds(pds: unknown): HardwareRaidPhysicalDrive[] {
+  if (!Array.isArray(pds)) return [];
+  const out: HardwareRaidPhysicalDrive[] = [];
+  for (const pd of pds as any[]) {
+    const state = String(pd?.State ?? "Unknown");
+    if (HEALTHY_PD_STATES.has(state)) continue;
+    const modelRaw = pd?.Model;
+    out.push({
+      enclosure_slot: String(pd?.["EID:Slt"] ?? "?"),
+      device_id: toNumberOrNull(pd?.DID),
+      state,
+      drive_group: toNumberOrNull(pd?.DG),
+      model: typeof modelRaw === "string" ? modelRaw.replace(/\s+/g, " ").trim() || null : null,
+      size: pd?.Size != null ? String(pd.Size) : null,
+      media: pd?.Med != null ? String(pd.Med) : null,
+      interface: pd?.Intf != null ? String(pd.Intf) : null,
+    });
+  }
+  return out;
+}
+
+function summarizeMegaraid(
+  state: string,
+  degraded: HardwareRaidPhysicalDrive[],
+  vds: HardwareRaidVirtualDrive[],
+): string | null {
+  // Only populate raw_summary when something is wrong; a healthy controller
+  // leaves it null so the snapshot stays lean.
+  const degradedVds = vds.filter((v) => v.degraded);
+  if (degraded.length === 0 && degradedVds.length === 0) return null;
+  const parts: string[] = [`controller ${state}`];
+  for (const v of degradedVds) parts.push(`VD ${v.id} ${v.raid_level} ${v.state}`);
+  for (const d of degraded) {
+    parts.push(`drive ${d.enclosure_slot}${d.model ? ` (${d.model})` : ""} ${d.state}`);
+  }
+  return parts.join("; ");
+}
+
+/**
+ * Parse the JSON emitted by `storcli/perccli ... show all J`. Both CLIs share
+ * this schema. Exported for unit testing against captured fleet fixtures.
+ */
+export function parseMegaraidJson(
+  raw: string,
+  vendor: "lsi" | "dell",
+): HardwareRaidController[] {
+  let obj: any;
   try {
-    const obj = JSON.parse(raw);
-    const ctrlList = obj?.Controllers ?? [];
-    return ctrlList.map((c: any) => ({
-      vendor: "dell" as const,
-      controller_id: String(c?.["Command Status"]?.Controller ?? "0"),
-      state: String(c?.["Response Data"]?.["Status"]?.["Controller Status"] ?? "Unknown"),
-      degraded_disks: null,
-      raw_summary: null,
-    }));
+    obj = JSON.parse(raw);
   } catch {
-    // Output wasn't JSON (older perccli, or controller missing).
+    // Output wasn't JSON (older CLI, or controller missing).
     return [];
   }
+  const ctrlList = obj?.Controllers ?? [];
+  const out: HardwareRaidController[] = [];
+  for (const c of ctrlList) {
+    const rd = c?.["Response Data"] ?? {};
+    const state = String(rd?.["Status"]?.["Controller Status"] ?? "Unknown");
+    const virtual_drives = parseMegaraidVdList(rd?.["VD LIST"]);
+    const degraded_drives = parseMegaraidDegradedPds(rd?.["PD LIST"]);
+    const pdListPresent = Array.isArray(rd?.["PD LIST"]);
+    out.push({
+      vendor,
+      controller_id: String(c?.["Command Status"]?.Controller ?? "0"),
+      state,
+      // Honest count: how many members we found in a bad state. Null only
+      // when the CLI produced no PD LIST at all (nothing to count).
+      degraded_disks: pdListPresent ? degraded_drives.length : null,
+      raw_summary: summarizeMegaraid(state, degraded_drives, virtual_drives),
+      virtual_drives,
+      degraded_drives,
+    });
+  }
+  return out;
+}
+
+async function scrapePerccli(): Promise<HardwareRaidController[]> {
+  const raw = await runPrivileged("raid-perccli", [], 10000);
+  if (!raw) return [];
+  return parseMegaraidJson(raw, "dell");
 }
 
 async function scrapeStorcli(): Promise<HardwareRaidController[]> {
   const raw = await runPrivileged("raid-storcli", [], 10000);
   if (!raw) return [];
-  try {
-    const obj = JSON.parse(raw);
-    const ctrlList = obj?.Controllers ?? [];
-    return ctrlList.map((c: any) => ({
-      vendor: "lsi" as const,
-      controller_id: String(c?.["Command Status"]?.Controller ?? "?"),
-      state: String(c?.["Response Data"]?.["Status"]?.["Controller Status"] ?? "Unknown"),
-      degraded_disks: null,
-      raw_summary: null,
-    }));
-  } catch {
-    return [];
-  }
+  return parseMegaraidJson(raw, "lsi");
 }
 
 async function scrapeSsacli(): Promise<HardwareRaidController[]> {
