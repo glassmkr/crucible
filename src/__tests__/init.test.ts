@@ -3,6 +3,10 @@ import { runInit, isValidApiKey, buildCollectorYaml, buildSystemdUnit, setupPriv
 import { WRAPPER_PATH, SUDOERS_PATH } from "../lib/privileged.js";
 
 const VALID_NEW_KEY = "gmk_cru_live_abcdefghijklmnopqrstuvwx_a1b2";
+// A DISTINCT valid key for the mismatch tests. EXAMPLE placeholder + the
+// repo's gitleaks:allow convention (see enroll.test.ts) so the fake key does
+// not trip the generic-api-key scan.
+const VALID_OTHER_KEY = "gmk_cru_live_EXAMPLEEXAMPLE000000_ex03"; // gitleaks:allow
 const VALID_LEGACY_KEY = "col_abcdef0123456789abcdef0123456789ab";
 
 interface FakeFs {
@@ -73,6 +77,11 @@ function makeDeps(opts?: {
         fs.files.delete(from);
       },
       unlinkSync: (p) => { fs.files.delete(p); },
+      readFileSync: (p) => {
+        const f = fs.files.get(p);
+        if (!f) throw new Error(`ENOENT: ${p}`);
+        return f.data;
+      },
     },
     exec: (cmd, args) => {
       if (opts?.serviceUserCreateFails && cmd === "id" && args[0] === "-u") return { stdout: "", status: 1 };
@@ -269,6 +278,76 @@ describe("runInit", () => {
     expect(code).toBe(0);
     expect(fs.files.get(configPath)).toMatchObject({ data: original, uid: 0, gid: 1000, mode: 0o640 });
     expect(logs.some((message) => message.includes("preserving existing config"))).toBe(true);
+  });
+
+  it("refuses to change the collector key without --force (Grok L1)", async () => {
+    // Re-pointing to a NEW key without --force used to silently keep the OLD
+    // key. Now init refuses with an actionable message instead of ignoring it.
+    const OLD = `server_name: oldbox\napi_key: "${VALID_OTHER_KEY}"\n`;
+    const { deps, fs, errors } = makeDeps({
+      preExistingFiles: [configPath],
+      preExistingFileData: { [configPath]: OLD },
+      resolveThrows: true,
+    });
+    const code = await runInit({ apiKey: VALID_NEW_KEY, configPath, noVerify: true }, deps);
+    expect(code).toBe(7);
+    expect(errors.join("\n")).toContain("refusing to change the collector key");
+    expect(errors.join("\n")).toContain("--force");
+    // The old key is untouched (new key was NOT silently swallowed OR applied).
+    expect(fs.files.get(configPath)!.data).toContain(VALID_OTHER_KEY);
+  });
+
+  it("still refuses when the stored key line carries a trailing YAML comment (Codex round-1 #2)", async () => {
+    const OLD = `server_name: oldbox\napi_key: "${VALID_OTHER_KEY}" # rotated 2026-09\n`;
+    const { deps, errors } = makeDeps({
+      preExistingFiles: [configPath],
+      preExistingFileData: { [configPath]: OLD },
+      resolveThrows: true,
+    });
+    const code = await runInit({ apiKey: VALID_NEW_KEY, configPath, noVerify: true }, deps);
+    expect(code).toBe(7);
+    expect(errors.join("\n")).toContain("refusing to change the collector key");
+  });
+
+  it("warns instead of silently preserving when the stored key is unreadable (Codex round-1 #2)", async () => {
+    // A config whose api_key cannot be parsed: we cannot prove the supplied key
+    // matches, so warn rather than fall open silently.
+    const OLD = `server_name: oldbox\n# api_key intentionally on no parseable line\n`;
+    const { deps, warns } = makeDeps({
+      preExistingFiles: [configPath],
+      preExistingFileData: { [configPath]: OLD },
+      resolveThrows: true,
+    });
+    const code = await runInit({ apiKey: VALID_NEW_KEY, configPath, noVerify: true }, deps);
+    // Not a hard refusal (we could not confirm a mismatch), but a loud warning.
+    expect(code).toBe(0);
+    expect(warns.join("\n")).toContain("could not read the existing collector key");
+  });
+
+  it("allows re-pointing to a different key with --force (Grok L1)", async () => {
+    const OLD = `server_name: oldbox\napi_key: "${VALID_OTHER_KEY}"\n`;
+    const { deps, fs } = makeDeps({
+      preExistingFiles: [configPath],
+      preExistingFileData: { [configPath]: OLD },
+    });
+    const code = await runInit({ apiKey: VALID_NEW_KEY, configPath, noVerify: true, force: true, noStart: true }, deps);
+    expect(code).toBe(0);
+    expect(fs.files.get(configPath)!.data).toContain(VALID_NEW_KEY);
+  });
+
+  it("allows a redundant re-point with the same key without --force (Grok L1)", async () => {
+    // A no-op re-point (install.sh re-run with the same key) must still work.
+    const SAME = `server_name: oldbox\napi_key: "${VALID_NEW_KEY}"\n`;
+    const { deps, fs, errors } = makeDeps({
+      preExistingFiles: [configPath],
+      preExistingFileData: { [configPath]: SAME },
+      resolveThrows: true,
+    });
+    const file = fs.files.get(configPath)!;
+    file.uid = 1000; file.gid = 1000; file.mode = 0o600;
+    const code = await runInit({ apiKey: VALID_NEW_KEY, configPath, noVerify: true }, deps);
+    expect(code).toBe(0);
+    expect(errors.join("\n")).not.toContain("refusing to change the collector key");
   });
 
   it("still requires an api key when no config exists", async () => {

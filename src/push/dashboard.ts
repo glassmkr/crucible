@@ -177,6 +177,14 @@ export async function pushToDashboard(
         // a push failure and cost real time to chase.
         await response.body?.cancel();
         console.log("[dashboard] Push throttled (HTTP 429): the dashboard accepts one snapshot per server per 55s and this one arrived inside that window, which is expected right after a restart. The next cycle will land.");
+      } else if (response.status === 401 || response.status === 403) {
+        // Say WHY, not just the code. A 401/403 on push means the collector key
+        // in this config is not accepted by this dashboard: it was rotated,
+        // revoked, or belongs to a different account/server. Re-point with
+        // `sudo glassmkr-crucible init --api-key - --force` (plain init without
+        // --force preserves the old key). Grok red-team L1.
+        await response.body?.cancel();
+        console.error(`[dashboard] Push rejected: HTTP ${response.status}. This config's collector key is not accepted by ${url} (rotated, revoked, or pointing at a different account). Re-point with: sudo glassmkr-crucible init --api-key - --force`);
       } else {
         await response.body?.cancel();
         console.error(`[dashboard] Push failed: ${response.status} ${response.statusText}`);
@@ -253,6 +261,10 @@ function pushWithAgent(
           // both because the pinned path is what TLS-pinned installs actually use,
           // and a fix in only one of them would look fixed while still shouting.
           console.log("[dashboard] Push throttled (HTTP 429, pinned): one snapshot per server per 55s; expected right after a restart, the next cycle will land.");
+          finish(false);
+        } else if (res.statusCode === 401 || res.statusCode === 403) {
+          // Same key-rejection message as the non-pinned path (Grok L1).
+          console.error(`[dashboard] Push rejected (pinned): HTTP ${res.statusCode}. This config's collector key is not accepted by ${parsed.origin} (rotated, revoked, or pointing at a different account). Re-point with: sudo glassmkr-crucible init --api-key - --force`);
           finish(false);
         } else {
           console.error(`[dashboard] Push failed (pinned): ${res.statusCode}`);

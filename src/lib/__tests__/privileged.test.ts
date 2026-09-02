@@ -37,6 +37,7 @@ function mockDeps(execImpl: ExecImpl) {
         files.set(to, f); files.delete(from);
       },
       unlinkSync: (p) => { files.delete(p); },
+      readFileSync: (p) => { const f = files.get(p); if (!f) throw new Error(`ENOENT: ${p}`); return f.data; },
     },
     exec: execImpl,
     hostname: () => "h", log: () => {}, warn: (m) => warns.push(m), error: () => {},
