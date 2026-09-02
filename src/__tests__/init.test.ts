@@ -297,6 +297,33 @@ describe("runInit", () => {
     expect(fs.files.get(configPath)!.data).toContain(VALID_OTHER_KEY);
   });
 
+  it("still refuses when the stored key line carries a trailing YAML comment (Codex round-1 #2)", async () => {
+    const OLD = `server_name: oldbox\napi_key: "${VALID_OTHER_KEY}" # rotated 2026-09\n`;
+    const { deps, errors } = makeDeps({
+      preExistingFiles: [configPath],
+      preExistingFileData: { [configPath]: OLD },
+      resolveThrows: true,
+    });
+    const code = await runInit({ apiKey: VALID_NEW_KEY, configPath, noVerify: true }, deps);
+    expect(code).toBe(7);
+    expect(errors.join("\n")).toContain("refusing to change the collector key");
+  });
+
+  it("warns instead of silently preserving when the stored key is unreadable (Codex round-1 #2)", async () => {
+    // A config whose api_key cannot be parsed: we cannot prove the supplied key
+    // matches, so warn rather than fall open silently.
+    const OLD = `server_name: oldbox\n# api_key intentionally on no parseable line\n`;
+    const { deps, warns } = makeDeps({
+      preExistingFiles: [configPath],
+      preExistingFileData: { [configPath]: OLD },
+      resolveThrows: true,
+    });
+    const code = await runInit({ apiKey: VALID_NEW_KEY, configPath, noVerify: true }, deps);
+    // Not a hard refusal (we could not confirm a mismatch), but a loud warning.
+    expect(code).toBe(0);
+    expect(warns.join("\n")).toContain("could not read the existing collector key");
+  });
+
   it("allows re-pointing to a different key with --force (Grok L1)", async () => {
     const OLD = `server_name: oldbox\napi_key: "${VALID_OTHER_KEY}"\n`;
     const { deps, fs } = makeDeps({

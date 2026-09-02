@@ -118,8 +118,14 @@ export function readStoredApiKey(deps: InitDeps, path: string): string | null {
   } catch {
     return null;
   }
-  const m = contents.match(/^\s*api_key:\s*"?([^"\r\n]+?)"?\s*$/m);
-  return m ? m[1].trim() : null;
+  // Match a quoted value ("...") OR a bare word, each tolerating trailing
+  // whitespace and a YAML `# comment` (Codex round 1 #2: a hand-edited
+  // `api_key: "old" # rotated` previously returned null, so the guard fell
+  // open). Collector keys never contain `"` or `#`, so excluding those from the
+  // bare-word arm is safe.
+  const m = contents.match(/^\s*api_key:\s*(?:"([^"\r\n]+)"|([^\s"#\r\n]+))\s*(?:#.*)?$/m);
+  const key = m ? (m[1] ?? m[2]).trim() : "";
+  return key || null;
 }
 
 export function buildCollectorYaml(
@@ -540,6 +546,13 @@ export async function runInit(opts: InitOptions, deps: InitDeps): Promise<number
       if (storedKey && storedKey !== apiKey) {
         deps.error(`[init] refusing to change the collector key: a config already exists at ${existingConfig} with a different key, and init preserves the existing key unless --force is given. Without --force your new key is ignored and the agent keeps pushing to the previous account. To replace it, re-run: sudo glassmkr-crucible init --api-key - --force`);
         return 7;
+      }
+      // "Cannot determine" must not collapse into "safe" (Codex round 1 #2): if
+      // an --api-key was supplied but the existing config's key could not be
+      // read (unusual hand-edited YAML), we cannot prove it matches, so warn
+      // loudly rather than silently preserving a possibly-stale key.
+      if (!storedKey) {
+        deps.warn(`[init] could not read the existing collector key from ${existingConfig} to compare it with the supplied --api-key; init is preserving the existing config unchanged. If you intended to change the key, re-run with --force.`);
       }
     }
   }
