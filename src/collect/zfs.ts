@@ -59,6 +59,11 @@ export function parseZpoolStatus(zpoolStatus: string): ZfsPool[] {
   // out of the serialized ZfsPool object so it doesn't leak into the
   // snapshot.
   let sawScrubSignal = false;
+  // Indent (leading-space count) of the current top-vdev's IMMEDIATE children.
+  // Set from the first child line seen under a vdev; deeper lines are a
+  // replacing-0 / spare-0 sub-vdev's own leaves and are NOT counted as children
+  // (Codex round-2 #1). Reset per top-vdev.
+  let childIndent: number | null = null;
 
   for (const line of zpoolStatus.split("\n")) {
     const poolMatch = line.match(/^\s*pool:\s*(.+)/);
@@ -74,6 +79,7 @@ export function parseZpoolStatus(zpoolStatus: string): ZfsPool[] {
       pools.push(current);
       section = "none";
       sawScrubSignal = false;
+      childIndent = null;
       continue;
     }
 
@@ -186,13 +192,19 @@ export function parseZpoolStatus(zpoolStatus: string): ZfsPool[] {
         if (section === "config") current.vdevs.push(vdev);
         else if (section === "logs") current.slog_vdevs.push(vdev);
         else if (section === "cache") current.l2arc_vdevs.push(vdev);
+        childIndent = null; // a new vdev: re-learn its immediate-child indent
         continue;
       }
-      // Child device under the previously-pushed vdev. Increment its
-      // degraded counter if the child's state isn't ONLINE.
-      const childMatch = line.match(/^\t {4,}(\S+)\s+(\S+)/);
+      // Child under the previously-pushed vdev. Capture the leading-space
+      // count so we can tell an IMMEDIATE child from a grandchild: during a
+      // replace/spare, zpool nests a `replacing-0` / `spare-0` sub-vdev with
+      // its own deeper-indented leaves, and counting those as mirror members
+      // over-reported the width (a 2-way mid-replacement read as mirror_4way+,
+      // Codex round-2 #1). Only lines at the shallowest child indent count.
+      const childMatch = line.match(/^\t( +)(\S+)\s+(\S+)/);
       if (childMatch) {
-        const childState = childMatch[2];
+        const indent = childMatch[1].length;
+        const childState = childMatch[3];
         const lastVdev = (() => {
           if (section === "config" && current.vdevs.length > 0) {
             return current.vdevs[current.vdevs.length - 1];
@@ -206,8 +218,12 @@ export function parseZpoolStatus(zpoolStatus: string): ZfsPool[] {
           return null;
         })();
         if (lastVdev) {
-          lastVdev.child_count += 1;
-          if (childState !== "ONLINE") lastVdev.degraded_disks_count += 1;
+          if (childIndent === null) childIndent = indent; // first child = immediate level
+          if (indent === childIndent) {
+            lastVdev.child_count += 1;
+            if (childState !== "ONLINE") lastVdev.degraded_disks_count += 1;
+          }
+          // indent > childIndent: a grandchild (sub-vdev leaf); ignore for width.
         }
       }
     }

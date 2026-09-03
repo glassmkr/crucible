@@ -283,7 +283,7 @@ describe("runInit", () => {
   it("refuses to change the collector key without --force (Grok L1)", async () => {
     // Re-pointing to a NEW key without --force used to silently keep the OLD
     // key. Now init refuses with an actionable message instead of ignoring it.
-    const OLD = `server_name: oldbox\napi_key: "${VALID_OTHER_KEY}"\n`;
+    const OLD = `server_name: oldbox\ndashboard:\n  api_key: "${VALID_OTHER_KEY}"\n`;
     const { deps, fs, errors } = makeDeps({
       preExistingFiles: [configPath],
       preExistingFileData: { [configPath]: OLD },
@@ -298,7 +298,7 @@ describe("runInit", () => {
   });
 
   it("still refuses when the stored key line carries a trailing YAML comment (Codex round-1 #2)", async () => {
-    const OLD = `server_name: oldbox\napi_key: "${VALID_OTHER_KEY}" # rotated 2026-09\n`;
+    const OLD = `server_name: oldbox\ndashboard:\n  api_key: "${VALID_OTHER_KEY}" # rotated 2026-09\n`;
     const { deps, errors } = makeDeps({
       preExistingFiles: [configPath],
       preExistingFileData: { [configPath]: OLD },
@@ -324,8 +324,34 @@ describe("runInit", () => {
     expect(warns.join("\n")).toContain("could not read the existing collector key");
   });
 
+  it("compares the ACTIVE dashboard.api_key, not a legacy forge block (Codex round-2 #4)", async () => {
+    // A retained legacy forge.api_key equal to the supplied key must NOT satisfy
+    // the guard when the active dashboard.api_key differs.
+    const OLD = `forge:\n  api_key: "${VALID_NEW_KEY}"\ndashboard:\n  api_key: "${VALID_OTHER_KEY}"\n`;
+    const { deps, errors } = makeDeps({
+      preExistingFiles: [configPath],
+      preExistingFileData: { [configPath]: OLD },
+      resolveThrows: true,
+    });
+    const code = await runInit({ apiKey: VALID_NEW_KEY, configPath, noVerify: true }, deps);
+    expect(code).toBe(7);
+    expect(errors.join("\n")).toContain("refusing to change the collector key");
+  });
+
+  it("validates a supplied --api-key even in repair mode (Codex round-2 #5)", async () => {
+    const OLD = `dashboard:\n  api_key: "${VALID_OTHER_KEY}"\n`;
+    const { deps, errors } = makeDeps({
+      preExistingFiles: [configPath],
+      preExistingFileData: { [configPath]: OLD },
+      resolveThrows: true,
+    });
+    const code = await runInit({ apiKey: "gmk_cru_live_truncated", configPath, noVerify: true }, deps);
+    expect(code).toBe(2);
+    expect(errors.join("\n")).toContain("invalid --api-key");
+  });
+
   it("allows re-pointing to a different key with --force (Grok L1)", async () => {
-    const OLD = `server_name: oldbox\napi_key: "${VALID_OTHER_KEY}"\n`;
+    const OLD = `server_name: oldbox\ndashboard:\n  api_key: "${VALID_OTHER_KEY}"\n`;
     const { deps, fs } = makeDeps({
       preExistingFiles: [configPath],
       preExistingFileData: { [configPath]: OLD },
@@ -337,7 +363,7 @@ describe("runInit", () => {
 
   it("allows a redundant re-point with the same key without --force (Grok L1)", async () => {
     // A no-op re-point (install.sh re-run with the same key) must still work.
-    const SAME = `server_name: oldbox\napi_key: "${VALID_NEW_KEY}"\n`;
+    const SAME = `server_name: oldbox\ndashboard:\n  api_key: "${VALID_NEW_KEY}"\n`;
     const { deps, fs, errors } = makeDeps({
       preExistingFiles: [configPath],
       preExistingFileData: { [configPath]: SAME },
