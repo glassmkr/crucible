@@ -168,6 +168,29 @@ errors: 2 data errors
     expect(p.vdevs[0].degraded_disks_count).toBe(1);
   });
 
+  it("counts only immediate mirror children during a replacement, not sub-vdev leaves (Codex round-2 #1)", () => {
+    // A 2-way mirror mid-replacement: mirror-0's immediate children are the
+    // `replacing-0` sub-vdev and the surviving disk (2 = 2-way). The replacing
+    // sub-vdev's old/new leaves are deeper and must NOT inflate the width.
+    const raw =
+      "  pool: tank\n" +
+      " state: DEGRADED\n" +
+      "  scan: resilver in progress since Tue Sep  2 14:00:00 2026\n" +
+      "config:\n" +
+      "\tNAME             STATE\n" +
+      "\ttank             DEGRADED\n" +
+      "\t  mirror-0       DEGRADED\n" +
+      "\t    replacing-0  DEGRADED\n" +
+      "\t      old        OFFLINE\n" +
+      "\t      new        ONLINE\n" +
+      "\t    disk2        ONLINE\n" +
+      "errors: No known data errors\n";
+    const [p] = parseZpoolStatus(raw);
+    expect(p.vdevs[0].name).toBe("mirror-0");
+    expect(p.vdevs[0].child_count).toBe(2);
+    expect(p.vdevs[0].redundancy_class).toBe("mirror_2way");
+  });
+
   it("classifies 3-way and 4-way mirrors", () => {
     const threeWay =
       "  pool: t3\n state: ONLINE\nconfig:\n" +

@@ -26,6 +26,7 @@ import { execFileSync as execFileSyncDefault } from "node:child_process";
 import { randomUUID as randomUUIDDefault } from "node:crypto";
 import * as osDefault from "node:os";
 import * as pathDefault from "node:path";
+import { parse as parseYaml } from "yaml";
 import { buildSubprocessEnv } from "./lib/exec.js";
 import {
   SERVICE_USER, WRAPPER_PATH, WRAPPER_SCRIPT, SUDOERS_PATH, SUDOERS_CONTENT,
@@ -118,14 +119,20 @@ export function readStoredApiKey(deps: InitDeps, path: string): string | null {
   } catch {
     return null;
   }
-  // Match a quoted value ("...") OR a bare word, each tolerating trailing
-  // whitespace and a YAML `# comment` (Codex round 1 #2: a hand-edited
-  // `api_key: "old" # rotated` previously returned null, so the guard fell
-  // open). Collector keys never contain `"` or `#`, so excluding those from the
-  // bare-word arm is safe.
-  const m = contents.match(/^\s*api_key:\s*(?:"([^"\r\n]+)"|([^\s"#\r\n]+))\s*(?:#.*)?$/m);
-  const key = m ? (m[1] ?? m[2]).trim() : "";
-  return key || null;
+  // Parse the YAML and read the ACTIVE key, dashboard.api_key - the same field
+  // the agent pushes with (config.ts). A line regex was wrong twice: it fell
+  // open on a trailing `# comment` (round 1 #2), and it matched the FIRST
+  // `api_key:` anywhere, so a retained legacy `forge.api_key` could satisfy the
+  // guard while the active `dashboard.api_key` differed (round 2 #4). The YAML
+  // parser handles comments/quoting natively; unparseable YAML returns null so
+  // the guard warns rather than falsely matching.
+  try {
+    const parsed = parseYaml(contents) as { dashboard?: { api_key?: unknown } } | null;
+    const key = parsed?.dashboard?.api_key;
+    return typeof key === "string" && key.trim() ? key.trim() : null;
+  } catch {
+    return null;
+  }
 }
 
 export function buildCollectorYaml(
@@ -524,6 +531,16 @@ export async function runInit(opts: InitOptions, deps: InitDeps): Promise<number
       deps.error(`[init] failed to read api key from stdin: ${err?.message ?? err}`);
       return 1;
     }
+  }
+  // A SUPPLIED --api-key must be well-formed even in repair mode (Codex round-2
+  // #5): otherwise `init --api-key <garbage>` on an existing config skipped
+  // validation AND the mismatch guard (which requires isValidApiKey), preserved
+  // the old key, and could return success while the CLI promised format
+  // validation. An empty key in repair mode is fine (no key supplied = a plain
+  // repair), so gate the repair-mode check on apiKey being non-empty.
+  if (repairMode && apiKey && !isValidApiKey(apiKey)) {
+    deps.error(`[init] invalid --api-key: must look like "gmk_cru_live_<...>_<4>" or "col_<hex>". Got ${apiKey.length} char(s).`);
+    return 2;
   }
   if (!repairMode && !isValidApiKey(apiKey)) {
     deps.error(`[init] invalid --api-key: must look like "gmk_cru_live_<...>_<4>" or "col_<hex>". Got ${apiKey.length} char(s).`);
