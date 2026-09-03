@@ -13,6 +13,39 @@ API contract the agent speaks; breaking any of those is a major version. The
 full policy and the freeze-review record live in
 [docs/V1_FREEZE.md](docs/V1_FREEZE.md).
 
+## [1.2.2] - 2026-09-03
+
+### Fixed
+
+- Hardware RAID: a degraded MegaRAID array now names the specific drive at fault
+  (enclosure:slot plus model) and the affected virtual drive, instead of only
+  reporting that the controller needs attention. The guidance also distinguishes
+  a drive that is merely offline (which usually comes back with `set online` and
+  no rebuild) from one that has genuinely failed and needs replacement, so an
+  operator is no longer told to replace a healthy disk. Copyback and rebuild are
+  reported as recovery in progress, not as a drive to replace. Verified on both a
+  9364-8i (SAS) and a 9560-16i (NVMe) controller.
+- ZFS: a mirror's width is now reported (2-way / 3-way / 4-way or wider) so a
+  degraded 2-way mirror (no remaining redundancy) is rated more urgently than a
+  wider one. The width counts the mirror's own members and is not inflated by an
+  in-progress replacement. A resilver is no longer counted as a scrub, so an
+  offline/online recovery no longer clears the "this pool has never been scrubbed"
+  warning; a canceled scrub likewise does not count as a completed one.
+- Setup: re-pointing an installed agent to a different collector key with
+  `init --api-key` now refuses (unless `--force`) instead of silently keeping the
+  old key, so a rotated or moved key takes effect instead of leaving the agent
+  pushing to the previous account. The check reads the active key from the config
+  (a stale legacy entry can no longer mask a mismatch) and a malformed key is
+  rejected in that path too. A push rejected with HTTP 401 or 403 now explains
+  that the collector key is not accepted by the endpoint and how to re-point,
+  instead of printing only the status code.
+
+### Upgrade note
+
+- These are collector and setup fixes; upgrade the agent to receive them. No new
+  privileged wrapper action is added, so no wrapper refresh is required. No
+  config, CLI, or dashboard-contract changes.
+
 ## [1.2.1] - 2026-09-01
 
 ### Fixed
