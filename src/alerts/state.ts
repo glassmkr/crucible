@@ -58,6 +58,17 @@ export function loadAlertStateFile(path: string): Map<string, AlertState> {
     return new Map(Object.entries(data));
   } catch (err: any) {
     if (err?.code === "ENOENT") return new Map();
+    // A permission error says nothing about the content: the file is not
+    // corrupt, this process just may not read it (a non-root, non-service
+    // user, or a unit sandbox change). Labelling it "Invalid" and copying it
+    // to a .corrupt-* backup was wrong on both counts and, because the copy
+    // fails the same way, produced two stack traces (2026-09-04, --help run
+    // as an unprivileged user; the CLI entry no longer loads this module for
+    // help/version, this guards the runtime path).
+    if (err?.code === "EACCES" || err?.code === "EPERM") {
+      console.error(`[state] Cannot read alert state at ${path} (${err.code}); starting with empty state`);
+      return new Map();
+    }
     const backup = `${path}.corrupt-${Date.now()}-${process.pid}`;
     console.error(`[state] Invalid alert state at ${path}; preserving it as ${backup}:`, err);
     try {
