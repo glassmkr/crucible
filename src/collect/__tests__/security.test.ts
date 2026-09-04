@@ -131,16 +131,21 @@ describe("collectSecurity cache shape (0.9.3 fix)", () => {
 });
 
 describe("fail-visible security probes", () => {
-  it("requires an input hook and protective nftables verdict", () => {
+  it("requires an input hook and a default-deny verdict, not merely some drop rule", () => {
     expect(nftHasEffectiveIngressProtection(`table inet filter {
       chain input { type filter hook input priority 0; policy accept; tcp dport 22 accept }
     }`)).toBe(false);
+    // A CONDITIONAL drop under policy accept protects nothing: every packet the
+    // match does not catch is accepted. This used to count as protection and,
+    // once #144 let an inactive ufw fall through to this probe, a stock
+    // fail2ban nftables table suppressed no_firewall on an otherwise open host
+    // (Codex review 2026-09-04 #1).
     expect(nftHasEffectiveIngressProtection(`table inet filter {
       chain input {
         type filter hook input priority 0; policy accept;
         ct state invalid drop
       }
-    }`)).toBe(true);
+    }`)).toBe(false);
     expect(nftHasEffectiveIngressProtection("chain input { type filter hook input priority 0; policy drop; }")).toBe(true);
     expect(nftHasEffectiveIngressProtection(`table inet filter {
       chain input {
@@ -152,6 +157,50 @@ describe("fail-visible security probes", () => {
         type filter hook input priority 0; policy accept;
         tcp dport { 22, 80 } accept
         ct state invalid drop
+      }
+    }`)).toBe(false);
+  });
+
+  it("does not read a fail2ban ban table as ingress protection", () => {
+    // Shape of fail2ban's action.d/nftables.conf: its own input-hook chain,
+    // policy accept, one reject that matches only the banned-address set.
+    expect(nftHasEffectiveIngressProtection(`table inet f2b-table {
+      set addr-set-sshd {
+        type ipv4_addr
+        elements = { 203.0.113.8 }
+      }
+      chain f2b-chain {
+        type filter hook input priority filter - 1; policy accept;
+        tcp dport { 22 } ip saddr @addr-set-sshd reject with icmp type port-unreachable
+      }
+    }`)).toBe(false);
+  });
+
+  it("accepts an UNCONDITIONAL terminal drop/reject under policy accept", () => {
+    // Hand-written rulesets often keep policy accept and end the chain with a
+    // catch-all verdict; that is a default deny in effect. Counters, log
+    // clauses and comments are decoration around the verdict, as printed by
+    // `nft list ruleset`.
+    expect(nftHasEffectiveIngressProtection(`table inet filter {
+      chain input {
+        type filter hook input priority filter; policy accept;
+        ct state established,related accept
+        tcp dport 22 accept
+        counter packets 12 bytes 640 drop
+      }
+    }`)).toBe(true);
+    expect(nftHasEffectiveIngressProtection(`table inet filter {
+      chain input {
+        type filter hook input priority filter; policy accept;
+        tcp dport 22 accept
+        log prefix "nft-in-drop " group 1 drop comment "default deny"
+      }
+    }`)).toBe(true);
+    expect(nftHasEffectiveIngressProtection(`table inet filter {
+      chain input {
+        type filter hook input priority filter; policy accept;
+        tcp dport 22 accept
+        reject with icmpx type admin-prohibited
       }
     }`)).toBe(true);
   });
@@ -269,6 +318,20 @@ describe("checkFirewall falls through an inactive managed backend", () => {
     privileged({ "firewall-cmd": "not running\n", nft: NFT_DROP_RULESET });
     const result = await collectSecurity();
     expect(result.firewall).toMatchObject({ available: true, active: true, source: "nftables" });
+  });
+
+  it("ufw inactive + fail2ban nftables table + open iptables => still unprotected (Codex 2026-09-04 #1)", async () => {
+    runMock.mockResolvedValue(null);
+    installed("ufw", "nft", "iptables");
+    privileged({
+      ufw: "Status: inactive\n",
+      nft: "table inet f2b-table {\n  set addr-set-sshd {\n    type ipv4_addr\n    elements = { 203.0.113.8 }\n  }\n  chain f2b-chain {\n    type filter hook input priority filter - 1; policy accept;\n    tcp dport { 22 } ip saddr @addr-set-sshd reject with icmp type port-unreachable\n  }\n}\n",
+      iptables: "Chain INPUT (policy ACCEPT)\ntarget prot opt source destination\n",
+    });
+    const result = await collectSecurity();
+    expect(result.firewall).toMatchObject({ available: true, active: false, source: "ufw" });
+    expect(result.firewall.details).toMatch(/nftables/);
+    expect(noFirewallRule.evaluate({ security: result } as any, {} as any)).toHaveLength(1);
   });
 
   it("keeps the inactive managed backend as source when nothing protects, and names every consulted backend", async () => {

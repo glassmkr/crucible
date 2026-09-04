@@ -417,9 +417,31 @@ export function nftHasEffectiveIngressProtection(output: string): boolean {
     const body = output.slice(openBrace + 1, end - 1);
     if (!/\bhook\s+input\b/.test(body)) continue;
     if (/\bpolicy\s+(?:drop|reject)\s*;/.test(body)) return true;
-    if (body.split(/\r?\n/).some((line) => /(?:^|\s)(?:drop|reject)(?:\s|$)/.test(line.trim()))) return true;
+    if (body.split(/\r?\n/).some((line) => isUnconditionalDenyRule(line))) return true;
   }
   return false;
+}
+
+// True only for a rule whose verdict applies to EVERY packet reaching it: a bare
+// `drop` / `reject [with ...]`, optionally decorated with the counter, log and
+// comment clauses `nft list ruleset` prints around a verdict. A rule that still
+// carries a match expression (`ct state invalid drop`, `ip saddr @banned reject`)
+// protects only what it matches; under `policy accept` everything else is let in.
+// That distinction used to be ignored, so a stock fail2ban table (its own input
+// hook, policy accept, one reject on the banned-address set) read as a firewall
+// and, once an inactive ufw fell through to this probe (#144), suppressed
+// no_firewall on an otherwise open host (Codex review 2026-09-04 #1). Anything
+// this stripper does not recognise is treated as conditional, so unknown shapes
+// err toward reporting no protection rather than inventing some.
+function isUnconditionalDenyRule(line: string): boolean {
+  const stripped = line
+    .trim()
+    .replace(/\bcomment\s+"[^"]*"/g, "")
+    .replace(/\bcounter\b(?:\s+packets\s+\d+\s+bytes\s+\d+)?/g, "")
+    .replace(/\blog\b(?:\s+(?:prefix\s+"[^"]*"|level\s+\w+|flags\s+\w+|group\s+\d+|snaplen\s+\d+|queue-threshold\s+\d+))*/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+  return /^(?:drop|reject(?: with .+)?)$/.test(stripped);
 }
 
 export function iptablesHasEffectiveIngressProtection(output: string): boolean {
