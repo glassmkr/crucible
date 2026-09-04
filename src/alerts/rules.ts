@@ -457,7 +457,10 @@ export const allRules: AlertRule[] = [
     if (!snap.security || snap.security.available === false || snap.security.firewall.available === false || snap.security.firewall.active !== false) return [];
     return [{ type: "no_firewall", severity: "warning" as const,
       title: "No firewall active",
-      message: "No active firewall rules detected (checked UFW, firewalld, nftables, iptables). All ports are exposed unless protected by network-level ACLs.",
+      // The parenthetical is the collector's own account of which backends it
+      // consulted on this host, not a fixed list: claiming "checked firewalld"
+      // on a host that never had it misled the remote-codex triage (2026-09-04).
+      message: `No active firewall rules detected (${snap.security.firewall.details}). All ports are exposed unless protected by network-level ACLs.`,
       evidence: { source: snap.security.firewall.source },
       recommendation: 'Enable a firewall: "sudo ufw enable" (Debian/Ubuntu) or "sudo systemctl start firewalld" (RHEL/Rocky).' }];
   }},

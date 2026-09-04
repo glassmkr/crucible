@@ -23,6 +23,13 @@ vi.mock("fs", () => ({
   readFileSync: () => "",
   readdirSync: () => [],
 }));
+// runPrivileged is the only way the firewall probes reach ufw / firewall-cmd /
+// nft / iptables. Default to null (no wrapper, not root) so every pre-existing
+// test keeps the behaviour it had when the real module returned null.
+const runPrivilegedMock = vi.fn();
+vi.mock("../../lib/privileged.js", () => ({
+  runPrivileged: (...args: unknown[]) => runPrivilegedMock(...args),
+}));
 
 const {
   collectSecurity,
@@ -46,6 +53,8 @@ beforeEach(() => {
     stderr: "",
     timedOut: false,
   });
+  runPrivilegedMock.mockReset();
+  runPrivilegedMock.mockResolvedValue(null);
   __resetSecurityCacheForTests();
 });
 
@@ -203,6 +212,86 @@ describe("fail-visible security probes", () => {
     expect((await collectSecurity()).auto_updates.configured).toBe(false);
     configure('APT::Periodic::Update-Package-Lists "1";\nAPT::Periodic::Unattended-Upgrade "1";');
     expect((await collectSecurity()).auto_updates.configured).toBe(true);
+  });
+});
+
+// Known-bad fixture (remote-codex, Ubuntu 24.04, 2026-09-04): ufw was
+// installed but never enabled, and the host's real firewall was a hand-written
+// nftables ruleset with input and output at policy drop. The ufw branch
+// returned as soon as it saw "Status:", so the collector reported
+// active:false source:ufw and the dashboard raised no_firewall on a
+// default-deny host. Purging the ufw package cleared it, which is the wrong
+// fix: an installed-but-inactive managed backend must fall through to the
+// raw nftables / iptables probes before anything is declared unprotected.
+const NFT_DROP_RULESET = `table inet filter {
+  chain input {
+    type filter hook input priority filter; policy drop;
+    ct state established,related accept
+    iif "lo" accept
+    tcp dport 22 accept
+  }
+  chain output {
+    type filter hook output priority filter; policy drop;
+    ct state established,related accept
+    tcp dport { 53, 443 } accept
+  }
+}
+`;
+
+describe("checkFirewall falls through an inactive managed backend", () => {
+  const noFirewallRule = allRules.find((rule) => rule.type === "no_firewall")!;
+
+  function privileged(outputs: Record<string, string>) {
+    runPrivilegedMock.mockImplementation((action: string) => Promise.resolve(outputs[action] ?? null));
+  }
+  function installed(...tools: string[]) {
+    runDetailedMock.mockImplementation((_cmd: string, args: string[]) => Promise.resolve({
+      installed: true,
+      exitCode: tools.includes(args[0]) ? 0 : 1,
+      stdout: tools.includes(args[0]) ? `/usr/sbin/${args[0]}\n` : null,
+      stderr: "",
+      timedOut: false,
+    }));
+  }
+
+  it("ufw installed but inactive + protective nftables ruleset => active via nftables", async () => {
+    runMock.mockResolvedValue(null);
+    installed("ufw", "nft");
+    privileged({ ufw: "Status: inactive\n", nft: NFT_DROP_RULESET });
+    const result = await collectSecurity();
+    expect(result.firewall).toMatchObject({ available: true, active: true, source: "nftables" });
+    expect(noFirewallRule.evaluate({ security: result } as any, {} as any)).toEqual([]);
+  });
+
+  it("firewalld installed but not running + protective nftables ruleset => active via nftables", async () => {
+    runMock.mockResolvedValue(null);
+    installed("firewall-cmd", "nft");
+    privileged({ "firewall-cmd": "not running\n", nft: NFT_DROP_RULESET });
+    const result = await collectSecurity();
+    expect(result.firewall).toMatchObject({ available: true, active: true, source: "nftables" });
+  });
+
+  it("keeps the inactive managed backend as source when nothing protects, and names every consulted backend", async () => {
+    runMock.mockResolvedValue(null);
+    installed("ufw", "nft", "iptables");
+    privileged({
+      ufw: "Status: inactive\n",
+      nft: "table inet filter {\n  chain input {\n    type filter hook input priority filter; policy accept;\n  }\n}\n",
+      iptables: "Chain INPUT (policy ACCEPT)\ntarget prot opt source destination\n",
+    });
+    const result = await collectSecurity();
+    // source stays "ufw": the dashboard's fix variants key on it to pick the
+    // enable-ufw path, which is still the right remediation on this host.
+    expect(result.firewall).toMatchObject({ available: true, active: false, source: "ufw" });
+    expect(result.firewall.details).toMatch(/ufw/);
+    expect(result.firewall.details).toMatch(/nftables/);
+    expect(result.firewall.details).toMatch(/iptables/);
+    const alerts = noFirewallRule.evaluate({ security: result } as any, {} as any);
+    expect(alerts).toHaveLength(1);
+    // The message must report what was consulted on THIS host, not a fixed
+    // list: firewalld was never installed here, so it must not be claimed.
+    expect(alerts[0].message).toContain(result.firewall.details);
+    expect(alerts[0].message).not.toMatch(/firewalld/);
   });
 });
 
