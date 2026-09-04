@@ -13,6 +13,38 @@ API contract the agent speaks; breaking any of those is a major version. The
 full policy and the freeze-review record live in
 [docs/V1_FREEZE.md](docs/V1_FREEZE.md).
 
+## [1.2.3] - 2026-09-04
+
+### Fixed
+
+- Firewall detection: a host whose ufw or firewalld package is installed but not
+  enabled is no longer declared unprotected on that basis alone. The agent now
+  also inspects the live nftables ruleset and then iptables, and a default-deny
+  ruleset found there counts as an active firewall (reported with
+  `source: nftables` or `source: iptables`). Previously a hand-written nftables
+  firewall behind a never-enabled ufw package raised `no_firewall` on a
+  locked-down host.
+- Firewall detection: only a real default deny counts. An input chain is rated
+  protective when its policy is drop or reject, or when it contains an
+  unconditional drop or reject rule. A rule that matches only some traffic (for
+  example fail2ban's ban table, which rejects banned addresses and accepts
+  everything else) is no longer mistaken for a firewall, so an otherwise open
+  host with fail2ban installed is correctly reported as unprotected.
+- The `no_firewall` alert now states which firewall backends were actually
+  consulted on the host (for example `checked ufw: inactive; iptables: INPUT
+  chain has no protective verdict`) instead of a fixed list, so the message no
+  longer claims a firewalld check on a host that never had firewalld.
+
+### Upgrade note
+
+- Collector fix; upgrade the agent to receive it. No new privileged wrapper
+  action is added (the nftables and iptables probes already existed), so no
+  wrapper refresh is required. No config, CLI, or dashboard-contract changes.
+- A host that was previously rated protected only because of a conditional drop
+  rule under an accept policy (such as a lone `ct state invalid drop`) will now
+  raise `no_firewall`. That alert is correct: such a rule does not restrict
+  inbound traffic.
+
 ## [1.2.2] - 2026-09-03
 
 ### Fixed
