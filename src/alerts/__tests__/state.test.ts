@@ -2,6 +2,34 @@ import { mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
+
+// An unreadable (EACCES) state file is simulated through a delegating fs mock
+// rather than chmod 000, which root reads regardless. Everything else hits the
+// real fs so the temp-dir tests below are unaffected.
+const { UNREADABLE, copyFileSpy } = vi.hoisted(() => ({
+  UNREADABLE: "/__unreadable__/alert-state.json",
+  copyFileSpy: vi.fn<(src: string) => void>(),
+}));
+vi.mock("node:fs", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:fs")>();
+  return {
+    ...actual,
+    readFileSync: ((path: any, ...rest: any[]) => {
+      if (String(path) === UNREADABLE) {
+        throw Object.assign(new Error(`EACCES: permission denied, open '${UNREADABLE}'`), { code: "EACCES", errno: -13, syscall: "open", path: UNREADABLE });
+      }
+      return (actual.readFileSync as any)(path, ...rest);
+    }) as typeof actual.readFileSync,
+    copyFileSync: ((src: any, ...rest: any[]) => {
+      copyFileSpy(String(src));
+      if (String(src) === UNREADABLE) {
+        throw Object.assign(new Error(`EACCES: permission denied, copyfile '${UNREADABLE}'`), { code: "EACCES", errno: -13, syscall: "copyfile", path: UNREADABLE });
+      }
+      return (actual.copyFileSync as any)(src, ...rest);
+    }) as typeof actual.copyFileSync,
+  };
+});
+
 import { loadAlertStateFile, MAX_CORRUPT_STATE_BACKUPS, saveAlertStateFile, updateAlertState, __test_only, type AlertState } from "../state.js";
 import type { AlertResult } from "../../lib/types.js";
 
@@ -120,5 +148,26 @@ describe("alert state persistence", () => {
     expect(backups).toHaveLength(MAX_CORRUPT_STATE_BACKUPS);
     expect(backups.some((name) => name.includes("1700000000000"))).toBe(false);
     error.mockRestore();
+  });
+});
+
+// An unreadable file is not a corrupt file. On 2026-09-04 an EACCES from a
+// root-owned state file (CLI run as an unprivileged user) was logged as
+// "Invalid alert state" and a copy to a .corrupt-* backup was attempted; both
+// are wrong for a permission error, which says nothing about the content.
+describe("loadAlertStateFile on an unreadable file (EACCES)", () => {
+  it("does not label it corrupt and does not attempt a corrupt-backup copy", () => {
+    copyFileSpy.mockClear();
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      const result = loadAlertStateFile(UNREADABLE);
+      expect(result.size).toBe(0);
+      const stderr = errSpy.mock.calls.map((c) => c.map(String).join(" ")).join("\n");
+      expect(stderr).not.toContain("Invalid alert state");
+      expect(stderr).not.toContain("corrupt");
+      expect(copyFileSpy).not.toHaveBeenCalledWith(UNREADABLE);
+    } finally {
+      errSpy.mockRestore();
+    }
   });
 });
