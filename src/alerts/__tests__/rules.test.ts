@@ -396,6 +396,19 @@ describe("ssh_config_unapplied (config-vs-runtime false-negative guard)", () => 
   });
 });
 
+const noFirewallRule = allRules.find(r => r.type === "no_firewall")!;
+
+describe("no_firewall message", () => {
+  it("names the backends the collector actually consulted instead of a fixed list", () => {
+    const snap = snapWithSsh({ permitRootLogin: "no", passwordAuthentication: "no", rootPasswordExposed: false, configApplied: true });
+    (snap.security as any).firewall = { available: true, active: false, source: "ufw", details: "checked ufw: inactive; iptables: INPUT chain has no protective verdict" };
+    const out = noFirewallRule.evaluate(snap, baseThresholds);
+    expect(out).toHaveLength(1);
+    expect(out[0].message).toContain("checked ufw: inactive; iptables: INPUT chain has no protective verdict");
+    expect(out[0].message).not.toContain("firewalld");
+  });
+});
+
 describe("ALL_RULE_IDS export sync", () => {
   it("matches the actual rule definitions in allRules", async () => {
     const { ALL_RULE_IDS } = await import("../rules.js");

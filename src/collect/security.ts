@@ -280,16 +280,31 @@ async function checkFirewall(): Promise<FirewallStatus> {
     return result.exitCode === 0 && Boolean(result.stdout?.trim()) ? "present" as const : "absent" as const;
   }));
   let sawProbeOutput = false;
+  // Backends that answered "installed but not protecting". An ACTIVE managed
+  // backend is authoritative and returns immediately; an inactive one is not
+  // the end of the story. On remote-codex (Ubuntu 24.04, 2026-09-04) ufw was
+  // installed but never enabled while a hand-written nftables ruleset held
+  // input at policy drop, and returning on "Status: inactive" raised
+  // no_firewall on a default-deny host. So an inactive backend is recorded and
+  // the walk continues to the raw nftables / iptables probes. Only when every
+  // consulted backend says "not protecting" is the host reported unprotected:
+  // source is the first inactive backend (the dashboard's fix variants key on
+  // it to pick the enable-ufw / enable-firewalld path) and details names every
+  // backend that was actually consulted, so the alert message never claims a
+  // check that did not happen on this host.
+  const inactive: Array<{ source: string; detail: string }> = [];
 
-  // UFW: if installed, its status is authoritative (ignores Docker iptables chains)
+  // UFW: an active status is authoritative (ignores Docker iptables chains)
   const ufw = await runPrivileged("ufw", [], 5000);
   sawProbeOutput ||= Boolean(ufw?.trim());
   if (ufw && ufw.includes("Status:")) {
-    const active = ufw.includes("Status: active");
-    return { available: true, active, source: "ufw", details: active ? "UFW is active" : "UFW is inactive" };
+    if (ufw.includes("Status: active")) {
+      return { available: true, active: true, source: "ufw", details: "UFW is active" };
+    }
+    inactive.push({ source: "ufw", detail: "ufw: inactive" });
   }
 
-  // firewalld: if installed, its status is authoritative
+  // firewalld: a running status is authoritative
   const fwd = await runPrivileged("firewall-cmd", [], 5000);
   sawProbeOutput ||= Boolean(fwd?.trim());
   if (fwd) {
@@ -297,11 +312,11 @@ async function checkFirewall(): Promise<FirewallStatus> {
       return { available: true, active: true, source: "firewalld", details: "firewalld is running" };
     }
     if (fwd.includes("not running") || fwd.includes("dead")) {
-      return { available: true, active: false, source: "firewalld", details: "firewalld is not running" };
+      inactive.push({ source: "firewalld", detail: "firewalld: not running" });
     }
   }
 
-  // pve-firewall (Proxmox VE): if installed, its status is authoritative.
+  // pve-firewall (Proxmox VE): an enabled/running status is authoritative.
   // The service can be running while the firewall itself is disabled (the
   // "disabled/running" status). Treat disabled-firewall as inactive, even
   // when the systemd service is up; only "enabled/running" counts as
@@ -317,39 +332,54 @@ async function checkFirewall(): Promise<FirewallStatus> {
     const m = pve.match(/Status:\s*(\w+)\/(\w+)/);
     if (m) {
       const [, fwState, svcState] = m;
-      const active = fwState === "enabled" && svcState === "running";
-      return {
-        available: true,
-        active,
-        source: "pve-firewall",
-        details: `pve-firewall is ${fwState}/${svcState}`,
-      };
+      if (fwState === "enabled" && svcState === "running") {
+        return {
+          available: true,
+          active: true,
+          source: "pve-firewall",
+          details: `pve-firewall is ${fwState}/${svcState}`,
+        };
+      }
+      inactive.push({ source: "pve-firewall", detail: `pve-firewall: ${fwState}/${svcState}` });
     }
   }
 
-  // nftables (only if no managed firewall found)
+  // nftables: consulted when no managed backend is active
   const nft = await runPrivileged("nft", [], 5000);
   sawProbeOutput ||= Boolean(nft?.trim());
   if (nft) {
-    const active = nftHasEffectiveIngressProtection(nft);
-    return {
-      available: true,
-      active,
-      source: "nftables",
-      details: active ? "Input hook has a drop/reject policy or verdict" : "No protective verdict on an input hook",
-    };
+    if (nftHasEffectiveIngressProtection(nft)) {
+      return {
+        available: true,
+        active: true,
+        source: "nftables",
+        details: "Input hook has a drop/reject policy or verdict",
+      };
+    }
+    inactive.push({ source: "nftables", detail: "nftables: no protective verdict on an input hook" });
   }
 
   // iptables fallback: filter out Docker/container chains to avoid false positives
   const ipt = await runPrivileged("iptables", [], 5000);
   sawProbeOutput ||= Boolean(ipt?.trim());
   if (ipt) {
-    const active = iptablesHasEffectiveIngressProtection(ipt);
+    if (iptablesHasEffectiveIngressProtection(ipt)) {
+      return {
+        available: true,
+        active: true,
+        source: "iptables",
+        details: "INPUT chain has a drop/reject policy or verdict",
+      };
+    }
+    inactive.push({ source: "iptables", detail: "iptables: INPUT chain has no protective verdict" });
+  }
+
+  if (inactive.length > 0) {
     return {
       available: true,
-      active,
-      source: "iptables",
-      details: active ? "INPUT chain has a drop/reject policy or verdict" : "INPUT chain has no protective verdict",
+      active: false,
+      source: inactive[0].source,
+      details: `checked ${inactive.map((entry) => entry.detail).join("; ")}`,
     };
   }
 
@@ -359,7 +389,7 @@ async function checkFirewall(): Promise<FirewallStatus> {
       available: true,
       active: false,
       source: "none",
-      details: "No firewall tooling is installed",
+      details: "no firewall tooling is installed",
     };
   }
 
