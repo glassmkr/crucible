@@ -13,6 +13,21 @@ API contract the agent speaks; breaking any of those is a major version. The
 full policy and the freeze-review record live in
 [docs/V1_FREEZE.md](docs/V1_FREEZE.md).
 
+## [1.2.4] - 2026-09-16
+
+### Added
+
+- GPU: Xid 154 ("GPU recovery action changed to GPU Reset Required") is now
+  treated as a critical XID. It follows Xid 119 (GSP timeout) and leaves the
+  affected GPU unusable until a power cycle, so it should page like the other
+  fatal XIDs rather than pass unnoticed.
+
+### Fixed
+
+- CLI: `--help` and `--version` now respond before the runtime loads, so they
+  work even when the runtime cannot start; an unreadable state file is reported
+  as unreadable rather than misreported as corrupt.
+
 ## [1.2.3] - 2026-09-04
 
 ### Fixed
