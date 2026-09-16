@@ -44,12 +44,14 @@ const PROBE_TIMEOUT_MS = 2000;
 // XID error severity table (NVIDIA XID Errors documentation).
 // Maintenance note: NVIDIA adds new XIDs in driver releases; refresh
 // when major driver versions land. Last refreshed 2026-05-19 against
-// the published XID error reference.
+// the published XID error reference; 154 added 2026-09-16 (H200 NVL).
 const XID_CRITICAL = new Set([
   13, 31, 43, 45, 48, 56, 57, 58, 62, 63, 64,
   65, 66, 68, 69, 71, 72, 73, 74, 76, 78,
   79, // GPU has fallen off the bus -> most severe
   92, 94, 95, 96, 100, 101, 110, 111, 119, 120,
+  154, // "GPU Reset Required" recovery action; follows Xid 119 (GSP timeout),
+  //      GPU unusable until a power cycle
 ]);
 const XID_WARNING = new Set([8, 14, 22, 25, 32, 38, 39, 42, 44, 46, 60, 67]);
 

@@ -258,6 +258,7 @@ describe("C19 Tier 1: parseXidEvents", () => {
     expect(gpuTest.XID_CRITICAL.has(48)).toBe(true);  // DBE
     expect(gpuTest.XID_CRITICAL.has(94)).toBe(true);  // contained ECC
     expect(gpuTest.XID_CRITICAL.has(95)).toBe(true);  // uncontained ECC
+    expect(gpuTest.XID_CRITICAL.has(154)).toBe(true); // GPU Reset Required
     expect(gpuTest.XID_WARNING.has(32)).toBe(true);   // push buffer
     expect(gpuTest.XID_CRITICAL.has(32)).toBe(false);
   });
