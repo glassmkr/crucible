@@ -313,6 +313,81 @@ errors: 2 data errors
     expect(p.vdevs[0].degraded_disks_count).toBe(1);
   });
 
+  // === spare_in_progress (read by the dashboard's raidz2 severity branch) ===
+
+  it("flags spare_in_progress when a hot spare has taken over a raidz2 member (spare-N with an ONLINE leaf)", () => {
+    const raw =
+      "  pool: tank\n" +
+      " state: DEGRADED\n" +
+      "  scan: resilver in progress since Fri Sep 26 03:14:07 2025\n" +
+      "config:\n" +
+      "\n" +
+      "\tNAME                                      STATE     READ WRITE CKSUM\n" +
+      "\ttank                                      DEGRADED     0     0     0\n" +
+      "\t  raidz2-0                                DEGRADED     0     0     0\n" +
+      "\t    ata-WDC_WD100EFAX-68LHPN0_FAKE0001    ONLINE       0     0     0\n" +
+      "\t    spare-1                               DEGRADED     0     0     0\n" +
+      "\t      ata-WDC_WD100EFAX-68LHPN0_FAKE0002  FAULTED     12   436     0  too many errors\n" +
+      "\t      ata-WDC_WD100EFAX-68LHPN0_FAKE0009  ONLINE       0     0     0  (resilvering)\n" +
+      "\t    ata-WDC_WD100EFAX-68LHPN0_FAKE0003    ONLINE       0     0     0\n" +
+      "\t    ata-WDC_WD100EFAX-68LHPN0_FAKE0004    ONLINE       0     0     0\n" +
+      "\tspares\n" +
+      "\t  ata-WDC_WD100EFAX-68LHPN0_FAKE0009      INUSE     currently in use\n" +
+      "\t  ata-WDC_WD100EFAX-68LHPN0_FAKE0010      AVAIL   \n" +
+      "\n" +
+      "errors: No known data errors\n";
+    const [p] = parseZpoolStatus(raw);
+    expect(p.vdevs).toHaveLength(1);
+    expect(p.vdevs[0].name).toBe("raidz2-0");
+    expect(p.vdevs[0].redundancy_class).toBe("raidz2");
+    expect(p.vdevs[0].spare_in_progress).toBe(true);
+    // The spare-1 sub-vdev is one member slot; its leaves do not widen the vdev.
+    expect(p.vdevs[0].child_count).toBe(4);
+  });
+
+  it("does not flag spare_in_progress when the spare-N leaf is not ONLINE", () => {
+    const raw =
+      "  pool: tank\n" +
+      " state: DEGRADED\n" +
+      "config:\n" +
+      "\tNAME          STATE\n" +
+      "\ttank          DEGRADED\n" +
+      "\t  raidz2-0    DEGRADED\n" +
+      "\t    a         ONLINE\n" +
+      "\t    spare-1   UNAVAIL\n" +
+      "\t      b       FAULTED\n" +
+      "\t      s       UNAVAIL\n" +
+      "\t    c         ONLINE\n" +
+      "\t    d         ONLINE\n" +
+      "errors: No known data errors\n";
+    const [p] = parseZpoolStatus(raw);
+    expect(p.vdevs[0].spare_in_progress).toBeUndefined();
+  });
+
+  it("does not flag spare_in_progress for an ONLINE leaf under replacing-N, or on a vdev without spares", () => {
+    const raw =
+      "  pool: tank\n" +
+      " state: DEGRADED\n" +
+      "config:\n" +
+      "\tNAME             STATE\n" +
+      "\ttank             DEGRADED\n" +
+      "\t  raidz2-0       DEGRADED\n" +
+      "\t    a            ONLINE\n" +
+      "\t    replacing-1  DEGRADED\n" +
+      "\t      old        FAULTED\n" +
+      "\t      new        ONLINE\n" +
+      "\t    c            ONLINE\n" +
+      "\t    d            ONLINE\n" +
+      "\t  raidz2-1       DEGRADED\n" +
+      "\t    e            ONLINE\n" +
+      "\t    f            FAULTED\n" +
+      "\t    g            ONLINE\n" +
+      "\t    h            ONLINE\n" +
+      "errors: No known data errors\n";
+    const [p] = parseZpoolStatus(raw);
+    expect(p.vdevs.map((v) => v.spare_in_progress)).toEqual([undefined, undefined]);
+  });
+
   it("section headers tolerate either tab-prefixed or unindented form (forwards-compat)", () => {
     // ZFS 2.0 emitted section headers unindented (`logs\n`); ZFS 2.2
     // uses tab-prefixed (`\tlogs\t\n`). The parser must handle both.

@@ -65,6 +65,9 @@ export function parseZpoolStatus(zpoolStatus: string): ZfsPool[] {
   // replacing-0 / spare-0 sub-vdev's own leaves and are NOT counted as children
   // (Codex round-2 #1). Reset per top-vdev.
   let childIndent: number | null = null;
+  // The current top-vdev's most recent immediate child is a `spare-N`
+  // sub-vdev, so the deeper leaves that follow belong to it.
+  let inSpareChild = false;
 
   for (const line of zpoolStatus.split("\n")) {
     const poolMatch = line.match(/^\s*pool:\s*(.+)/);
@@ -81,6 +84,7 @@ export function parseZpoolStatus(zpoolStatus: string): ZfsPool[] {
       section = "none";
       sawScanLine = false;
       childIndent = null;
+      inSpareChild = false;
       continue;
     }
 
@@ -188,6 +192,7 @@ export function parseZpoolStatus(zpoolStatus: string): ZfsPool[] {
         else if (section === "logs") current.slog_vdevs.push(vdev);
         else if (section === "cache") current.l2arc_vdevs.push(vdev);
         childIndent = null; // a new vdev: re-learn its immediate-child indent
+        inSpareChild = false;
         continue;
       }
       // Child under the previously-pushed vdev. Capture the leading-space
@@ -199,6 +204,7 @@ export function parseZpoolStatus(zpoolStatus: string): ZfsPool[] {
       const childMatch = line.match(/^\t( +)(\S+)\s+(\S+)/);
       if (childMatch) {
         const indent = childMatch[1].length;
+        const childName = childMatch[2];
         const childState = childMatch[3];
         const lastVdev = (() => {
           if (section === "config" && current.vdevs.length > 0) {
@@ -217,8 +223,13 @@ export function parseZpoolStatus(zpoolStatus: string): ZfsPool[] {
           if (indent === childIndent) {
             lastVdev.child_count += 1;
             if (childState !== "ONLINE") lastVdev.degraded_disks_count += 1;
+            inSpareChild = /^spare-\d+$/.test(childName);
+          } else if (inSpareChild && childState === "ONLINE") {
+            // indent > childIndent: a grandchild (sub-vdev leaf), ignored for
+            // width. Under `spare-N` an ONLINE leaf is the hot spare that took
+            // over the slot (shown INUSE under `spares`), resilvering or done.
+            lastVdev.spare_in_progress = true;
           }
-          // indent > childIndent: a grandchild (sub-vdev leaf); ignore for width.
         }
       }
     }
