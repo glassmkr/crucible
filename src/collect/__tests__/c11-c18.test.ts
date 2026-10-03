@@ -468,6 +468,21 @@ describe("C18 dmesg: benign lines are not events, modern forms are", () => {
     ]);
   });
 
+  it("a controller that never comes ready ('Device not ready; aborting <op>') is a fault for every op", () => {
+    // nvme_wait_ready (core.c) prints "Device not ready; aborting %s" with
+    // initialisation (enable, e.g. a dead drive at boot), reset (disable) or,
+    // on 6.x, shutdown. Main matched all three on the keyword "aborting".
+    expect(types([
+      "[    6.912345] nvme nvme0: Device not ready; aborting initialisation, CSTS=0x0",
+      "[  612.000000] nvme nvme1: Device not ready; aborting reset, CSTS=0x1",
+      "[  900.000000] nvme nvme2: Device not ready; aborting shutdown, CSTS=0x1",
+    ].join("\n"))).toEqual([
+      "nvme_reset:nvme0:aborting:critical",
+      "nvme_reset:nvme1:aborting:critical",
+      "nvme_reset:nvme2:aborting:critical",
+    ]);
+  });
+
   it("matches the modern 'tag#N' sense line and a trailing '[descriptor]'", () => {
     expect(types([
       "[Fri Oct  3 09:41:07 2026] sd 2:0:0:0: [sdc] tag#18 Sense Key : Medium Error [current]",

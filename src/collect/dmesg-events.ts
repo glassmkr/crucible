@@ -137,9 +137,11 @@ const SCSI_SENSE_HANDLER: DmesgHandler = {
 // reset or a disable (drivers/nvme/host/pci.c, core.c). The handler's
 // keyword pattern alone also matched the benign boot line "Shutdown timeout
 // set to 8 seconds" and the lost-interrupt "timeout, completion polled";
-// neither is a controller reset.
+// neither is a controller reset. nvme_wait_ready prints "Device not ready;
+// aborting %s" for initialisation, reset and (6.x) shutdown: a controller
+// that never comes ready at boot is the classic dead drive.
 const NVME_FAULT_RE =
-  /\btimeout, (?:reset controller|aborting|disable controller)\b|\bcontroller is down; will reset\b|\breset(?:ting)? controller\b|\bDevice not ready; aborting reset\b|\bDisabling device after reset failure\b/i;
+  /\btimeout, (?:reset controller|aborting|disable controller)\b|\bcontroller is down; will reset\b|\breset(?:ting)? controller\b|\bDevice not ready; aborting (?:reset|initiali[sz]ation|shutdown)\b|\bDisabling device after reset failure\b/i;
 
 /**
  * NVMe controller reset. Format:
