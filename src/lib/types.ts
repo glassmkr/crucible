@@ -916,9 +916,10 @@ export interface ZfsVdev {
    *  redundancy: critical) from a 3-way+ (fault budget remains: warning).
    *  Bare "mirror" is only emitted when the child count is unknown. */
   child_count: number;
-  /** True when a hot spare has taken over a member of this vdev: an
-   *  immediate `spare-N` child with an ONLINE leaf (the spare, resilvering
-   *  or already resilvered). Absent otherwise. The dashboard's
+  /** True when a hot spare has taken over this vdev's only failed member: a
+   *  non-ONLINE immediate `spare-N` child with an ONLINE leaf (the spare,
+   *  resilvering or already resilvered) and no other non-ONLINE child.
+   *  Absent otherwise. The dashboard's
    *  zfs_pool_unhealthy reads it to rate a degraded raidz2 under spare
    *  recovery as a warning rather than critical. */
   spare_in_progress?: boolean;

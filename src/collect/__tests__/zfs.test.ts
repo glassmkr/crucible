@@ -388,6 +388,47 @@ errors: 2 data errors
     expect(p.vdevs.map((v) => v.spare_in_progress)).toEqual([undefined, undefined]);
   });
 
+  it("does not flag spare_in_progress when a member other than the one covered spare slot is not ONLINE", () => {
+    // The dashboard demotes a degraded raidz2 to a warning on this flag, which
+    // only holds while a spare covers the vdev's single failure. raidz2-0: a
+    // second member failed with no spare (no parity left). raidz2-1: two spares
+    // resilvering at once (no parity left until both finish). raidz2-2: the
+    // spare slot itself is ONLINE again, so the FAULTED member is uncovered.
+    const raw =
+      "  pool: tank\n" +
+      " state: DEGRADED\n" +
+      "config:\n" +
+      "\tNAME            STATE\n" +
+      "\ttank            DEGRADED\n" +
+      "\t  raidz2-0      DEGRADED\n" +
+      "\t    a           ONLINE\n" +
+      "\t    spare-1     DEGRADED\n" +
+      "\t      b         FAULTED\n" +
+      "\t      s1        ONLINE  (resilvering)\n" +
+      "\t    c           FAULTED\n" +
+      "\t    d           ONLINE\n" +
+      "\t  raidz2-1      DEGRADED\n" +
+      "\t    e           ONLINE\n" +
+      "\t    spare-1     DEGRADED\n" +
+      "\t      f         FAULTED\n" +
+      "\t      s2        ONLINE  (resilvering)\n" +
+      "\t    spare-2     DEGRADED\n" +
+      "\t      g         FAULTED\n" +
+      "\t      s3        ONLINE  (resilvering)\n" +
+      "\t    h           ONLINE\n" +
+      "\t  raidz2-2      DEGRADED\n" +
+      "\t    i           ONLINE\n" +
+      "\t    spare-1     ONLINE\n" +
+      "\t      j         ONLINE\n" +
+      "\t      s4        ONLINE\n" +
+      "\t    k           FAULTED\n" +
+      "\t    l           ONLINE\n" +
+      "errors: No known data errors\n";
+    const [p] = parseZpoolStatus(raw);
+    expect(p.vdevs.map((v) => v.degraded_disks_count)).toEqual([2, 2, 1]);
+    expect(p.vdevs.map((v) => v.spare_in_progress)).toEqual([undefined, undefined, undefined]);
+  });
+
   it("section headers tolerate either tab-prefixed or unindented form (forwards-compat)", () => {
     // ZFS 2.0 emitted section headers unindented (`logs\n`); ZFS 2.2
     // uses tab-prefixed (`\tlogs\t\n`). The parser must handle both.

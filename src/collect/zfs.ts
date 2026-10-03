@@ -65,9 +65,14 @@ export function parseZpoolStatus(zpoolStatus: string): ZfsPool[] {
   // replacing-0 / spare-0 sub-vdev's own leaves and are NOT counted as children
   // (Codex round-2 #1). Reset per top-vdev.
   let childIndent: number | null = null;
-  // The current top-vdev's most recent immediate child is a `spare-N`
-  // sub-vdev, so the deeper leaves that follow belong to it.
-  let inSpareChild = false;
+  // The current top-vdev's most recent immediate child is a non-ONLINE
+  // `spare-N` sub-vdev not yet seen with an ONLINE leaf; the deeper leaves
+  // that follow belong to it.
+  let openSpareSlot = false;
+  // Per top-vdev: how many failed member slots a hot spare has taken over
+  // (a non-ONLINE `spare-N` child with an ONLINE leaf). Kept out of the
+  // serialized ZfsVdev; the post-pass turns it into spare_in_progress.
+  const coveredSpareSlots = new Map<ZfsVdev, number>();
 
   for (const line of zpoolStatus.split("\n")) {
     const poolMatch = line.match(/^\s*pool:\s*(.+)/);
@@ -84,7 +89,7 @@ export function parseZpoolStatus(zpoolStatus: string): ZfsPool[] {
       section = "none";
       sawScanLine = false;
       childIndent = null;
-      inSpareChild = false;
+      openSpareSlot = false;
       continue;
     }
 
@@ -192,7 +197,7 @@ export function parseZpoolStatus(zpoolStatus: string): ZfsPool[] {
         else if (section === "logs") current.slog_vdevs.push(vdev);
         else if (section === "cache") current.l2arc_vdevs.push(vdev);
         childIndent = null; // a new vdev: re-learn its immediate-child indent
-        inSpareChild = false;
+        openSpareSlot = false;
         continue;
       }
       // Child under the previously-pushed vdev. Capture the leading-space
@@ -223,12 +228,14 @@ export function parseZpoolStatus(zpoolStatus: string): ZfsPool[] {
           if (indent === childIndent) {
             lastVdev.child_count += 1;
             if (childState !== "ONLINE") lastVdev.degraded_disks_count += 1;
-            inSpareChild = /^spare-\d+$/.test(childName);
-          } else if (inSpareChild && childState === "ONLINE") {
+            openSpareSlot = /^spare-\d+$/.test(childName) && childState !== "ONLINE";
+          } else if (openSpareSlot && childState === "ONLINE") {
             // indent > childIndent: a grandchild (sub-vdev leaf), ignored for
-            // width. Under `spare-N` an ONLINE leaf is the hot spare that took
-            // over the slot (shown INUSE under `spares`), resilvering or done.
-            lastVdev.spare_in_progress = true;
+            // width. Under a failed `spare-N` slot an ONLINE leaf is the hot
+            // spare that took it over (shown INUSE under `spares`), resilvering
+            // or done.
+            coveredSpareSlots.set(lastVdev, (coveredSpareSlots.get(lastVdev) ?? 0) + 1);
+            openSpareSlot = false;
           }
         }
       }
@@ -240,6 +247,15 @@ export function parseZpoolStatus(zpoolStatus: string): ZfsPool[] {
   // "mirror" (slog/cache default to "stripe"), so this is a no-op elsewhere.
   for (const pool of pools) {
     for (const vdev of pool.vdevs) refineMirrorRedundancyClass(vdev);
+  }
+
+  // spare_in_progress tells the dashboard a hot spare is covering the vdev's
+  // failure, which demotes a degraded raidz2 from critical to warning. That
+  // holds only when the covered slot is the vdev's ONLY non-ONLINE member: a
+  // second failure, even one a second spare is rebuilding, leaves a raidz2
+  // with no parity until the rebuild finishes.
+  for (const [vdev, covered] of coveredSpareSlots) {
+    if (covered === 1 && vdev.degraded_disks_count === 1) vdev.spare_in_progress = true;
   }
 
   return pools;
