@@ -152,9 +152,10 @@ done`
 const DMESG_IO_SH = '{ dmesg -T --since "10 minutes ago" 2>/dev/null || dmesg 2>/dev/null; } | grep -i "I/O error\\|Buffer I/O error\\|blk_update_request.*error"';
 
 // dmesg-errcrit scan: err and crit kernel lines from the last 5 minutes (the
-// collection interval), read by collectOsAlerts for the OOM kill count. Same
-// --since gap as dmesg-io: on util-linux < 2.35 the call failed with empty
-// stdout and oom_kills_recent was silently 0. Three reads, first success wins:
+// collection interval) that say "out of memory", read by collectOsAlerts for
+// the OOM kill count. Same --since gap as dmesg-io: on util-linux < 2.35 the
+// call failed with empty stdout and oom_kills_recent was silently 0. Three
+// reads, first success wins:
 //   1. util-linux >= 2.35: windowed by dmesg; -T stamps each line with the
 //      wall clock, so the agent can tell these lines from a fallback's.
 //   2. util-linux 2.32 - 2.34: --level works, only --since is missing. Lines
@@ -162,10 +163,13 @@ const DMESG_IO_SH = '{ dmesg -T --since "10 minutes ago" 2>/dev/null || dmesg 2>
 //   3. busybox (no --level, no --since): `dmesg -r` prints every level, each
 //      line led by its "<N>" syslog priority.
 // collectOsAlerts applies the level filter to 3 and the 5-minute window to 2
-// and 3 against /proc/uptime. Shared verbatim by the wrapper (inside
-// `sh -c '...'`, so it must never contain a single quote) and the root-direct
-// path, so the two cannot drift.
-const DMESG_ERRCRIT_SH = 'dmesg -T --level=err,crit --since "5 min ago" 2>/dev/null || dmesg --level=err,crit 2>/dev/null || dmesg -r 2>/dev/null';
+// and 3 against /proc/uptime. The grep keeps only the lines it counts: 2 and 3
+// print the oldest lines first, and on a full ring buffer (an earlier OOM
+// report's per-process dump, an err flood) the agent's 1 MiB exec buffer
+// would keep only the oldest part and drop the in-window tail. Shared
+// verbatim by the wrapper (inside `sh -c '...'`, so it must never contain a
+// single quote) and the root-direct path, so the two cannot drift.
+const DMESG_ERRCRIT_SH = '{ dmesg -T --level=err,crit --since "5 min ago" 2>/dev/null || dmesg --level=err,crit 2>/dev/null || dmesg -r 2>/dev/null; } | grep -i "out of memory"';
 
 /** SMART device paths the wrapper accepts. Mirrors the sh `valid_device`
  *  case in WRAPPER_SCRIPT; kept in TS so it is unit-testable. Blocks path

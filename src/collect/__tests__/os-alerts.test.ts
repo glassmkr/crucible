@@ -18,6 +18,7 @@ import { promisify } from "node:util";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { WRAPPER_SCRIPT, directCommand } from "../../lib/privileged.js";
+import { run } from "../../lib/exec.js";
 import { countRecentOomKills } from "../os-alerts.js";
 
 const execFileAsync = promisify(execFile);
@@ -98,6 +99,32 @@ echo "$stamp Out of memory: Killed process 5151 (postgres) total-vm:2097152kB, a
 if [ "$level" = 0 ]; then
   echo "$stamp ixgbe 0000:01:00.0 eth2: out of memory, dropping rx buffers"
 fi
+`;
+
+// busybox on a host whose ring buffer holds an earlier OOM report's task dump
+// (info level, one line per process; vm.oom_dump_tasks=1 is the default):
+// 20000 old lines, about 1.9 MB, ahead of the in-window OOM kill at the tail.
+const BUSYBOX_DMESG_BIG = `#!/bin/sh
+for a in "$@"; do
+  case "$a" in
+    --*) echo "dmesg: unrecognized option '$a'" >&2; exit 1 ;;
+  esac
+done
+yes "<6>[ 9000.000000] [  12345]     0 12345    65536     4096   262144        0             0 worker" | head -n 20000
+echo "<3>[ 9000.000000] Out of memory: Killed process 812 (java) total-vm:1048576kB, anon-rss:524288kB"
+echo "<3>[ 9950.500000] Out of memory: Killed process 5151 (postgres) total-vm:2097152kB, anon-rss:1048576kB"
+`;
+
+// util-linux 2.32 - 2.34 after a flood of err-level lines: 20000 old I/O
+// errors, about 2.1 MB, ahead of the in-window OOM kill at the tail.
+const OLD_DMESG_BIG = `#!/bin/sh
+for a in "$@"; do
+  case "$a" in
+    --since) echo "dmesg: unrecognized option '--since'" >&2; exit 1 ;;
+  esac
+done
+yes "[ 9000.000000] blk_update_request: I/O error, dev sdb, sector 4096 op 0x1:(WRITE) flags 0x0 phys_seg 1 prio class 0" | head -n 20000
+echo "[ 9950.500000] Out of memory: Killed process 5151 (postgres) total-vm:2097152kB, anon-rss:1048576kB"
 `;
 
 // util-linux >= 2.35 with nothing in the window: exits 0 with no output.
@@ -213,6 +240,31 @@ describe("dmesg-errcrit on a dmesg with --since (util-linux >= 2.35)", () => {
     expect(await runWrapper(await makeBin("quiet-wrapper", NEW_DMESG_QUIET))).toBe("");
     expect(await runDirect(await makeBin("quiet-direct", NEW_DMESG_QUIET))).toBe("");
   });
+});
+
+describe("dmesg-errcrit fallback output larger than the agent's exec buffer", () => {
+  // The agent reads the action through run() (lib/exec.ts), whose execFile
+  // keeps only the FIRST 1 MiB of stdout (the default maxBuffer), kills the
+  // child and returns what it kept. A whole-buffer fallback read prints the
+  // oldest lines first, so without a bound the in-window tail is cut off.
+  const cases = [["busybox", BUSYBOX_DMESG_BIG], ["util-linux 2.32 - 2.34", OLD_DMESG_BIG]];
+  for (const [name, script] of cases) {
+    it(`${name}: an OOM kill at the tail still counts through the wrapper and the root-direct path`, async () => {
+      const bin = await makeBin(`big-${name.split(" ")[0]}`, script);
+      const env = { PATH: `${bin}:/usr/bin:/bin` };
+      const wrapper = join(root, "crucible-collect");
+      await fs.writeFile(wrapper, WRAPPER_SCRIPT, { mode: 0o755 });
+      const cmd = directCommand("dmesg-errcrit", [])!;
+      for (const out of [
+        await run("sh", [wrapper, "dmesg-errcrit"], 10000, env),
+        await run(cmd.cmd, cmd.args, 10000, env),
+      ]) {
+        // The tail only, so a failure does not print a megabyte of filler.
+        expect((out ?? "").slice(-200)).toContain("Killed process 5151 (postgres)");
+        expect(countRecentOomKills(out ?? "", UPTIME)).toBe(1);
+      }
+    });
+  }
 });
 
 describe("countRecentOomKills", () => {
