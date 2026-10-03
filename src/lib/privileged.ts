@@ -151,6 +151,22 @@ done`
 // and the root-direct path, so the two cannot drift.
 const DMESG_IO_SH = '{ dmesg -T --since "10 minutes ago" 2>/dev/null || dmesg 2>/dev/null; } | grep -i "I/O error\\|Buffer I/O error\\|blk_update_request.*error"';
 
+// dmesg-errcrit scan: err and crit kernel lines from the last 5 minutes (the
+// collection interval), read by collectOsAlerts for the OOM kill count. Same
+// --since gap as dmesg-io: on util-linux < 2.35 the call failed with empty
+// stdout and oom_kills_recent was silently 0. Three reads, first success wins:
+//   1. util-linux >= 2.35: windowed by dmesg; -T stamps each line with the
+//      wall clock, so the agent can tell these lines from a fallback's.
+//   2. util-linux 2.32 - 2.34: --level works, only --since is missing. Lines
+//      keep the raw "[seconds since boot]" stamp and span the whole boot.
+//   3. busybox (no --level, no --since): `dmesg -r` prints every level, each
+//      line led by its "<N>" syslog priority.
+// collectOsAlerts applies the level filter to 3 and the 5-minute window to 2
+// and 3 against /proc/uptime. Shared verbatim by the wrapper (inside
+// `sh -c '...'`, so it must never contain a single quote) and the root-direct
+// path, so the two cannot drift.
+const DMESG_ERRCRIT_SH = 'dmesg -T --level=err,crit --since "5 min ago" 2>/dev/null || dmesg --level=err,crit 2>/dev/null || dmesg -r 2>/dev/null';
+
 /** SMART device paths the wrapper accepts. Mirrors the sh `valid_device`
  *  case in WRAPPER_SCRIPT; kept in TS so it is unit-testable. Blocks path
  *  traversal / arbitrary-file reads via `smartctl -a <path>`. */
@@ -230,7 +246,7 @@ export function directCommand(action: PrivilegedAction, args: string[]): { cmd: 
     case "raid-storcli": return { cmd: "storcli", args: ["/call", "show", "all", "J"] };
     case "raid-ssacli": return { cmd: "ssacli", args: ["ctrl", "all", "show", "status"] };
     case "raid-arcconf": return { cmd: "arcconf", args: ["list"] };
-    case "dmesg-errcrit": return { cmd: "dmesg", args: ["--level=err,crit", "--since", "5 min ago"] };
+    case "dmesg-errcrit": return { cmd: "sh", args: ["-c", DMESG_ERRCRIT_SH] };
     case "dmesg-io": return { cmd: "sh", args: ["-c", DMESG_IO_SH] };
     case "iptables": return { cmd: "iptables", args: ["-L", "-n"] };
     case "nft": return { cmd: "nft", args: ["list", "ruleset"] };
@@ -358,7 +374,7 @@ case "$action" in
   raid-storcli)   exec storcli /call show all J ;;
   raid-ssacli)    exec ssacli ctrl all show status ;;
   raid-arcconf)   exec arcconf list ;;
-  dmesg-errcrit)  exec dmesg --level=err,crit --since "5 min ago" ;;
+  dmesg-errcrit)  exec sh -c '${DMESG_ERRCRIT_SH}' ;;
   dmesg-io)       exec sh -c '${DMESG_IO_SH}' ;;
   iptables)       exec iptables -L -n ;;
   nft)            exec nft list ruleset ;;
