@@ -92,11 +92,12 @@ Single source of truth for cutting a Crucible release. Lives here (the release-t
    ```
    Then confirm the dashboard side: the server record's `collector_version` shows X.Y.Z and `last_seen` is advancing.
 
-   **9d. Wrapper refresh**, required on any host that ran `glassmkr-crucible init` (the agent runs unprivileged behind a sudo wrapper) whenever the release ADDS a privileged action. Skip it and the new collector silently returns null:
+   **9d. Wrapper refresh**, required on any host that ran `glassmkr-crucible init` (the agent runs unprivileged behind a sudo wrapper) whenever the release ADDS OR CHANGES a privileged action (any change to `WRAPPER_SCRIPT` in `src/lib/privileged.ts`). The `init` in 9b already rewrites the wrapper; this step is for a host upgraded without it. Skip both and a new action silently returns null, and a changed one keeps running its old command. Verify by content, not by action name: a changed action keeps its name, so a name grep passes on a stale wrapper:
    ```
    sudo node -e "const cp=require('child_process');const p=require(cp.execSync('npm root -g').toString().trim()+'/@glassmkr/crucible/dist/lib/privileged.js');require('fs').writeFileSync(p.WRAPPER_PATH,p.WRAPPER_SCRIPT,{mode:0o755})"
-   grep -c <new-action-name> /usr/local/sbin/crucible-collect    # expect >= 1
+   node -e "const cp=require('child_process');const p=require(cp.execSync('npm root -g').toString().trim()+'/@glassmkr/crucible/dist/lib/privileged.js');console.log(require('fs').readFileSync(p.WRAPPER_PATH,'utf8')===p.WRAPPER_SCRIPT?'wrapper current':'wrapper STALE')"
    ```
+   Such a release's `### Upgrade note` must say that wrapper hosts need `init` re-run (not the usual "no wrapper refresh is required"). A rollback across it needs the same: run the older version's `init` after installing it, or the older agent runs behind the newer wrapper.
 
 10. **[dashboard] Bump ALL THREE version-fallback constants in lockstep** (only after npm publish is live; they must always point at a real, published release). This is the step most easily missed, the dashboard one was 7 minor releases stale (0.6.6) before the 0.13.6 release caught it:
     - `apps/site/src/lib/crucible-version.ts` -> `FALLBACK_CRUCIBLE_VERSION`
@@ -137,6 +138,6 @@ Single source of truth for cutting a Crucible release. Lives here (the release-t
 - [ ] GitHub Release verified with `gh release view vX.Y.Z` (auto-created by publish.yml)
 - [ ] target hosts confirmed on Node >= 22.19.0 BEFORE any install
 - [ ] fleet/customers rolled (or roll scheduled), each verified on the box
-- [ ] wrapper refreshed on wrapper hosts (only if the release added a privileged action)
+- [ ] wrapper refreshed on wrapper hosts and checked by content (only if the release added or changed a privileged action)
 - [ ] [dashboard] all three fallback constants bumped in lockstep
 - [ ] [dashboard] /docs/changelog entry + "Current." marker moved
