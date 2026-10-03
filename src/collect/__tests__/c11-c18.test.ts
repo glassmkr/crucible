@@ -427,6 +427,96 @@ describe("C18 dmesg: parseDmesgOutput by event class", () => {
   });
 });
 
+// 2026-10-03: false positives and misses found while porting these handlers
+// to the dashboard's paste triage (kernel-log parser).
+describe("C18 dmesg: benign lines are not events, modern forms are", () => {
+  const cutoff = 0;
+  const types = (raw: string) => parseDmesgOutput(raw, cutoff).map((e) => `${e.event_type}:${e.details.device ?? e.details.controller}:${e.details.sense_key ?? e.details.action}:${e.severity}`);
+
+  it("the boot line 'Shutdown timeout set to N seconds' is not an NVMe reset", () => {
+    expect(types([
+      "[    1.431877] nvme nvme0: Shutdown timeout set to 8 seconds",
+      "[    1.451200] nvme nvme1: Shutdown timeout set to 10 seconds",
+      "[    1.463410] nvme nvme1: 63/0/0 default/read/poll queues",
+    ].join("\n"))).toEqual([]);
+  });
+
+  it("a lost interrupt answered by polling ('timeout, completion polled') is not a reset", () => {
+    expect(types("[  300.000000] nvme nvme0: I/O tag 381 (217d) opcode 0x2 (I/O Cmd) QID 41 timeout, completion polled")).toEqual([]);
+  });
+
+  it("still captures real NVMe timeout aborts, controller resets and a dead controller", () => {
+    expect(types([
+      "2026-10-02T23:14:05,118223+00:00 nvme nvme1: I/O tag 28 (101c) opcode 0x2 (Read) QID 6 timeout, aborting req_op:READ(0) size:131072",
+      "2026-10-02T23:14:35,630118+00:00 nvme nvme1: I/O tag 28 (101c) opcode 0x2 (Read) QID 6 timeout, reset controller",
+      "2026-10-02T23:15:00,000000+00:00 nvme nvme2: controller is down; will reset: CSTS=0xffffffff, PCI_STATUS=0x10",
+    ].join("\n"))).toEqual([
+      "nvme_reset:nvme1:timeout:critical",
+      "nvme_reset:nvme1:timeout:critical",
+      "nvme_reset:nvme2:reset:critical",
+    ]);
+  });
+
+  it("matches the modern 'tag#N' sense line and a trailing '[descriptor]'", () => {
+    expect(types([
+      "[Fri Oct  3 09:41:07 2026] sd 2:0:0:0: [sdc] tag#18 Sense Key : Medium Error [current]",
+      "[Fri Oct  3 09:41:07 2026] sd 2:0:0:0: [sdc] tag#18 Add. Sense: Unrecovered read error - auto reallocate failed",
+      "[Fri Oct  3 09:42:00 2026] sd 0:0:0:0: [sda] tag#29 Sense Key : Hardware Error [current] [descriptor]",
+      "[Fri Oct  3 09:43:00 2026] sd 0:0:0:0: [sdb] Sense Key : 0x3 [current]",
+    ].join("\n"))).toEqual([
+      "scsi_sense:sdc:Medium Error:critical",
+      "scsi_sense:sda:Hardware Error:critical",
+      "scsi_sense:sdb:Medium Error:critical",
+    ]);
+  });
+
+  it("skips 'No Sense', which reports no error", () => {
+    expect(types([
+      "[  10.000000] sd 0:0:0:0: [sda] Sense Key : No Sense [current]",
+      "[  11.000000] sd 0:0:0:0: [sda] tag#3 Sense Key : No Sense [current] [descriptor]",
+    ].join("\n"))).toEqual([]);
+  });
+
+  it("skips the Recovered Error an ATA pass-through command (smartctl, hdparm) returns", () => {
+    expect(types([
+      "[ 900.000000] sd 1:0:0:0: [sda] Sense Key : Recovered Error [current]",
+      "[ 900.000001] sd 1:0:0:0: [sda] Add. Sense: ATA pass through information available",
+      "[ 901.000000] sd 1:0:0:0: [sda] tag#7 Sense Key : Recovered Error [current] [descriptor]",
+      "[ 901.000001] sd 1:0:0:0: [sda] tag#7 Add. Sense: ATA pass through information available",
+      "[ 901.000002] sd 1:0:0:0: [sda] tag#7 CDB: ATA command pass through(16) 85 06 2c 00 da 00 00 00 00 00 4f 00 c2 00 b0 00",
+    ].join("\n"))).toEqual([]);
+  });
+
+  it("keeps a Recovered Error that is a real retry on the media", () => {
+    expect(types([
+      "[ 902.000000] sd 1:0:0:0: [sda] Sense Key : Recovered Error [current]",
+      "[ 902.000001] sd 1:0:0:0: [sda] Add. Sense: Recovered data with retries",
+    ].join("\n"))).toEqual(["scsi_sense:sda:Recovered Error:warning"]);
+  });
+
+  it("skips the Illegal Request a WRITE SAME / UNMAP feature probe gets", () => {
+    expect(types([
+      "[ 412.118236] sd 0:2:0:0: [sda] Sense Key : Illegal Request [current]",
+      "[ 412.118239] sd 0:2:0:0: [sda] Add. Sense: Invalid field in cdb",
+      "[ 412.118242] sd 0:2:0:0: [sda] CDB: Write same(16) 93 08 00 00 00 00 00 00 08 00 00 00 08 00 00 00",
+      "[ 413.000000] sd 0:2:0:0: [sdb] tag#812 Sense Key : Illegal Request [current]",
+      "[ 413.000001] sd 0:2:0:0: [sdb] tag#812 Add. Sense: Invalid field in cdb",
+      "[ 413.000002] sd 0:2:0:0: [sdb] tag#812 CDB: Unmap/Read sub-channel 42 00 00 00 00 00 00 00 18 00",
+      "[ 414.000000] sd 0:2:0:0: [sdc] tag#9 Sense Key : Illegal Request [current]",
+      "[ 414.000001] sd 0:2:0:0: [sdc] tag#9 Add. Sense: Invalid command operation code",
+      "[ 414.000002] sd 0:2:0:0: [sdc] Write same(16) failed, disabling write same",
+    ].join("\n"))).toEqual([]);
+  });
+
+  it("keeps an Illegal Request on an ordinary read", () => {
+    expect(types([
+      "[ 500.000000] sd 0:0:0:0: [sda] Sense Key : Illegal Request [current]",
+      "[ 500.000001] sd 0:0:0:0: [sda] Add. Sense: Logical block address out of range",
+      "[ 500.000002] sd 0:0:0:0: [sda] CDB: Read(10) 28 00 ff ff ff ff 00 00 08 00",
+    ].join("\n"))).toEqual(["scsi_sense:sda:Illegal Request:warning"]);
+  });
+});
+
 // ============================================================================
 // Combined capability gate sanity
 // ============================================================================
