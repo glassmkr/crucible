@@ -605,7 +605,11 @@ export function parseXidEvents(raw: string): XidEvent[] {
         ? "warning"
         : "info";
     events.push({
-      timestamp_iso: ts !== null ? new Date(ts).toISOString() : new Date().toISOString(),
+      // "" when the line carries no absolute time (relative dmesg stamps).
+      // The event is kept (fail-open), but never stamped with the read time:
+      // the dashboard keys XID re-notification on the newest event time, so
+      // "now" re-notified the same old XID on every snapshot.
+      timestamp_iso: ts !== null ? new Date(ts).toISOString() : "",
       xid_code: code,
       pci_bdf: bdf,
       severity,

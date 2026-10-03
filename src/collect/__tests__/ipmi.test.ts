@@ -73,10 +73,16 @@ describe("parseSelTimestamp", () => {
   it("pads single digit month/day", () => {
     expect(parseSelTimestamp("4/5/2026", "09:00:00")).toBe("2026-04-05T09:00:00Z");
   });
-  it("returns an ISO string for bad input (does not crash)", () => {
-    const out = parseSelTimestamp("", "");
-    expect(typeof out).toBe("string");
-    expect(out.length).toBeGreaterThan(10);
+  it("returns \"\" (unknown), never the current time, for a missing or unreadable date", () => {
+    // The dashboard reads "" as "age unknown" (ipmi_sel_critical keeps the
+    // event in its window, the ingest schema requires a string). The current
+    // time made a Pre-Init event look brand new on every snapshot, so the
+    // dashboard re-notified it each time and paired any Pre-Init
+    // assert/deassert as a 0-second transient.
+    expect(parseSelTimestamp("", "")).toBe("");
+    expect(parseSelTimestamp("Pre-Init", "0000000004")).toBe("");
+    expect(parseSelTimestamp("04/05/2026", "")).toBe("");
+    expect(parseSelTimestamp("ab/cd/ef", "12:00:00")).toBe("");
   });
   it("expands 2-digit year to 4-digit (Codex experiment 2026-05-12 finding: Supermicro X11/X12 BMCs emit YY)", () => {
     // services-1 actually produced this shape via ipmitool sel elist.
@@ -175,6 +181,12 @@ describe("parseSelEccCounts (Dell-style SEL output)", () => {
 
   it("handles empty input", () => {
     expect(parseSelEccCounts("")).toEqual({ available: true, correctable: 0, uncorrectable: 0, newest_event_timestamp: null });
+  });
+
+  it("counts a Pre-Init ECC row but leaves newest_event_timestamp null rather than inventing now", () => {
+    const counts = parseSelEccCounts("1 | Pre-Init | 0000000004 | Memory | Uncorrectable ECC | Asserted");
+    expect(counts.uncorrectable).toBe(1);
+    expect(counts.newest_event_timestamp).toBeNull();
   });
 
   it("counts only asserted rows: a deassertion is not another error", () => {

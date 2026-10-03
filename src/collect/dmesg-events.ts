@@ -232,7 +232,9 @@ export async function collectDmesgEvents(): Promise<DmesgEventsSnapshot> {
  * inferred timestamp is at or after `cutoffMs`. When the timestamp
  * cannot be parsed (relative-time fallback), the event is included
  * unconditionally (fail-open: better to over-report than silently
- * drop a real hardware fault).
+ * drop a real hardware fault) with timestamp_iso "" (unknown), never the
+ * collection time, which would date an old event as new on every read.
+ * The dashboard only copies timestamp_iso into evidence.
  */
 export function parseDmesgOutput(raw: string, cutoffMs: number): DmesgStructuredEvent[] {
   const events: DmesgStructuredEvent[] = [];
@@ -248,7 +250,7 @@ export function parseDmesgOutput(raw: string, cutoffMs: number): DmesgStructured
       const partial = handler.parse(m, line, lines.slice(i + 1, i + 1 + SENSE_DETAIL_LINES));
       if (!partial) continue;
       events.push({
-        timestamp_iso: ts !== null ? new Date(ts).toISOString() : new Date().toISOString(),
+        timestamp_iso: ts !== null ? new Date(ts).toISOString() : "",
         raw_line: line.trim(),
         ...partial,
       });

@@ -413,6 +413,17 @@ describe("C18 dmesg: parseDmesgOutput by event class", () => {
     expect(ext4[0].details.remount_readonly).toBe(true);
   });
 
+  it("an event with no absolute timestamp keeps an empty timestamp_iso and is never dropped", () => {
+    // Relative "[12345.678]" stamps (the plain --no-pager fallback) carry no
+    // date. The event is still reported (fail-open), with "" for its time
+    // instead of the collection time, which made it look new on every read.
+    const raw = "[12345.123] nvme nvme0: I/O 256 QID 1 timeout, reset controller";
+    const events = parseDmesgOutput(raw, Date.now());
+    expect(events).toHaveLength(1);
+    expect(events[0].timestamp_iso).toBe("");
+    expect(events[0].severity).toBe("critical");
+  });
+
   it("returns empty when no patterns match", () => {
     const raw = [
       "[12345.000] some unrelated kernel message",

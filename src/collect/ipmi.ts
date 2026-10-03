@@ -297,7 +297,7 @@ export function parseSelEccCounts(output: string): SelEccCounts {
       continue;
     }
     const ts = parseSelTimestamp(date, time);
-    if (!newest || ts > newest) newest = ts;
+    if (ts && (!newest || ts > newest)) newest = ts;
   }
   return { available: true, correctable, uncorrectable, newest_event_timestamp: newest };
 }
@@ -342,7 +342,13 @@ async function collectSelEvents(): Promise<SelEvent[]> {
 }
 
 export function parseSelTimestamp(date: string, time: string): string {
-  if (!date || !time) return new Date().toISOString();
+  // "" means the event time is unknown: a Pre-Init record ("Pre-Init" |
+  // "0000000004"), an undated row, or a date this parser cannot read. It is
+  // never the current time: the dashboard keys SEL notifications and the
+  // assert/deassert transient pairing on this value, so "now" made an old
+  // event look new on every snapshot. The ingest schema requires a string
+  // and ipmi_sel_critical reads "" as "age unknown" (kept in its window).
+  if (!date || !time) return "";
   // ipmitool sel elist date formats observed in the wild:
   //   "04/05/2026"  (Dell iDRAC, 4-digit year)
   //   "06/17/23"    (Supermicro X11/X12 BMCs, 2-digit year)
@@ -354,7 +360,7 @@ export function parseSelTimestamp(date: string, time: string): string {
   // Normalise to strict ISO-8601: 4-digit year, no trailing UTC.
   // glassmkr#24 / Codex experiment 2026-05-12.
   const parts = date.split("/");
-  if (parts.length !== 3) return new Date().toISOString();
+  if (parts.length !== 3 || !parts.every((p) => /^\d+$/.test(p))) return "";
   let [month, day, year] = parts;
   if (year.length === 2) {
     // ipmitool convention: 70-99 = 19xx, 00-69 = 20xx

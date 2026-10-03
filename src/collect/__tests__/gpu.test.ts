@@ -246,6 +246,13 @@ describe("C19 Tier 1: parseXidEvents", () => {
     expect(events.length).toBe(1);
   });
 
+  it("keeps a critical XID with no absolute timestamp, with an empty timestamp_iso (never the read time)", () => {
+    const raw = "[  123.456789] NVRM: Xid (PCI:0000:01:00): 79, pid=1, GPU has fallen off the bus.";
+    const events = parseXidEvents(raw);
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({ xid_code: 79, severity: "critical", timestamp_iso: "" });
+  });
+
   it("skips events older than 24h window", () => {
     const oldTs = new Date(Date.now() - 48 * 3600 * 1000).toISOString();
     const raw = `${oldTs} kernel: NVRM: Xid (PCI:0000:01:00): 79, GPU has fallen off the bus.`;

@@ -300,6 +300,7 @@ export interface NvLinkBasic {
 }
 
 export interface XidEvent {
+  /** ISO-8601 UTC, or "" when the kernel line carried no absolute time. */
   timestamp_iso: string;
   xid_code: number;
   pci_bdf: string;
@@ -516,7 +517,8 @@ export type DmesgEventType =
   | "ext4_remount_readonly";
 
 export interface DmesgStructuredEvent {
-  /** ISO-8601 timestamp (best-effort; dmesg --time-format=iso). */
+  /** ISO-8601 timestamp (best-effort; dmesg --time-format=iso), or ""
+   *  when the line carried no absolute time. */
   timestamp_iso: string;
   event_type: DmesgEventType;
   severity: "critical" | "warning" | "informational";
@@ -1240,6 +1242,8 @@ export interface RaidSyncAction {
 
 export interface SelEvent {
   id: number;
+  /** ISO-8601 UTC ("2026-04-05T14:23:05Z"), or "" when the SEL record has
+   *  no readable date (Pre-Init, undated). Never the collection time. */
   timestamp: string;
   sensor: string;
   sensor_type: string;
