@@ -208,12 +208,13 @@ errors: 2 data errors
 
   // === H-D4h: a resilver is not a scrub ===
 
-  it("does NOT treat a resilver as a scrub: never-scrubbed stays true, no last_scrub_date", () => {
+  it("does NOT treat a resilver as a scrub, and does not claim the pool was never scrubbed", () => {
     // Grok's H-D4h: offline+online of a mirror leaf produced
-    // `scan: resilvered ...`. The old parser saw a `scan:` line and set
-    // last_scrub_date + suppressed scrub_never_run, silently clearing the
-    // "never checksum-scrubbed" warning on a pool that had still never
-    // been scrubbed. A resilver must not do either.
+    // `scan: resilvered ...`. A resilver is not a scrub, so it must not set
+    // last_scrub_date. But zpool status shows only the MOST RECENT scan, so
+    // a resilver line also hides any earlier scrub: "never scrubbed" is
+    // unknown here, not true. Asserting it (as this test once did) told an
+    // operator whose pool was scrubbed last week that it never had been.
     const raw =
       "  pool: gmkscratch\n" +
       " state: ONLINE\n" +
@@ -226,14 +227,15 @@ errors: 2 data errors
       "\t    nvme1n1p3   ONLINE\n" +
       "errors: No known data errors\n";
     const [p] = parseZpoolStatus(raw);
-    expect(p.scrub_never_run).toBe(true);
+    expect(p.scrub_never_run).toBeUndefined();
     expect(p.last_scrub_date).toBeUndefined();
     expect(p.scrub_repaired).toBeUndefined();
   });
 
-  it("does NOT treat a canceled scrub as scrub history (Codex round-1 #1)", () => {
+  it("does NOT treat a canceled scrub as scrub history, nor as proof of none (Codex round-1 #1)", () => {
     // A canceled scrub never finished verifying the pool, so it must not set
-    // last_scrub_date or suppress the never-scrubbed warning.
+    // last_scrub_date. It also replaced whatever scan zpool showed before it,
+    // so an earlier completed scrub may exist: never-scrubbed stays unknown.
     const raw =
       "  pool: tank\n" +
       " state: ONLINE\n" +
@@ -246,7 +248,26 @@ errors: 2 data errors
       "\t    b      ONLINE\n" +
       "errors: No known data errors\n";
     const [p] = parseZpoolStatus(raw);
-    expect(p.scrub_never_run).toBe(true);
+    expect(p.scrub_never_run).toBeUndefined();
+    expect(p.last_scrub_date).toBeUndefined();
+  });
+
+  it("an in-progress resilver (multi-line scan block) leaves scrub history unknown", () => {
+    const raw =
+      "  pool: tank\n" +
+      " state: DEGRADED\n" +
+      "  scan: resilver in progress since Fri Sep 26 03:14:07 2025\n" +
+      "\t1.62T scanned at 1.21G/s, 812G issued at 607M/s, 9.78T total\n" +
+      "\t134G resilvered, 8.11% done, 04:18:22 to go\n" +
+      "config:\n" +
+      "\tNAME        STATE\n" +
+      "\ttank        DEGRADED\n" +
+      "\t  mirror-0  DEGRADED\n" +
+      "\t    a       ONLINE\n" +
+      "\t    b       OFFLINE\n" +
+      "errors: No known data errors\n";
+    const [p] = parseZpoolStatus(raw);
+    expect(p.scrub_never_run).toBeUndefined();
     expect(p.last_scrub_date).toBeUndefined();
   });
 
