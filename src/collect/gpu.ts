@@ -405,6 +405,15 @@ export function parseNvidiaSmiCsvRow(line: string): Gpu | null {
     const n = Number(v);
     return Number.isFinite(n) ? n : null;
   };
+  // A count nvidia-smi prints as a flag (retired_pages.pending: "Yes" /
+  // "No"). Yes means at least one page is waiting for a reboot to retire,
+  // so it maps to 1 (the snapshot field is a number); [N/A] stays null.
+  const flagOrNum = (i: number): number | null => {
+    const v = parts[i];
+    if (v && /^yes$/i.test(v)) return 1;
+    if (v && /^no$/i.test(v)) return 0;
+    return nullableNum(i);
+  };
   const str = (i: number): string => parts[i] ?? "";
   const bool = (i: number): boolean => /enabled/i.test(parts[i] ?? "");
   return {
@@ -436,7 +445,7 @@ export function parseNvidiaSmiCsvRow(line: string): Gpu | null {
     ecc_errors_uncorrected_aggregate: num(24),
     retired_pages_single_bit: nullableNum(25),
     retired_pages_double_bit: nullableNum(26),
-    retired_pages_pending: nullableNum(27),
+    retired_pages_pending: flagOrNum(27),
     thermal_slowdown_active: false, // set by enrichThrottleReasons
     thermal_violation_total_ms: null, // Tier 2 enriches
     power_violation_total_ms: null,   // Tier 2 enriches

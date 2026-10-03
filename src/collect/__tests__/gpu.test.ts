@@ -170,6 +170,31 @@ describe("C19 Tier 1: parseNvidiaSmiCsvRow", () => {
     expect(gpu!.fan_speed_percent).toBe(50);
   });
 
+  it("reads retired_pages.pending (printed Yes / No) as 1 / 0, not null", () => {
+    // nvidia-smi prints this field as a flag. Number("Yes") is NaN, so it
+    // used to arrive as null and gpu_uncorrected_ecc never saw a pending
+    // page retirement.
+    const row = (pending: string) => [
+      "0", "GPU-x", "Tesla V100-SXM2-32GB", "00000000:1A:00.0", "88.00.80.00.01",
+      "32768", "0",
+      "40", "50", "300",
+      "0", "0",
+      "135", "135", "877",
+      "P0",
+      "3", "3", "16", "16",
+      "Enabled",
+      "0", "0", "0", "0",
+      "0", "1", pending,
+      "[N/A]",
+    ].join(", ");
+    expect(parseNvidiaSmiCsvRow(row("Yes"))!.retired_pages_pending).toBe(1);
+    expect(parseNvidiaSmiCsvRow(row("No"))!.retired_pages_pending).toBe(0);
+    expect(parseNvidiaSmiCsvRow(row("[N/A]"))!.retired_pages_pending).toBeNull();
+    expect(parseNvidiaSmiCsvRow(row("[Not Supported]"))!.retired_pages_pending).toBeNull();
+    // The count columns beside it are unchanged.
+    expect(parseNvidiaSmiCsvRow(row("No"))!.retired_pages_double_bit).toBe(1);
+  });
+
   it("returns null on malformed input", () => {
     expect(parseNvidiaSmiCsvRow("short, row")).toBeNull();
   });
