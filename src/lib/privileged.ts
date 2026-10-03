@@ -140,6 +140,17 @@ for f in /boot/grub/grub.cfg /boot/grub2/grub.cfg /boot/efi/EFI/*/grub.cfg; do
 done`
 
 
+// dmesg-io scan: kernel I/O error lines from the last 10 minutes (the
+// 5-minute collection interval plus slack). `dmesg --since` only exists from
+// util-linux 2.35; older dmesg (RHEL 8, Debian 10, Ubuntu 20.04) rejects it,
+// and with stderr discarded io_errors was silently empty there. On that
+// failure, fall back to a plain read: its lines keep the kernel's raw
+// "[seconds since boot]" stamp, and collectIoErrors applies the same
+// 10-minute window to those against /proc/uptime. Shared verbatim by the
+// wrapper (inside `sh -c '...'`, so it must never contain a single quote)
+// and the root-direct path, so the two cannot drift.
+const DMESG_IO_SH = '{ dmesg -T --since "10 minutes ago" 2>/dev/null || dmesg 2>/dev/null; } | grep -i "I/O error\\|Buffer I/O error\\|blk_update_request.*error"';
+
 /** SMART device paths the wrapper accepts. Mirrors the sh `valid_device`
  *  case in WRAPPER_SCRIPT; kept in TS so it is unit-testable. Blocks path
  *  traversal / arbitrary-file reads via `smartctl -a <path>`. */
@@ -220,7 +231,7 @@ export function directCommand(action: PrivilegedAction, args: string[]): { cmd: 
     case "raid-ssacli": return { cmd: "ssacli", args: ["ctrl", "all", "show", "status"] };
     case "raid-arcconf": return { cmd: "arcconf", args: ["list"] };
     case "dmesg-errcrit": return { cmd: "dmesg", args: ["--level=err,crit", "--since", "5 min ago"] };
-    case "dmesg-io": return { cmd: "sh", args: ["-c", 'dmesg -T --since "10 minutes ago" 2>/dev/null | grep -i "I/O error\\|Buffer I/O error\\|blk_update_request.*error"'] };
+    case "dmesg-io": return { cmd: "sh", args: ["-c", DMESG_IO_SH] };
     case "iptables": return { cmd: "iptables", args: ["-L", "-n"] };
     case "nft": return { cmd: "nft", args: ["list", "ruleset"] };
     case "ufw": return { cmd: "ufw", args: ["status"] };
@@ -348,7 +359,7 @@ case "$action" in
   raid-ssacli)    exec ssacli ctrl all show status ;;
   raid-arcconf)   exec arcconf list ;;
   dmesg-errcrit)  exec dmesg --level=err,crit --since "5 min ago" ;;
-  dmesg-io)       exec sh -c 'dmesg -T --since "10 minutes ago" 2>/dev/null | grep -i "I/O error\\\\|Buffer I/O error\\\\|blk_update_request.*error"' ;;
+  dmesg-io)       exec sh -c '${DMESG_IO_SH}' ;;
   iptables)       exec iptables -L -n ;;
   nft)            exec nft list ruleset ;;
   ufw)            exec ufw status ;;
