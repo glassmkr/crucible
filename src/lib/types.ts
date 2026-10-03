@@ -300,6 +300,7 @@ export interface NvLinkBasic {
 }
 
 export interface XidEvent {
+  /** ISO-8601 UTC, or "" when the kernel line carried no absolute time. */
   timestamp_iso: string;
   xid_code: number;
   pci_bdf: string;
@@ -516,7 +517,8 @@ export type DmesgEventType =
   | "ext4_remount_readonly";
 
 export interface DmesgStructuredEvent {
-  /** ISO-8601 timestamp (best-effort; dmesg --time-format=iso). */
+  /** ISO-8601 timestamp (best-effort; dmesg --time-format=iso), or ""
+   *  when the line carried no absolute time. */
   timestamp_iso: string;
   event_type: DmesgEventType;
   severity: "critical" | "warning" | "informational";
@@ -914,6 +916,13 @@ export interface ZfsVdev {
    *  redundancy: critical) from a 3-way+ (fault budget remains: warning).
    *  Bare "mirror" is only emitted when the child count is unknown. */
   child_count: number;
+  /** True when a hot spare has taken over this vdev's only failed member: a
+   *  non-ONLINE immediate `spare-N` child with an ONLINE leaf (the spare,
+   *  resilvering or already resilvered) and no other non-ONLINE child.
+   *  Absent otherwise. The dashboard's
+   *  zfs_pool_unhealthy reads it to rate a degraded raidz2 under spare
+   *  recovery as a warning rather than critical. */
+  spare_in_progress?: boolean;
 }
 
 export interface ZfsPool {
@@ -1234,6 +1243,8 @@ export interface RaidSyncAction {
 
 export interface SelEvent {
   id: number;
+  /** ISO-8601 UTC ("2026-04-05T14:23:05Z"), or "" when the SEL record has
+   *  no readable date (Pre-Init, undated). Never the collection time. */
   timestamp: string;
   sensor: string;
   sensor_type: string;

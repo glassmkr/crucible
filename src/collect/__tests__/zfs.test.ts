@@ -208,12 +208,13 @@ errors: 2 data errors
 
   // === H-D4h: a resilver is not a scrub ===
 
-  it("does NOT treat a resilver as a scrub: never-scrubbed stays true, no last_scrub_date", () => {
+  it("does NOT treat a resilver as a scrub, and does not claim the pool was never scrubbed", () => {
     // Grok's H-D4h: offline+online of a mirror leaf produced
-    // `scan: resilvered ...`. The old parser saw a `scan:` line and set
-    // last_scrub_date + suppressed scrub_never_run, silently clearing the
-    // "never checksum-scrubbed" warning on a pool that had still never
-    // been scrubbed. A resilver must not do either.
+    // `scan: resilvered ...`. A resilver is not a scrub, so it must not set
+    // last_scrub_date. But zpool status shows only the MOST RECENT scan, so
+    // a resilver line also hides any earlier scrub: "never scrubbed" is
+    // unknown here, not true. Asserting it (as this test once did) told an
+    // operator whose pool was scrubbed last week that it never had been.
     const raw =
       "  pool: gmkscratch\n" +
       " state: ONLINE\n" +
@@ -226,14 +227,15 @@ errors: 2 data errors
       "\t    nvme1n1p3   ONLINE\n" +
       "errors: No known data errors\n";
     const [p] = parseZpoolStatus(raw);
-    expect(p.scrub_never_run).toBe(true);
+    expect(p.scrub_never_run).toBeUndefined();
     expect(p.last_scrub_date).toBeUndefined();
     expect(p.scrub_repaired).toBeUndefined();
   });
 
-  it("does NOT treat a canceled scrub as scrub history (Codex round-1 #1)", () => {
+  it("does NOT treat a canceled scrub as scrub history, nor as proof of none (Codex round-1 #1)", () => {
     // A canceled scrub never finished verifying the pool, so it must not set
-    // last_scrub_date or suppress the never-scrubbed warning.
+    // last_scrub_date. It also replaced whatever scan zpool showed before it,
+    // so an earlier completed scrub may exist: never-scrubbed stays unknown.
     const raw =
       "  pool: tank\n" +
       " state: ONLINE\n" +
@@ -246,7 +248,26 @@ errors: 2 data errors
       "\t    b      ONLINE\n" +
       "errors: No known data errors\n";
     const [p] = parseZpoolStatus(raw);
-    expect(p.scrub_never_run).toBe(true);
+    expect(p.scrub_never_run).toBeUndefined();
+    expect(p.last_scrub_date).toBeUndefined();
+  });
+
+  it("an in-progress resilver (multi-line scan block) leaves scrub history unknown", () => {
+    const raw =
+      "  pool: tank\n" +
+      " state: DEGRADED\n" +
+      "  scan: resilver in progress since Fri Sep 26 03:14:07 2025\n" +
+      "\t1.62T scanned at 1.21G/s, 812G issued at 607M/s, 9.78T total\n" +
+      "\t134G resilvered, 8.11% done, 04:18:22 to go\n" +
+      "config:\n" +
+      "\tNAME        STATE\n" +
+      "\ttank        DEGRADED\n" +
+      "\t  mirror-0  DEGRADED\n" +
+      "\t    a       ONLINE\n" +
+      "\t    b       OFFLINE\n" +
+      "errors: No known data errors\n";
+    const [p] = parseZpoolStatus(raw);
+    expect(p.scrub_never_run).toBeUndefined();
     expect(p.last_scrub_date).toBeUndefined();
   });
 
@@ -262,6 +283,150 @@ errors: 2 data errors
     expect(p.scrub_never_run).toBeUndefined();
     expect(p.scrub_errors).toBe(0);
     expect(p.last_scrub_date).toContain("2026");
+  });
+
+  it("classifies a dRAID vdev from its real lowercase name, not as a stripe", () => {
+    // zpool prints dRAID vdevs as "draid<parity>:<d>d:<c>c:<s>s-<n>". The old
+    // startsWith("dRAID") never matched, so a degraded dRAID was reported as a
+    // zero-redundancy stripe.
+    const raw =
+      "  pool: bulk\n" +
+      " state: DEGRADED\n" +
+      "  scan: scrub repaired 0B in 11:02:51 with 0 errors on Sun Sep 14 11:26:52 2025\n" +
+      "config:\n" +
+      "\n" +
+      "\tNAME                   STATE     READ WRITE CKSUM\n" +
+      "\tbulk                   DEGRADED     0     0     0\n" +
+      "\t  draid2:4d:7c:1s-0    DEGRADED     0     0     0\n" +
+      "\t    sdc                ONLINE       0     0     0\n" +
+      "\t    sdd                ONLINE       0     0     0\n" +
+      "\t    sde                FAULTED      0    58     0  too many errors\n" +
+      "\t    sdf                ONLINE       0     0     0\n" +
+      "\tspares\n" +
+      "\t  draid2-0-0           AVAIL\n" +
+      "\n" +
+      "errors: No known data errors\n";
+    const [p] = parseZpoolStatus(raw);
+    expect(p.vdevs).toHaveLength(1);
+    expect(p.vdevs[0].name).toBe("draid2:4d:7c:1s-0");
+    expect(p.vdevs[0].redundancy_class).toBe("draid");
+    expect(p.vdevs[0].degraded_disks_count).toBe(1);
+  });
+
+  // === spare_in_progress (read by the dashboard's raidz2 severity branch) ===
+
+  it("flags spare_in_progress when a hot spare has taken over a raidz2 member (spare-N with an ONLINE leaf)", () => {
+    const raw =
+      "  pool: tank\n" +
+      " state: DEGRADED\n" +
+      "  scan: resilver in progress since Fri Sep 26 03:14:07 2025\n" +
+      "config:\n" +
+      "\n" +
+      "\tNAME                                      STATE     READ WRITE CKSUM\n" +
+      "\ttank                                      DEGRADED     0     0     0\n" +
+      "\t  raidz2-0                                DEGRADED     0     0     0\n" +
+      "\t    ata-WDC_WD100EFAX-68LHPN0_FAKE0001    ONLINE       0     0     0\n" +
+      "\t    spare-1                               DEGRADED     0     0     0\n" +
+      "\t      ata-WDC_WD100EFAX-68LHPN0_FAKE0002  FAULTED     12   436     0  too many errors\n" +
+      "\t      ata-WDC_WD100EFAX-68LHPN0_FAKE0009  ONLINE       0     0     0  (resilvering)\n" +
+      "\t    ata-WDC_WD100EFAX-68LHPN0_FAKE0003    ONLINE       0     0     0\n" +
+      "\t    ata-WDC_WD100EFAX-68LHPN0_FAKE0004    ONLINE       0     0     0\n" +
+      "\tspares\n" +
+      "\t  ata-WDC_WD100EFAX-68LHPN0_FAKE0009      INUSE     currently in use\n" +
+      "\t  ata-WDC_WD100EFAX-68LHPN0_FAKE0010      AVAIL   \n" +
+      "\n" +
+      "errors: No known data errors\n";
+    const [p] = parseZpoolStatus(raw);
+    expect(p.vdevs).toHaveLength(1);
+    expect(p.vdevs[0].name).toBe("raidz2-0");
+    expect(p.vdevs[0].redundancy_class).toBe("raidz2");
+    expect(p.vdevs[0].spare_in_progress).toBe(true);
+    // The spare-1 sub-vdev is one member slot; its leaves do not widen the vdev.
+    expect(p.vdevs[0].child_count).toBe(4);
+  });
+
+  it("does not flag spare_in_progress when the spare-N leaf is not ONLINE", () => {
+    const raw =
+      "  pool: tank\n" +
+      " state: DEGRADED\n" +
+      "config:\n" +
+      "\tNAME          STATE\n" +
+      "\ttank          DEGRADED\n" +
+      "\t  raidz2-0    DEGRADED\n" +
+      "\t    a         ONLINE\n" +
+      "\t    spare-1   UNAVAIL\n" +
+      "\t      b       FAULTED\n" +
+      "\t      s       UNAVAIL\n" +
+      "\t    c         ONLINE\n" +
+      "\t    d         ONLINE\n" +
+      "errors: No known data errors\n";
+    const [p] = parseZpoolStatus(raw);
+    expect(p.vdevs[0].spare_in_progress).toBeUndefined();
+  });
+
+  it("does not flag spare_in_progress for an ONLINE leaf under replacing-N, or on a vdev without spares", () => {
+    const raw =
+      "  pool: tank\n" +
+      " state: DEGRADED\n" +
+      "config:\n" +
+      "\tNAME             STATE\n" +
+      "\ttank             DEGRADED\n" +
+      "\t  raidz2-0       DEGRADED\n" +
+      "\t    a            ONLINE\n" +
+      "\t    replacing-1  DEGRADED\n" +
+      "\t      old        FAULTED\n" +
+      "\t      new        ONLINE\n" +
+      "\t    c            ONLINE\n" +
+      "\t    d            ONLINE\n" +
+      "\t  raidz2-1       DEGRADED\n" +
+      "\t    e            ONLINE\n" +
+      "\t    f            FAULTED\n" +
+      "\t    g            ONLINE\n" +
+      "\t    h            ONLINE\n" +
+      "errors: No known data errors\n";
+    const [p] = parseZpoolStatus(raw);
+    expect(p.vdevs.map((v) => v.spare_in_progress)).toEqual([undefined, undefined]);
+  });
+
+  it("does not flag spare_in_progress when a member other than the one covered spare slot is not ONLINE", () => {
+    // The dashboard demotes a degraded raidz2 to a warning on this flag, which
+    // only holds while a spare covers the vdev's single failure. raidz2-0: a
+    // second member failed with no spare (no parity left). raidz2-1: two spares
+    // resilvering at once (no parity left until both finish). raidz2-2: the
+    // spare slot itself is ONLINE again, so the FAULTED member is uncovered.
+    const raw =
+      "  pool: tank\n" +
+      " state: DEGRADED\n" +
+      "config:\n" +
+      "\tNAME            STATE\n" +
+      "\ttank            DEGRADED\n" +
+      "\t  raidz2-0      DEGRADED\n" +
+      "\t    a           ONLINE\n" +
+      "\t    spare-1     DEGRADED\n" +
+      "\t      b         FAULTED\n" +
+      "\t      s1        ONLINE  (resilvering)\n" +
+      "\t    c           FAULTED\n" +
+      "\t    d           ONLINE\n" +
+      "\t  raidz2-1      DEGRADED\n" +
+      "\t    e           ONLINE\n" +
+      "\t    spare-1     DEGRADED\n" +
+      "\t      f         FAULTED\n" +
+      "\t      s2        ONLINE  (resilvering)\n" +
+      "\t    spare-2     DEGRADED\n" +
+      "\t      g         FAULTED\n" +
+      "\t      s3        ONLINE  (resilvering)\n" +
+      "\t    h           ONLINE\n" +
+      "\t  raidz2-2      DEGRADED\n" +
+      "\t    i           ONLINE\n" +
+      "\t    spare-1     ONLINE\n" +
+      "\t      j         ONLINE\n" +
+      "\t      s4        ONLINE\n" +
+      "\t    k           FAULTED\n" +
+      "\t    l           ONLINE\n" +
+      "errors: No known data errors\n";
+    const [p] = parseZpoolStatus(raw);
+    expect(p.vdevs.map((v) => v.degraded_disks_count)).toEqual([2, 2, 1]);
+    expect(p.vdevs.map((v) => v.spare_in_progress)).toEqual([undefined, undefined, undefined]);
   });
 
   it("section headers tolerate either tab-prefixed or unindented form (forwards-compat)", () => {

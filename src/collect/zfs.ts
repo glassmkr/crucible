@@ -26,7 +26,9 @@ function classifyVdevType(vdevName: string): ZfsVdev["redundancy_class"] {
   if (vdevName.startsWith("raidz2")) return "raidz2";
   if (vdevName.startsWith("raidz1")) return "raidz1";
   if (vdevName.startsWith("raidz")) return "raidz1"; // bare "raidz" alias
-  if (vdevName.startsWith("dRAID")) return "draid";
+  // zpool names dRAID vdevs in lowercase ("draid2:4d:7c:1s-0"); a
+  // case-sensitive "dRAID" prefix never matched one.
+  if (/^draid/i.test(vdevName)) return "draid";
   // Anything else at the top level is a single-device "stripe" vdev:
   // no redundancy. The pattern library treats stripe failure as P0
   // because there's nothing left to recover from.
@@ -51,19 +53,26 @@ export function parseZpoolStatus(zpoolStatus: string): ZfsPool[] {
   const pools: ZfsPool[] = [];
   let current: ZfsPool | null = null;
   let section: ZfsSection = "none";
-  // Per-pool bookkeeping: did we see a genuine SCRUB signal for the
-  // current pool (a `scrub ...` scan line, or the explicit "none
-  // requested")? A `resilvered` scan line is deliberately NOT counted:
-  // a resilver (disk replace, or an offline+online recovery) is not a
-  // scrub, so it must not clear the never-scrubbed signal (H-D4h). Kept
-  // out of the serialized ZfsPool object so it doesn't leak into the
-  // snapshot.
-  let sawScrubSignal = false;
+  // Per-pool bookkeeping: did the current pool print a `scan:` line at
+  // all? Only a pool with NO scan line (or the explicit "none requested")
+  // has never been scrubbed. Any other scan line, including a resilver or
+  // a canceled scrub, replaced whatever scan zpool showed before it, so an
+  // earlier scrub may exist and never-scrubbed is unknown. Kept out of the
+  // serialized ZfsPool object so it doesn't leak into the snapshot.
+  let sawScanLine = false;
   // Indent (leading-space count) of the current top-vdev's IMMEDIATE children.
   // Set from the first child line seen under a vdev; deeper lines are a
   // replacing-0 / spare-0 sub-vdev's own leaves and are NOT counted as children
   // (Codex round-2 #1). Reset per top-vdev.
   let childIndent: number | null = null;
+  // The current top-vdev's most recent immediate child is a non-ONLINE
+  // `spare-N` sub-vdev not yet seen with an ONLINE leaf; the deeper leaves
+  // that follow belong to it.
+  let openSpareSlot = false;
+  // Per top-vdev: how many failed member slots a hot spare has taken over
+  // (a non-ONLINE `spare-N` child with an ONLINE leaf). Kept out of the
+  // serialized ZfsVdev; the post-pass turns it into spare_in_progress.
+  const coveredSpareSlots = new Map<ZfsVdev, number>();
 
   for (const line of zpoolStatus.split("\n")) {
     const poolMatch = line.match(/^\s*pool:\s*(.+)/);
@@ -78,8 +87,9 @@ export function parseZpoolStatus(zpoolStatus: string): ZfsPool[] {
       };
       pools.push(current);
       section = "none";
-      sawScrubSignal = false;
+      sawScanLine = false;
       childIndent = null;
+      openSpareSlot = false;
       continue;
     }
 
@@ -95,13 +105,11 @@ export function parseZpoolStatus(zpoolStatus: string): ZfsPool[] {
     if (errorsMatch) {
       current.errors_text = errorsMatch[1].trim();
       // Fresh-pool case: ZFS 2.2+ omits the `scan:` line entirely until
-      // the first scrub is initiated. Reaching `errors:` without ever
-      // seeing a real scrub signal means this pool has never been
-      // scrubbed. This also (correctly) holds after a resilver-only
-      // scan line, which does not count as a scrub (H-D4h). The
+      // the first scan is initiated. Reaching `errors:` without ever
+      // seeing a scan line means this pool has never been scrubbed. The
       // `errors:` line is the canonical end-of-pool marker, so this is a
       // stable place to assert.
-      if (!sawScrubSignal && current.scrub_never_run === undefined) {
+      if (!sawScanLine && current.scrub_never_run === undefined) {
         current.scrub_never_run = true;
       }
       continue;
@@ -110,26 +118,20 @@ export function parseZpoolStatus(zpoolStatus: string): ZfsPool[] {
     // Parse scrub info. A `scan:` line may say "none requested" (the
     // explicit never-run signal), report a scrub, report a RESILVER, or
     // be absent entirely on a freshly-created pool (ZFS 2.2+ omits the
-    // line until a scan is initiated). Only a genuine SCRUB (or the
-    // explicit "none requested") establishes scrub history: a
-    // `resilvered ...` line is a rebuild after a disk replace / an
-    // offline+online recovery, NOT a scrub, so it must not set
-    // last_scrub_date and must not clear the never-scrubbed signal
-    // (H-D4h - an offline+online cycle was silently "healing" the
-    // never-scrubbed warning on a pool that had still never been
-    // scrubbed). The fresh-pool case is handled at the `errors:` marker.
+    // line until a scan is initiated). Only a genuine SCRUB sets scrub
+    // history: a `resilvered ...` line is a rebuild after a disk replace
+    // / an offline+online recovery, NOT a scrub, so it must not set
+    // last_scrub_date (H-D4h). zpool status shows only the most recent
+    // scan, though, so a resilver line hides an earlier scrub rather than
+    // proving there was none: it leaves scrub_never_run unset (unknown)
+    // instead of claiming the pool was never scrubbed. The fresh-pool
+    // case is handled at the `errors:` marker.
     if (line.includes("scan:")) {
+      sawScanLine = true;
       if (line.includes("none requested")) {
-        sawScrubSignal = true;
         current.scrub_never_run = true;
       } else if (/\bscrub\b/.test(line) && !line.includes("canceled")) {
-        // A completed / in-progress / paused scrub establishes scrub history. A
-        // CANCELED scrub does NOT (Codex round 1 #1): it never finished verifying
-        // the pool, so it must not set last_scrub_date and must not suppress the
-        // never-scrubbed signal - a pool whose only scrub was canceled has still
-        // never been fully scrubbed, so it falls through to scrub_never_run at
-        // the `errors:` marker below.
-        sawScrubSignal = true;
+        // A completed / in-progress / paused scrub establishes scrub history.
         const repairMatch = line.match(/scrub repaired (\S+) in .* with (\d+) errors/);
         if (repairMatch) {
           current.scrub_repaired = repairMatch[1];
@@ -140,8 +142,10 @@ export function parseZpoolStatus(zpoolStatus: string): ZfsPool[] {
           current.last_scrub_date = dateMatch[1].trim();
         }
       }
-      // A resilver (or any other non-scrub scan line) is intentionally
-      // ignored here for scrub-history purposes.
+      // A resilver, a CANCELED scrub (Codex round 1 #1: it never finished
+      // verifying the pool), or any other non-scrub scan line sets no scrub
+      // history. Each replaced the previous scan on screen, so it leaves
+      // never-scrubbed unknown as well.
     }
 
     // Section switching. `config:` opens the vdev tree. Section
@@ -193,6 +197,7 @@ export function parseZpoolStatus(zpoolStatus: string): ZfsPool[] {
         else if (section === "logs") current.slog_vdevs.push(vdev);
         else if (section === "cache") current.l2arc_vdevs.push(vdev);
         childIndent = null; // a new vdev: re-learn its immediate-child indent
+        openSpareSlot = false;
         continue;
       }
       // Child under the previously-pushed vdev. Capture the leading-space
@@ -204,6 +209,7 @@ export function parseZpoolStatus(zpoolStatus: string): ZfsPool[] {
       const childMatch = line.match(/^\t( +)(\S+)\s+(\S+)/);
       if (childMatch) {
         const indent = childMatch[1].length;
+        const childName = childMatch[2];
         const childState = childMatch[3];
         const lastVdev = (() => {
           if (section === "config" && current.vdevs.length > 0) {
@@ -222,8 +228,15 @@ export function parseZpoolStatus(zpoolStatus: string): ZfsPool[] {
           if (indent === childIndent) {
             lastVdev.child_count += 1;
             if (childState !== "ONLINE") lastVdev.degraded_disks_count += 1;
+            openSpareSlot = /^spare-\d+$/.test(childName) && childState !== "ONLINE";
+          } else if (openSpareSlot && childState === "ONLINE") {
+            // indent > childIndent: a grandchild (sub-vdev leaf), ignored for
+            // width. Under a failed `spare-N` slot an ONLINE leaf is the hot
+            // spare that took it over (shown INUSE under `spares`), resilvering
+            // or done.
+            coveredSpareSlots.set(lastVdev, (coveredSpareSlots.get(lastVdev) ?? 0) + 1);
+            openSpareSlot = false;
           }
-          // indent > childIndent: a grandchild (sub-vdev leaf); ignore for width.
         }
       }
     }
@@ -234,6 +247,15 @@ export function parseZpoolStatus(zpoolStatus: string): ZfsPool[] {
   // "mirror" (slog/cache default to "stripe"), so this is a no-op elsewhere.
   for (const pool of pools) {
     for (const vdev of pool.vdevs) refineMirrorRedundancyClass(vdev);
+  }
+
+  // spare_in_progress tells the dashboard a hot spare is covering the vdev's
+  // failure, which demotes a degraded raidz2 from critical to warning. That
+  // holds only when the covered slot is the vdev's ONLY non-ONLINE member: a
+  // second failure, even one a second spare is rebuilding, leaves a raidz2
+  // with no parity until the rebuild finishes.
+  for (const [vdev, covered] of coveredSpareSlots) {
+    if (covered === 1 && vdev.degraded_disks_count === 1) vdev.spare_in_progress = true;
   }
 
   return pools;

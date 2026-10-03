@@ -47,6 +47,23 @@ describe("deriveSelSeverity", () => {
   it("defaults to info for other sensor types", () => {
     expect(deriveSelSeverity("Some odd event", "other")).toBe("info");
   });
+  it("does not read a Non-critical threshold crossing as critical (substring 'critical')", () => {
+    expect(deriveSelSeverity("Lower Non-critical going low", "temperature")).toBe("warning");
+    expect(deriveSelSeverity("Upper Non-critical going high", "fan")).toBe("warning");
+    expect(deriveSelSeverity("Transition to Non-Critical from OK", "other")).toBe("warning");
+    // The critical and non-recoverable thresholds stay critical.
+    expect(deriveSelSeverity("Lower Critical going low", "temperature")).toBe("critical");
+    expect(deriveSelSeverity("Upper Critical going high", "temperature")).toBe("critical");
+    expect(deriveSelSeverity("Lower Non-recoverable going low", "voltage")).toBe("critical");
+  });
+  it("an ordinary 'Power off/down' (Power Unit) is not critical", () => {
+    // Logged by the BMC on every orderly shutdown or power-off from the BMC.
+    expect(deriveSelSeverity("Power off/down", classifySensor("Power Unit #0x01"))).toBe("info");
+    expect(deriveSelSeverity("Power off/down", "power")).toBe("info");
+    // A real power fault on the same sensor type still is.
+    expect(deriveSelSeverity("AC lost", classifySensor("Power Unit #0x01"))).toBe("critical");
+    expect(deriveSelSeverity("Power Supply AC lost", "power")).toBe("critical");
+  });
 });
 
 describe("parseSelTimestamp", () => {
@@ -56,10 +73,16 @@ describe("parseSelTimestamp", () => {
   it("pads single digit month/day", () => {
     expect(parseSelTimestamp("4/5/2026", "09:00:00")).toBe("2026-04-05T09:00:00Z");
   });
-  it("returns an ISO string for bad input (does not crash)", () => {
-    const out = parseSelTimestamp("", "");
-    expect(typeof out).toBe("string");
-    expect(out.length).toBeGreaterThan(10);
+  it("returns \"\" (unknown), never the current time, for a missing or unreadable date", () => {
+    // The dashboard reads "" as "age unknown" (ipmi_sel_critical keeps the
+    // event in its window, the ingest schema requires a string). The current
+    // time made a Pre-Init event look brand new on every snapshot, so the
+    // dashboard re-notified it each time and paired any Pre-Init
+    // assert/deassert as a 0-second transient.
+    expect(parseSelTimestamp("", "")).toBe("");
+    expect(parseSelTimestamp("Pre-Init", "0000000004")).toBe("");
+    expect(parseSelTimestamp("04/05/2026", "")).toBe("");
+    expect(parseSelTimestamp("ab/cd/ef", "12:00:00")).toBe("");
   });
   it("expands 2-digit year to 4-digit (Codex experiment 2026-05-12 finding: Supermicro X11/X12 BMCs emit YY)", () => {
     // services-1 actually produced this shape via ipmitool sel elist.
@@ -109,6 +132,22 @@ describe("parseFanStatus", () => {
     const fans = parseFanStatus(raw);
     expect(fans[0].status).toBe("critical");
   });
+
+  it("recognises the extended threshold codes `sdr type Fan` prints (lcr/lnr/ucr/unr, lnc/unc)", () => {
+    const raw = [
+      "FAN1             | 30h | lcr | 29.1 | 300 RPM",
+      "FAN2             | 31h | lnr | 29.2 | 0 RPM",
+      "FAN3             | 32h | ucr | 29.3 | 25000 RPM",
+      "FAN4             | 33h | unr | 29.4 | 26000 RPM",
+      "FAN5             | 34h | lnc | 29.5 | 900 RPM",
+      "FAN6             | 35h | unc | 29.6 | 19000 RPM",
+      "FAN7             | 36h | ok  | 29.7 | 5000 RPM",
+    ].join("\n");
+    expect(parseFanStatus(raw).map((f) => `${f.name}:${f.status}`)).toEqual([
+      "FAN1:critical", "FAN2:critical", "FAN3:critical", "FAN4:critical",
+      "FAN5:warning", "FAN6:warning", "FAN7:ok",
+    ]);
+  });
 });
 
 describe("parseSelEccCounts (Dell-style SEL output)", () => {
@@ -142,6 +181,37 @@ describe("parseSelEccCounts (Dell-style SEL output)", () => {
 
   it("handles empty input", () => {
     expect(parseSelEccCounts("")).toEqual({ available: true, correctable: 0, uncorrectable: 0, newest_event_timestamp: null });
+  });
+
+  it("counts a Pre-Init ECC row but leaves newest_event_timestamp null rather than inventing now", () => {
+    const counts = parseSelEccCounts("1 | Pre-Init | 0000000004 | Memory | Uncorrectable ECC | Asserted");
+    expect(counts.uncorrectable).toBe(1);
+    expect(counts.newest_event_timestamp).toBeNull();
+  });
+
+  it("counts only asserted rows: a deassertion is not another error", () => {
+    const raw = [
+      "1 | 04/05/2026 | 14:23:05 | Memory | Uncorrectable ECC | Asserted",
+      "2 | 04/05/2026 | 14:23:09 | Memory | Uncorrectable ECC | Deasserted",
+      "3 | 04/05/2026 | 14:25:11 | Memory | Correctable ECC | Asserted",
+      "4 | 04/05/2026 | 14:25:12 | Memory | Correctable ECC | Deasserted",
+    ].join("\n");
+    const counts = parseSelEccCounts(raw);
+    expect(counts.uncorrectable).toBe(1);
+    expect(counts.correctable).toBe(1);
+    expect(counts.newest_event_timestamp).toBe("2026-04-05T14:25:11Z");
+  });
+
+  it("takes newest_event_timestamp from the counted ECC rows only", () => {
+    // A later memory-entity row that is not an ECC error (DIMM presence)
+    // must not become the "newest ECC event" time.
+    const raw = [
+      "1 | 04/05/2026 | 14:23:05 | Memory | Correctable ECC | Asserted",
+      "2 | 04/06/2026 | 09:00:00 | Memory DIMM_A1 | Presence detected | Asserted",
+    ].join("\n");
+    const counts = parseSelEccCounts(raw);
+    expect(counts.correctable).toBe(1);
+    expect(counts.newest_event_timestamp).toBe("2026-04-05T14:23:05Z");
   });
 
   it("uses nullable counters when the ECC sub-probe fails", async () => {
