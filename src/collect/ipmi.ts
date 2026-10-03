@@ -271,7 +271,11 @@ export function parseSelEccCounts(output: string): SelEccCounts {
   for (const line of output.split("\n")) {
     const parts = line.split("|").map(s => s.trim());
     if (parts.length < 5) continue;
-    const [_id, date, time, sensor, event] = parts;
+    const [_id, date, time, sensor, event, direction] = parts;
+    // A deassertion closes an earlier ECC event; it is not another error.
+    // A missing direction column reads as asserted (collectSelEvents does
+    // the same).
+    if (direction && !/^asserted$/i.test(direction)) continue;
     const sensorLower = sensor.toLowerCase();
     const eventLower = event.toLowerCase();
     // Memory entity: Dell uses sensor names like "Memory", "ECC Corr Err",
@@ -287,6 +291,10 @@ export function parseSelEccCounts(output: string): SelEccCounts {
       uncorrectable++;
     } else if (eventLower.includes("correctable") || eventLower.includes("corr")) {
       correctable++;
+    } else {
+      // Memory-entity row that is not an ECC error (e.g. DIMM presence):
+      // not counted, so it must not set the newest ECC event time either.
+      continue;
     }
     const ts = parseSelTimestamp(date, time);
     if (!newest || ts > newest) newest = ts;
@@ -378,7 +386,10 @@ export function deriveSelSeverity(event: string, sensorType: string): string {
   if (lower.includes("failure detected")) return "critical";
   if (lower.includes("ac lost")) return "critical";
   if (lower.includes("hard reset")) return "critical";
-  if (lower.includes("power off")) return "critical";
+  // "Lower Non-critical going low" / "Upper Non-critical going high" (and
+  // "Transition to Non-Critical") are the warning-level thresholds; a bare
+  // substring test for "critical" read them as critical.
+  if (lower.includes("non-critical")) return "warning";
   if (lower.includes("critical")) return "critical";
   if (lower.includes("non-recoverable")) return "critical";
   if (lower.includes("thermal trip")) return "critical";
@@ -397,6 +408,10 @@ export function deriveSelSeverity(event: string, sensorType: string): string {
   // Info events
   if (lower.includes("presence detected")) return "info";
   if (lower.includes("power cycle")) return "info";
+  // "Power off/down" is what the Power Unit sensor logs for every orderly
+  // shutdown or BMC power-off. A real power fault carries its own text
+  // ("AC lost", "Failure detected"), classified above.
+  if (lower.includes("power off")) return "info";
   if (lower.includes("oem")) return "info";
 
   if (["memory", "power", "fan", "processor"].includes(sensorType)) return "warning";
@@ -408,6 +423,9 @@ async function collectFanStatus(): Promise<FanStatus[]> {
   if (!output) return [];
   return parseFanStatus(output);
 }
+
+const FAN_CRITICAL_CODES = new Set(["cr", "nr", "lcr", "lnr", "ucr", "unr"]);
+const FAN_WARNING_CODES = new Set(["nc", "lnc", "unc"]);
 
 export function parseFanStatus(output: string): FanStatus[] {
   const fans: FanStatus[] = [];
@@ -432,8 +450,10 @@ export function parseFanStatus(output: string): FanStatus[] {
     // Check status codes across all fields
     const hasNoReading = fullLine.toLowerCase().includes("no reading");
     const statusCodes = parts.slice(1).map((p) => p.toLowerCase());
-    const hasCritical = statusCodes.some((s) => s === "cr" || s === "nr");
-    const hasWarning = statusCodes.some((s) => s === "nc");
+    // `ipmitool sdr type Fan` prints the extended threshold codes (lcr, lnr,
+    // ucr, unr / lnc, unc) where `ipmitool sensor` prints cr / nr / nc.
+    const hasCritical = statusCodes.some((s) => FAN_CRITICAL_CODES.has(s));
+    const hasWarning = statusCodes.some((s) => FAN_WARNING_CODES.has(s));
     const hasAbsent = statusCodes.some((s) => s === "ns") || hasNoReading;
     const hasOk = statusCodes.some((s) => s === "ok");
 
