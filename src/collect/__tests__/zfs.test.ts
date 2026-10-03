@@ -264,6 +264,34 @@ errors: 2 data errors
     expect(p.last_scrub_date).toContain("2026");
   });
 
+  it("classifies a dRAID vdev from its real lowercase name, not as a stripe", () => {
+    // zpool prints dRAID vdevs as "draid<parity>:<d>d:<c>c:<s>s-<n>". The old
+    // startsWith("dRAID") never matched, so a degraded dRAID was reported as a
+    // zero-redundancy stripe.
+    const raw =
+      "  pool: bulk\n" +
+      " state: DEGRADED\n" +
+      "  scan: scrub repaired 0B in 11:02:51 with 0 errors on Sun Sep 14 11:26:52 2025\n" +
+      "config:\n" +
+      "\n" +
+      "\tNAME                   STATE     READ WRITE CKSUM\n" +
+      "\tbulk                   DEGRADED     0     0     0\n" +
+      "\t  draid2:4d:7c:1s-0    DEGRADED     0     0     0\n" +
+      "\t    sdc                ONLINE       0     0     0\n" +
+      "\t    sdd                ONLINE       0     0     0\n" +
+      "\t    sde                FAULTED      0    58     0  too many errors\n" +
+      "\t    sdf                ONLINE       0     0     0\n" +
+      "\tspares\n" +
+      "\t  draid2-0-0           AVAIL\n" +
+      "\n" +
+      "errors: No known data errors\n";
+    const [p] = parseZpoolStatus(raw);
+    expect(p.vdevs).toHaveLength(1);
+    expect(p.vdevs[0].name).toBe("draid2:4d:7c:1s-0");
+    expect(p.vdevs[0].redundancy_class).toBe("draid");
+    expect(p.vdevs[0].degraded_disks_count).toBe(1);
+  });
+
   it("section headers tolerate either tab-prefixed or unindented form (forwards-compat)", () => {
     // ZFS 2.0 emitted section headers unindented (`logs\n`); ZFS 2.2
     // uses tab-prefixed (`\tlogs\t\n`). The parser must handle both.

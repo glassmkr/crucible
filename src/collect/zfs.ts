@@ -26,7 +26,9 @@ function classifyVdevType(vdevName: string): ZfsVdev["redundancy_class"] {
   if (vdevName.startsWith("raidz2")) return "raidz2";
   if (vdevName.startsWith("raidz1")) return "raidz1";
   if (vdevName.startsWith("raidz")) return "raidz1"; // bare "raidz" alias
-  if (vdevName.startsWith("dRAID")) return "draid";
+  // zpool names dRAID vdevs in lowercase ("draid2:4d:7c:1s-0"); a
+  // case-sensitive "dRAID" prefix never matched one.
+  if (/^draid/i.test(vdevName)) return "draid";
   // Anything else at the top level is a single-device "stripe" vdev:
   // no redundancy. The pattern library treats stripe failure as P0
   // because there's nothing left to recover from.
