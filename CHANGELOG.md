@@ -13,6 +13,93 @@ API contract the agent speaks; breaking any of those is a major version. The
 full policy and the freeze-review record live in
 [docs/V1_FREEZE.md](docs/V1_FREEZE.md).
 
+## [1.2.5] - 2026-11-12
+
+### Fixed
+
+- Older distributions: on a host whose `dmesg` predates the `--since` option
+  (util-linux before 2.35: RHEL 8, Debian 10, Ubuntu 20.04) the recent
+  out-of-memory kill count was always 0 and the recent kernel I/O error count
+  was always missing, so the `oom_kills` alert, the OOM corroboration of
+  `mem_pressure_high`, and the I/O error input of `disk_io_errors` could not
+  fire there. The agent now falls back to a full kernel-log read and applies the
+  same window itself (5 minutes for OOM kills, 10 minutes for I/O errors), so
+  older events are not counted. The OOM count also works with busybox `dmesg`,
+  and a full kernel ring buffer can no longer push a recent OOM kill out of the
+  count.
+- ZFS: a dRAID vdev is now classified as dRAID. It was reported as a stripe, so
+  a degraded dRAID pool was described as having no redundancy.
+- ZFS: a pool whose most recent scan is a resilver or a canceled scrub is no
+  longer reported as never scrubbed. `zpool status` shows only the latest scan,
+  so those lines hide an earlier scrub rather than prove there was none. Only
+  `scan: none requested`, or a pool with no scan line at all, now counts as
+  never scrubbed. This revises the 1.2.2 behavior: a pool that truly was never
+  scrubbed and has since resilvered no longer keeps the never-scrubbed advisory.
+- ZFS: the agent now reports when a hot spare has taken over a vdev's only
+  failed member, so a degraded raidz2 that is already rebuilding onto a spare is
+  rated a warning instead of critical. A second failed member, or two spares
+  rebuilding at once, still rates critical.
+- Software RAID: only members the kernel marks faulty `(F)` are named as failed.
+  Previously the rebuild target could be named as the failed disk, which told
+  the operator to pull the drive that was resyncing. A member that has already
+  left the array is not named; the array is still reported degraded.
+- Software RAID: arrays that were skipped or misread are now reported: inactive
+  arrays, `active (auto-read-only)` arrays, named arrays (`md_<name>`), members
+  with a dash in the name (`dm-0`), and members flagged `(W)(F)`. A `broken`
+  raid0 or linear array is now reported degraded instead of healthy.
+- Kernel log: benign NVMe lines no longer raise a critical `disk_io_errors`.
+  "Shutdown timeout set to 8 seconds" is printed on every boot of every NVMe
+  host and was read as a controller fault, as was "timeout, completion polled".
+  Real aborts, controller resets, dead or disabled controllers, and "Device not
+  ready; aborting" still count.
+- Kernel log: SCSI sense lines in the modern format (with a `tag#N` token and
+  trailing `[current] [descriptor]` annotations) are now matched, so medium
+  errors that were missed are reported. Sense reports that are not media faults
+  are skipped: No Sense, the Recovered Error an ATA pass-through command
+  (smartctl, hdparm) returns, and the Illegal Request a WRITE SAME, UNMAP or
+  pass-through feature probe gets.
+- IPMI event log: "Non-critical" threshold crossings are now warnings instead of
+  critical, and an orderly "Power off" is informational. Critical and
+  Non-recoverable thresholds and real power faults (AC lost, Failure detected)
+  stay critical.
+- IPMI fans: the extended threshold codes (`lcr`, `lnr`, `ucr`, `unr`, `lnc`,
+  `unc`) are now read, so a fan below its lower critical threshold that still
+  reports a non-zero RPM no longer reads as ok.
+- IPMI memory ECC: only asserted events are counted (each assert and deassert
+  pair used to count twice), and the newest event time is taken from ECC events
+  only.
+- Event times: an event with no readable time (a Pre-Init or undated IPMI event
+  log record, a kernel line carrying only a since-boot stamp) is now reported
+  with an empty time instead of the collection time. Such an event used to look
+  brand new on every snapshot, so the same IPMI or XID event could notify again
+  each cycle.
+- GPU: `retired_pages.pending`, which nvidia-smi prints as Yes or No, is now
+  read as 1 or 0 instead of being dropped, so a memory page waiting for a reboot
+  to retire is visible to `gpu_uncorrected_ecc`.
+
+### Changed
+
+- **Security:** undici 8.10.0 to 8.11.2, which fixes 11 advisories published
+  against undici 8.0.0 to 8.10.1, among them denial of service through
+  WebSocket permessage-deflate and unbounded decompression, and response
+  splitting in the retry interceptor. undici is the agent's only outbound path.
+  No code change was needed and the Node.js floor (22.19.0) is unchanged.
+
+### Upgrade note (action required)
+
+- The privileged wrapper's `dmesg-io` and `dmesg-errcrit` actions changed, so a
+  host running the unprivileged service user needs `glassmkr-crucible init`
+  re-run after upgrading (the upgrade sequence in the README already includes
+  it). A host upgraded without it keeps counting as before and does not get the
+  fallback for older `dmesg`. To confirm the wrapper is current:
+  `grep -c "dmesg -r" /usr/local/sbin/crucible-collect` (expect 1). A host where
+  the agent runs as root gets the fallback on upgrade.
+- When rolling back across this release, run the older version's `init` after
+  installing it, so the older agent does not run behind the newer wrapper.
+- No config or CLI changes, and no wrapper action is added or removed. The
+  snapshot gains one optional field, `spare_in_progress` on a ZFS vdev, and an
+  event time may now be an empty string.
+
 ## [1.2.4] - 2026-09-16
 
 ### Added
