@@ -79,11 +79,12 @@ full policy and the freeze-review record live in
 
 ### Changed
 
-- **Security:** undici 8.10.0 to 8.11.2, which fixes 11 advisories published
-  against undici 8.0.0 to 8.10.1, among them denial of service through
-  WebSocket permessage-deflate and unbounded decompression, and response
-  splitting in the retry interceptor. undici is the agent's only outbound path.
-  No code change was needed and the Node.js floor (22.19.0) is unchanged.
+- **Security:** undici 8.10.0 to 8.12.4, which fixes 19 published advisories,
+  7 of them rated high. Among them: TLS certificate validation bypasses through
+  options dropped in `Agent` and `BalancedPool`, cache poisoning through
+  cross-origin redirects, and denial of service through unbounded decompression
+  and through WebSocket permessage-deflate. undici is the agent's only outbound
+  path. No code change was needed and the Node.js floor (22.19.0) is unchanged.
 
 ### Upgrade note (action required)
 
