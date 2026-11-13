@@ -19,7 +19,7 @@ const DashboardSchema = z.object({
     });
   } catch (err) {
     ctx.addIssue({
-      code: z.ZodIssueCode.custom,
+      code: "custom",
       message: err instanceof Error ? err.message : String(err),
       path: ["url"],
     });
@@ -41,7 +41,7 @@ const ThresholdSchema = z.object({
   acknowledge_disabled_detection: z.boolean().default(false),
 }).superRefine((value, ctx) => {
   if (value.cpu_temp_warning_c >= value.cpu_temp_critical_c) {
-    ctx.addIssue({ code: z.ZodIssueCode.custom, message: "cpu warning temperature must be below critical" });
+    ctx.addIssue({ code: "custom", message: "cpu warning temperature must be below critical" });
   }
 });
 
@@ -74,29 +74,29 @@ const ConfigSchema = z.object({
     smart: z.boolean().default(true),
     thermal: z.boolean().default(true),
     dmi: z.boolean().default(true),
-  }).default({}),
-  dashboard: DashboardSchema.default({}),
-  thresholds: ThresholdSchema.default({}),
+  }).prefault({}),
+  dashboard: DashboardSchema.prefault({}),
+  thresholds: ThresholdSchema.prefault({}),
   channels: z.object({
     telegram: z.object({
       enabled: z.boolean().default(false),
       bot_token: z.string().default(""),
       chat_id: z.string().default(""),
-    }).default({}),
+    }).prefault({}),
     email: z.object({
       enabled: z.boolean().default(false),
       to: z.string().default(""),
-    }).default({}),
+    }).prefault({}),
     slack: z.object({
       enabled: z.boolean().default(false),
       webhook_url: z.string().default(""),
-    }).default({}),
-  }).default({}),
+    }).prefault({}),
+  }).prefault({}),
   prometheus: z.object({
     enabled: z.boolean().default(false),
     address: z.string().min(1).max(253).regex(/^[A-Za-z0-9:._-]+$/).default("127.0.0.1"),
     port: z.number().int().min(1).max(65535).default(9101),
-  }).default({}),
+  }).prefault({}),
 });
 
 export type Config = z.infer<typeof ConfigSchema> & {
@@ -127,22 +127,22 @@ const warnedUnknownKeyPaths = new Set<string>();
  */
 export function unknownCollectionKeys(rawCollection: unknown): string[] {
   if (!rawCollection || typeof rawCollection !== "object" || Array.isArray(rawCollection)) return [];
-  const known = new Set(Object.keys(ConfigSchema.shape.collection.removeDefault().shape));
+  const known = new Set(Object.keys(ConfigSchema.shape.collection.unwrap().shape));
   return Object.keys(rawCollection as Record<string, unknown>).filter((k) => !known.has(k));
 }
 
-// Unwrap ZodDefault / ZodOptional / ZodEffects (superRefine) down to the
-// object shape, or null for leaf schemas. Bounded loop: wrappers do not nest
-// deeper than a few levels and a cycle here would be a schema bug.
+// Unwrap ZodDefault / ZodPrefault / ZodOptional down to the object shape, or
+// null for leaf schemas. Bounded loop: wrappers do not nest deeper than a few
+// levels and a cycle here would be a schema bug. A superRefine needs no
+// unwrapping: since zod 4 it is a check on the object schema itself, where
+// zod 3 wrapped the object in a ZodEffects.
 function objectShapeOf(schema: unknown): Record<string, unknown> | null {
-  let s: any = schema;
-  for (let i = 0; i < 8 && s; i++) {
-    if (typeof s.removeDefault === "function") { s = s.removeDefault(); continue; }
-    if (s._def?.typeName === "ZodOptional" && typeof s.unwrap === "function") { s = s.unwrap(); continue; }
-    if (s._def?.typeName === "ZodEffects" && s._def.schema) { s = s._def.schema; continue; }
+  let s = schema;
+  for (let i = 0; i < 8; i++) {
+    if (s instanceof z.ZodDefault || s instanceof z.ZodPrefault || s instanceof z.ZodOptional) { s = s.unwrap(); continue; }
     break;
   }
-  return s?._def?.typeName === "ZodObject" ? s.shape : null;
+  return s instanceof z.ZodObject ? s.shape : null;
 }
 
 /**
