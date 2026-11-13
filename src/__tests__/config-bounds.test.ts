@@ -27,6 +27,50 @@ describe("config bounds", () => {
     expect(config("prometheus:\n  enabled: true\n")().prometheus.address).toBe("127.0.0.1");
   });
 
+  it("fills every omitted block with its shipped defaults", () => {
+    // A block the operator leaves out must come back fully populated, never as
+    // an empty object. zod 4's `.default({})` hands the literal back unparsed,
+    // which leaves interval_seconds and every threshold undefined, and it still
+    // type-checks once cast; the schema therefore uses `.prefault({})`. Nothing
+    // else failed when that was tried during the zod 4 migration (2026-11-13).
+    const loaded = config('server_name: "defaults-host"\n')();
+    expect(loaded.collection).toEqual({
+      interval_seconds: 300,
+      ipmi: true,
+      enforce_ipmitool_min_version: false,
+      smart: true,
+      thermal: true,
+      dmi: true,
+    });
+    expect(loaded.dashboard).toEqual({
+      enabled: false,
+      url: "https://app.glassmkr.com",
+      api_key: "",
+      tls_pin: "",
+      allow_insecure_endpoint: false,
+      allowed_origins: [],
+    });
+    expect(loaded.thresholds).toEqual({
+      ram_percent: 90,
+      swap_alert: true,
+      disk_percent: 85,
+      iowait_percent: 20,
+      nvme_wear_percent: 85,
+      disk_latency_nvme_ms: 50,
+      disk_latency_hdd_ms: 200,
+      cpu_temp_warning_c: 80,
+      cpu_temp_critical_c: 90,
+      interface_utilization_percent: 90,
+      acknowledge_disabled_detection: false,
+    });
+    expect(loaded.channels).toEqual({
+      telegram: { enabled: false, bot_token: "", chat_id: "" },
+      email: { enabled: false, to: "" },
+      slack: { enabled: false, webhook_url: "" },
+    });
+    expect(loaded.prometheus).toEqual({ enabled: false, address: "127.0.0.1", port: 9101 });
+  });
+
   it("rejects control characters in the Prometheus bind address", () => {
     expect(config('prometheus:\n  address: "127.0.0.1\\nInjected"\n')).toThrow();
   });
