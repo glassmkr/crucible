@@ -13,6 +13,36 @@ API contract the agent speaks; breaking any of those is a major version. The
 full policy and the freeze-review record live in
 [docs/V1_FREEZE.md](docs/V1_FREEZE.md).
 
+## [1.2.6] - 2026-11-13
+
+### Changed
+
+- **Security:** zod 3 to zod 4 (4.6.7), which fixes GHSA-mrhx-c7xc-m3w5, rated
+  high. No release in the zod 3 line fixes it. zod validates the agent's config
+  file and is used nowhere else in the agent. 1.2.5 shipped with this advisory
+  open; with this release `npm audit --omit=dev` reports no known advisories in
+  the agent's production dependencies (checked 2026-11-13).
+- Config validation behaves the same. 129 config files, valid and invalid, were
+  run through the config loader on both zod versions: the same 51 load and the
+  same 78 are refused, the loaded values and defaults are identical, the
+  warnings are identical, and every refusal blames the same key.
+- The wording inside a config refusal changes. The line still starts with
+  `[config] Refusing to start: <path> failed integrity or schema validation:`
+  followed by the validator's issue list as JSON, but zod 4 phrases the issues
+  differently: "Too small: expected number to be >=60" where 1.2.5 printed
+  "Number must be greater than or equal to 60". A script that matches on the old
+  wording needs updating.
+- The Node.js floor (22.19.0) is unchanged. This release was built and tested on
+  Node.js 22.22.2, 24 and 26.
+
+### Upgrade note
+
+- Nothing to do when upgrading from 1.2.5: no config, CLI, privileged wrapper or
+  snapshot change.
+- When upgrading from 1.2.4 or earlier, the 1.2.5 upgrade note below still
+  applies: re-run `glassmkr-crucible init` on a host running the unprivileged
+  service user.
+
 ## [1.2.5] - 2026-11-12
 
 ### Fixed
